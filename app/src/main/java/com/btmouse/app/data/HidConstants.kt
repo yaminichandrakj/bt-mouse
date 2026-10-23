@@ -15,15 +15,15 @@ object HidConstants {
     const val MOUSE_BUTTON_FORWARD = 1 shl 4  // 16
 
     // Keyboard modifier bitmasks
-    const val MODIFIER_NONE: Byte = 0
-    const val MODIFIER_LEFT_CTRL: Byte = 1 shl 0
-    const val MODIFIER_LEFT_SHIFT: Byte = 1 shl 1
-    const val MODIFIER_LEFT_ALT: Byte = 1 shl 2
-    const val MODIFIER_LEFT_GUI: Byte = 1 shl 3   // Windows / Command key
-    const val MODIFIER_RIGHT_CTRL: Byte = 1 shl 4
-    const val MODIFIER_RIGHT_SHIFT: Byte = 1 shl 5
-    const val MODIFIER_RIGHT_ALT: Byte = 1 shl 6
-    const val MODIFIER_RIGHT_GUI: Byte = (1 shl 7).toByte()
+    const val MODIFIER_NONE: Byte = 0x00
+    const val MODIFIER_LEFT_CTRL: Byte = 0x01
+    const val MODIFIER_LEFT_SHIFT: Byte = 0x02
+    const val MODIFIER_LEFT_ALT: Byte = 0x04
+    const val MODIFIER_LEFT_GUI: Byte = 0x08   // Windows / Command key
+    const val MODIFIER_RIGHT_CTRL: Byte = 0x10
+    const val MODIFIER_RIGHT_SHIFT: Byte = 0x20
+    const val MODIFIER_RIGHT_ALT: Byte = 0x40
+    const val MODIFIER_RIGHT_GUI: Byte = -0x80
 
     // Keyboard USB HID Keycodes
     const val KEY_NONE: Byte = 0x00

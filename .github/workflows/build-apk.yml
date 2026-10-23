@@ -1,15 +1,20 @@
-name: Build Android APK
+name: Build Android APK & Release
 
 on:
   push:
     branches: [ "main", "master" ]
+    tags:
+      - "v*"
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Build Debug APK
+    name: Build & Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -31,9 +36,40 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Prepare APK for Release
+        run: |
+          mkdir -p release-output
+          cp app/build/outputs/apk/debug/*.apk release-output/BT-Mouse-v1.0.0.apk
+
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BT-Mouse-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: release-output/BT-Mouse-v1.0.0.apk
           retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: BT Mouse & Keyboard v1.0.0
+          draft: false
+          prerelease: false
+          files: release-output/BT-Mouse-v1.0.0.apk
+          body: |
+            ### 📱 BT Mouse & Keyboard v1.0.0
+
+            Turn any Android phone into a high-precision Wireless Mouse, Trackpad, Full PC Keyboard, Numpad, Media Remote, and Gyroscopic Air Mouse for any PC!
+
+            #### ✨ Key Features:
+            * **Native Bluetooth HID Mode**: Emulates a real Bluetooth mouse & keyboard. **Zero PC software needed!**
+            * **Wi-Fi Network Mode**: Ultra-low latency UDP mode with Python companion server and auto-discovery.
+            * **High-Precision Trackpad**: Multi-touch gestures (tap-to-click, 2-finger scroll, double-tap & hold drag).
+            * **Full PC Keyboard**: `Esc`, `F1-F12`, `Ctrl`, `Alt`, `Shift`, `Win`, `Del`, and PC shortcuts (`Ctrl+C`, `Ctrl+V`, `Alt+Tab`, etc.).
+            * **10-Key Numpad**: Dedicated numeric keypad for spreadsheets and data entry.
+            * **Media & Presentation Remote**: Media player controls + PowerPoint/Keynote slide clicker.
+            * **Gyroscopic Air Mouse**: Move the PC cursor by waving your phone in the air.
+
+            #### 📥 Download:
+            Download **`BT-Mouse-v1.0.0.apk`** below and install it directly on your phone!
