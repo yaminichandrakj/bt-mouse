@@ -1,4 +1,4 @@
-# Root Gradle settings
+// Root Gradle settings
 pluginManagement {
     repositories {
         google {
