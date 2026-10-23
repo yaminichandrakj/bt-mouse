@@ -111,6 +111,8 @@ The UI and protocol must communicate these capability differences. A disconnecte
 
 **Release identity:** `v1.3.4` (`versionCode = 11`) is published with media state acknowledgements, volume-button slide navigation, editable shared Quick Apps, Wi-Fi camera streaming, microphone diagnostics, live process refresh, and UI scaling fixes. GitHub Actions run `39981535439` passed the companion checks, Windows EXE build, Android APK build, and release publication. The release contains `BT-Mouse-v1.3.4.apk` and `BT-Mouse-Companion.exe`. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
 
+`v1.3.5` (`versionCode = 12`) is published with Windows audio COM initialization and truthful volume errors, stable phone-side volume dragging, improved Playing/Paused/Stopped recognition, opt-in media artwork, and a dedicated Tools tab. GitHub Actions run `40006732713` passed the Android release build, companion regression checks, Windows EXE build, and release publication. The release contains `BT-Mouse-v1.3.5.apk` and `BT-Mouse-Companion.exe`.
+
 **Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; the current release contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
 
 ## Current implementation sequence
@@ -118,9 +120,10 @@ The UI and protocol must communicate these capability differences. A disconnecte
 1. Phase 1 security gates and safe launch behavior are implemented; keep them unchanged unless a review finds a concrete defect.
 2. Handshake and transport parity are implemented; run protocol regression tests and device checks before claiming hardware reliability.
 3. v1.3.4 implements media state acknowledgements, presentation volume-key mode, editable Quick Apps shared between PC and phone, Wi-Fi camera streaming, live process refresh, truthful audio readiness, visible Wi-Fi PIN, secure lock messaging, and DPI awareness. Verify behavior on Android and Windows.
-4. Codex adds and runs deterministic Python regression tests and adds them to the GitHub Actions workflow.
-5. Bump the app/server version for each release, preserve signing identity, push source changes, and let Actions build both release binaries.
-6. After both builds pass, push the matching version tag, let Actions publish the GitHub Release, and verify both assets.
+4. v1.3.5 implements Windows volume COM initialization/error reporting, stable phone volume dragging, improved media-session selection/status, optional media artwork, and a dedicated Utilities tab. Validate the changes on Android and Windows hardware.
+5. Codex adds and runs deterministic Python regression tests and adds them to the GitHub Actions workflow.
+6. Bump the app/server version for each release, preserve signing identity, push source changes, and let Actions build both release binaries.
+7. After both builds pass, push the matching version tag, let Actions publish the GitHub Release, and verify both assets.
 
 ## Verification checklist
 
@@ -142,6 +145,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] Packaged Windows companion checks GitHub Releases, validates and stages the EXE update, replaces itself after exit, and relaunches (`v1.3.3`).
 - [x] GitHub Release `v1.3.3` is published with APK and Windows companion assets; obsolete root-level APK/EXE downloads were removed.
 - [x] GitHub Release `v1.3.4` is built and published with Android APK and Windows companion assets; the release workflow completed successfully.
+- [x] GitHub Release `v1.3.5` is built and published with Android APK and Windows companion assets; Actions run `40006732713` completed successfully.
 - [x] Python source is bundled into a single-file executable by PyInstaller; that EXE embeds its Python runtime. The in-app updater updates this bundle. Native Windows UI/runtime migration remains a separate multi-phase project and must retain network/security and updater parity before replacing the current app.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.
@@ -195,7 +199,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 
 ### Execution and release sequence
 
-1. Finish the in-progress v1.3.5 media and Tools changes; compile Android and companion artifacts and review the full diff.
+1. v1.3.5 media and Tools changes are complete and published; validate them on Android and Windows hardware.
 2. Ship media/navigation reliability separately from the larger multipath and recording changes so failures can be isolated and rolled back.
 3. Implement Phase A with transport-state/UI work first and exercise it under Wi-Fi loss, Bluetooth loss, PC sleep/resume, and manual disconnect before enabling startup by default.
 4. Implement Phase B in authenticated catalog/listing/transfer slices, then add video capture and phone playback after bounded transfer behavior is established.
