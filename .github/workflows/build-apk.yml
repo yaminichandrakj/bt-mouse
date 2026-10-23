@@ -36,40 +36,36 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Determine Version Tag
+        id: version_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v1.1.1"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
       - name: Prepare APK for Release
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/debug/*.apk release-output/BT-Mouse-v1.1.0.apk
+          cp app/build/outputs/apk/debug/*.apk "release-output/BT-Mouse-${{ steps.version_info.outputs.tag }}.apk"
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BT-Mouse-Debug-APK
-          path: release-output/BT-Mouse-v1.1.0.apk
+          path: release-output/*.apk
           retention-days: 30
 
       - name: Create GitHub Release
-        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.0
-          name: BT Mouse & Keyboard v1.1.0
+          tag_name: ${{ steps.version_info.outputs.tag }}
+          name: BT Mouse & Keyboard ${{ steps.version_info.outputs.tag }}
           draft: false
           prerelease: false
           files: |
-            release-output/BT-Mouse-v1.1.0.apk
-          body: |
-            ### 📱 BT Mouse & Keyboard v1.1.0
-
-            Major update featuring Tablet Writing Slate mode, instant QR Code connection, live real-time typing, PC shortcut icons, in-app updates, and a standalone PC Companion desktop app!
-
-            #### ✨ What's New in v1.1.0:
-            * **Tablet Writing & Drawing Pad**: Full graphics tablet slate mode with 1:1 screen mapping, pressure sensitivity, palm rejection, and pen/eraser toggles for MS Paint, OneNote, Whiteboard, and Photoshop.
-            * **Instant QR Code Pairing**: Scan the QR code displayed on the PC Companion screen to connect over Wi-Fi instantly with zero typing.
-            * **Live Keystroke Typing**: Real-time keystroke streaming from your phone keyboard directly to your PC with full backspace and deletion synchronization.
-            * **PC Shortcut Icons**: Added icons for Copy, Paste, Cut, Undo, Select All, Switch Window, Desktop, Task Manager, Explorer, Lock, and more.
-            * **In-App Auto Updates**: Check and install updates directly from the app's Settings screen via GitHub Releases.
-            * **Standalone Windows Companion App (`BT-Mouse-Companion.exe`)**: Desktop app with system tray icon, background quick options, and hardware-level mouse input.
-
-            #### 📥 Download:
-            Download **`BT-Mouse-v1.1.0.apk`** below and install it directly on your phone or tablet!
+            release-output/*.apk
+          generate_release_notes: true
