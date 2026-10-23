@@ -37,7 +37,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 | Medium | Writing pad | Use selected color; describe mouse-based mapping accurately; clamp and validate coordinates; do not claim pressure support the PC cannot consume. | Color and capability labels implemented; pressure remains phone-preview-only |
 | Medium | Navigation | Remove redundant Settings bottom tab and provide a clear return path from Settings. | Implemented; Android build verification pending |
 | Medium | Dynamic apps | Query installed Start Menu entries, make launch identifiers safe, support search/pinning, and handle missing apps. | Safe server launch and app query implemented; Android flow verification pending |
-| Low | Quality | Add isolated protocol/security regression tests and run available compile/build checks. | Codex-owned tests and GitHub Actions verification in progress |
+| Low | Quality | Add isolated protocol/security regression tests and run available compile/build checks. | Five local and Actions regression tests pass; both release builds pass |
 
 ## Architecture and protocol contract
 
@@ -132,8 +132,8 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] WAN setup omits the PIN from QR/discovery, avoids a fabricated default token, and requires `wss://` for non-local hosts.
 - [x] Password persistence/injection for workstation unlock was removed.
 - [x] Python syntax compilation passes for `server.py` and `app_gui.py`.
-- [ ] Codex-owned Python protocol/security regression suite passes locally and in Actions.
-- [ ] Android release build and Windows executable build pass in Actions.
-- [ ] GitHub Release `v1.3.1` is published with APK and EXE assets.
+- [x] Codex-owned Python protocol/security regression suite passes locally and in Actions (5 tests).
+- [x] Android release build and Windows executable build pass in Actions.
+- [x] GitHub Release `v1.3.1` is published with APK and EXE assets.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.
