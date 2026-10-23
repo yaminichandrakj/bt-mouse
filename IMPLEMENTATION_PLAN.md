@@ -26,7 +26,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 
 | Priority | Area | Required outcome | Status |
 |---|---|---|---|
-| Critical | Network security | Authenticate every UDP command, not only power/app/process commands; remove shell-based arbitrary launch; keep WAN auth before dispatch and require TLS for Internet use. | Implemented; Python syntax check passes; security regression tests pending |
+| Critical | Network security | Authenticate every UDP command, not only power/app/process commands; remove shell-based arbitrary launch; keep WAN auth before dispatch and require TLS for Internet use. | Implemented; Python syntax check and security regression tests pass locally and in Actions |
 | High | RFCOMM/WAN buttons | Handle button-only packets and release held mouse/pen/keyboard input on disconnect or prolonged idle. | Implemented in `server.py`; device verification pending |
 | High | Pairing PIN | Keep the companion PIN stable across restarts and use the same saved PIN for Wi-Fi and WAN; provide a clear PIN rejection instead of a generic timeout. | Implemented in v1.3.2; persistence regression test passes |
 | High | Wi-Fi protocol | Align command names and use an acknowledged, PIN-authenticated connect flow with timeout/cancel behavior; save the visible PIN before auto-discovery connects. | Implemented; device verification pending |
@@ -37,9 +37,9 @@ The UI and protocol must communicate these capability differences. A disconnecte
 | Medium | Media state | Normalize mute field parsing and isolate state by selected transport; handle non-current WinRT sessions and failed operations. | Core normalization/routing implemented; Windows media-session verification pending |
 | Medium | Connection state | Only show connected after handshake; clear connection on timeout, socket failure, mode change, and disconnect. | Implemented for Wi-Fi/WAN; app permits local `ws://` while the WAN client rejects public non-TLS `ws://` endpoints |
 | Medium | Writing pad | Use selected color; describe mouse-based mapping accurately; clamp and validate coordinates; do not claim pressure support the PC cannot consume. | Color and capability labels implemented; pressure remains phone-preview-only |
-| Medium | Navigation | Remove redundant Settings bottom tab and provide a clear return path from Settings. | Implemented; Android build verification pending |
+| Medium | Navigation | Remove redundant Settings bottom tab and provide a clear return path from Settings. | Implemented; Android release build passes in Actions |
 | Medium | Dynamic apps | Query installed Start Menu entries, make launch identifiers safe, support search/pinning, and handle missing apps. | Safe server launch and app query implemented; Android flow verification pending |
-| Low | Quality | Add isolated protocol/security regression tests and run available compile/build checks. | Five local and Actions regression tests pass; both release builds pass |
+| Low | Quality | Add isolated protocol/security regression tests and run available compile/build checks. | Seven local and Actions regression tests pass; both release builds pass |
 
 ## Architecture and protocol contract
 
@@ -109,7 +109,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 4. Publish a new version tag only after Actions builds pass. The tag workflow creates the GitHub Release and attaches both binaries.
 5. Verify the release page, attached asset names, and successful Actions run. Document hardware checks that cannot be performed in this environment.
 
-**Release identity:** `v1.3.1` is published. The next release is `v1.3.2` (`versionCode = 9`), with stable pairing PIN persistence, shared Wi-Fi/WAN credentials, and local WebSocket cleartext compatibility. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
+**Release identity:** `v1.3.2` (`versionCode = 9`) is published with stable pairing PIN persistence, shared Wi-Fi/WAN credentials, and local WebSocket cleartext compatibility. GitHub Actions completed both release builds and the tag workflow published the APK and Windows companion executable. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
 
 **Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; the current release contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
 
@@ -136,8 +136,8 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] WAN setup omits the PIN from QR/discovery, avoids a fabricated default token, and requires `wss://` for non-local hosts.
 - [x] Password persistence/injection for workstation unlock was removed.
 - [x] Python syntax compilation passes for `server.py` and `app_gui.py`.
-- [x] Codex-owned Python protocol/security regression suite passes locally and in Actions (5 tests).
+- [x] Codex-owned Python protocol/security regression suite passes locally and in Actions (7 tests).
 - [x] Android release build and Windows executable build pass in Actions.
-- [x] GitHub Release `v1.3.1` is published with APK and EXE assets.
+- [x] GitHub Release `v1.3.2` is published with APK and EXE assets.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.
