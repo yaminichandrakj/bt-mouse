@@ -109,7 +109,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 4. Publish a new version tag only after Actions builds pass. The tag workflow creates the GitHub Release and attaches both binaries.
 5. Verify the release page, attached asset names, and successful Actions run. Document hardware checks that cannot be performed in this environment.
 
-**Release identity:** `v1.3.3` (`versionCode = 10`) is the latest published release. The current source targets `v1.3.4` (`versionCode = 11`) with media state acknowledgements, volume-button slide navigation, editable shared Quick Apps, Wi-Fi camera streaming, diagnostics, and UI scaling fixes. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
+**Release identity:** `v1.3.4` (`versionCode = 11`) is published with media state acknowledgements, volume-button slide navigation, editable shared Quick Apps, Wi-Fi camera streaming, microphone diagnostics, live process refresh, and UI scaling fixes. GitHub Actions run `39981535439` passed the companion checks, Windows EXE build, Android APK build, and release publication. The release contains `BT-Mouse-v1.3.4.apk` and `BT-Mouse-Companion.exe`. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
 
 **Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; the current release contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
 
@@ -141,7 +141,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] GitHub Release `v1.3.2` is published with APK and EXE assets.
 - [x] Packaged Windows companion checks GitHub Releases, validates and stages the EXE update, replaces itself after exit, and relaunches (`v1.3.3`).
 - [x] GitHub Release `v1.3.3` is published with APK and Windows companion assets; obsolete root-level APK/EXE downloads were removed.
-- [ ] GitHub Release `v1.3.4` is built and published with Android APK and Windows companion assets.
+- [x] GitHub Release `v1.3.4` is built and published with Android APK and Windows companion assets; the release workflow completed successfully.
 - [x] Python source is bundled into a single-file executable by PyInstaller; that EXE embeds its Python runtime. The in-app updater updates this bundle. Native Windows UI/runtime migration remains a separate multi-phase project and must retain network/security and updater parity before replacing the current app.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.
