@@ -41,5 +41,5 @@ If the QR details load but the app reports that the PC did not respond, allow in
 - **Remote access**: Internet connections require a `wss://` TLS endpoint, such as a securely configured tunnel or reverse proxy. Never expose the built-in plain `ws://` listener directly to the Internet.
 - **WAN endpoint**: The companion's QR contains its local address for LAN use. For cellular/Internet use, enter the public `wss://` URL of your TLS tunnel or reverse proxy in the phone app; the companion does not create a public endpoint or relay by itself.
 - **Live Keystroke Streaming**: Characters appear on your PC in real-time as you type on your phone.
-- **In-App Updates**: One-tap GitHub release update checker and automatic APK installer.
+- **Updates**: Use **Check for updates** in the PC companion to download and apply future Windows companion releases, then relaunch automatically. Installing the first version with this feature requires a one-time manual download. The Android app has its own in-app APK updater.
 - **Bluetooth Assistant**: One-click shortcuts to reset and pair Windows Bluetooth if devices act up.

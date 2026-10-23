@@ -12,6 +12,13 @@ import json
 import os
 import sys
 import time
+import re
+import hashlib
+import tempfile
+import subprocess
+import urllib.request
+import urllib.error
+from pathlib import Path
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -44,6 +51,10 @@ except ImportError:
     HAS_TRAY = False
 
 from server import Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin, save_pairing_pin
+
+APP_VERSION = "1.3.3"
+GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
+MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 
 # Color Theme
 BG_DARK = "#0E1118"
@@ -205,6 +216,12 @@ class CompanionApp(tk.Tk):
                                      activeforeground=TEXT_PRIMARY, relief="flat", padx=12, pady=6,
                                      command=self.restart_server, cursor="hand2")
         self.btn_restart.pack(side="left")
+
+        self.btn_update = tk.Button(right_box, text="Check for updates", font=("Segoe UI", 9, "bold"),
+                                    bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
+                                    activeforeground=TEXT_PRIMARY, relief="flat", padx=10, pady=6,
+                                    command=self.check_for_companion_updates, cursor="hand2")
+        self.btn_update.pack(side="left", padx=(6, 0))
 
     def _build_notebook(self):
         self.notebook = ttk.Notebook(self)
@@ -564,9 +581,149 @@ class CompanionApp(tk.Tk):
         bar = tk.Frame(self, bg=CARD_BG, height=28, padx=16, pady=4)
         bar.pack(fill="x", side="bottom")
 
-        lbl_foot = tk.Label(bar, text="BT Mouse Companion v1.3.2 | Minimizes to system tray | Native Windows Hardware Input",
+        lbl_foot = tk.Label(bar, text=f"BT Mouse Companion v{APP_VERSION} | Minimizes to system tray | Native Windows Hardware Input",
                             font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED)
         lbl_foot.pack(side="left")
+
+    @staticmethod
+    def _version_tuple(version):
+        match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version.strip())
+        if not match:
+            raise ValueError(f"Unrecognized release version: {version}")
+        return tuple(int(part) for part in match.groups())
+
+    def check_for_companion_updates(self):
+        if not getattr(sys, "frozen", False):
+            messagebox.showinfo("Companion updates", "In-app updates are available when running the packaged Windows app.")
+            return
+        self.btn_update.config(state="disabled", text="Checking…")
+        threading.Thread(target=self._check_companion_updates_worker, daemon=True).start()
+
+    def _check_companion_updates_worker(self):
+        try:
+            api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
+            request = urllib.request.Request(api_url, headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "BT-Mouse-Companion-Updater",
+            })
+            with urllib.request.urlopen(request, timeout=20) as response:
+                release = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
+
+            tag_name = release.get("tag_name", "")
+            if release.get("draft") or release.get("prerelease"):
+                raise ValueError("GitHub did not return a stable release.")
+            if self._version_tuple(tag_name) <= self._version_tuple(APP_VERSION):
+                self.after(0, lambda: messagebox.showinfo(
+                    "Companion updates", f"You are using the latest version (v{APP_VERSION})."))
+                self.after(0, lambda: self.btn_update.config(state="normal", text="Check for updates"))
+                return
+
+            asset = next((item for item in release.get("assets", [])
+                          if item.get("name") == "BT-Mouse-Companion.exe"), None)
+            if not asset or not asset.get("browser_download_url"):
+                raise ValueError("The latest release does not include the Windows companion executable.")
+            if asset.get("size", 0) <= 0 or asset["size"] > MAX_COMPANION_UPDATE_BYTES:
+                raise ValueError("The Windows update has an unexpected file size.")
+
+            def ask_to_update():
+                update = messagebox.askyesno(
+                    "Companion update available",
+                    f"Version {tag_name} is available. Download and install it now?\n\n"
+                    "The companion will close briefly and reopen after updating.")
+                if update:
+                    self.btn_update.config(state="disabled", text="Downloading…")
+                    threading.Thread(target=self._download_companion_update_worker,
+                                     args=(tag_name, asset), daemon=True).start()
+                else:
+                    self.btn_update.config(state="normal", text="Check for updates")
+            self.after(0, ask_to_update)
+        except Exception as exc:
+            self.after(0, lambda error=str(exc): messagebox.showerror(
+                "Companion update failed", f"Could not check for updates.\n\n{error}"))
+            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for updates"))
+
+    def _download_companion_update_worker(self, tag_name, asset):
+        staged_path = None
+        try:
+            download_url = asset["browser_download_url"]
+            if not download_url.startswith("https://github.com/"):
+                raise ValueError("The update URL is not a trusted GitHub release link.")
+            request = urllib.request.Request(download_url, headers={
+                "User-Agent": "BT-Mouse-Companion-Updater",
+                "Accept": "application/octet-stream",
+            })
+            digest = hashlib.sha256()
+            downloaded = 0
+            temp_dir = Path(tempfile.gettempdir())
+            staged_path = temp_dir / f"BT-Mouse-Companion-{tag_name}.exe"
+            with urllib.request.urlopen(request, timeout=60) as response, staged_path.open("wb") as output:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    downloaded += len(chunk)
+                    if downloaded > asset["size"] or downloaded > MAX_COMPANION_UPDATE_BYTES:
+                        raise ValueError("The downloaded update is larger than expected.")
+                    digest.update(chunk)
+                    output.write(chunk)
+
+            if downloaded != asset["size"]:
+                raise ValueError("The downloaded update size did not match the release metadata.")
+            with staged_path.open("rb") as downloaded_file:
+                if downloaded_file.read(2) != b"MZ":
+                    raise ValueError("The downloaded file is not a valid Windows executable.")
+            expected_digest = asset.get("digest") or ""
+            if expected_digest.startswith("sha256:") and digest.hexdigest().lower() != expected_digest[7:].lower():
+                raise ValueError("The downloaded update failed its SHA-256 check.")
+
+            executable = Path(sys.executable).resolve()
+            # Probe the destination directory now, before closing the working app.
+            probe_path = executable.parent / f".btmouse-update-check-{os.getpid()}"
+            try:
+                probe_path.write_text("", encoding="ascii")
+                probe_path.unlink()
+            except OSError as exc:
+                raise OSError("The app folder is not writable. Move the companion to a folder you own, then retry.") from exc
+
+            script_path = temp_dir / f"btmouse-update-{os.getpid()}.ps1"
+            log_path = temp_dir / "btmouse-update-error.log"
+            ps_quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+            script = (
+                f"$pidToWait = {os.getpid()}\n"
+                f"$target = {ps_quote(executable)}\n"
+                f"$staged = {ps_quote(staged_path)}\n"
+                f"$log = {ps_quote(log_path)}\n"
+                "while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }\n"
+                "try { Copy-Item -LiteralPath $staged -Destination $target -Force -ErrorAction Stop; "
+                "Start-Process -FilePath $target -ErrorAction Stop; Remove-Item -LiteralPath $staged -Force; "
+                "Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue } "
+                "catch { $_ | Out-File -LiteralPath $log -Encoding utf8; exit 1 }\n"
+                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n"
+            )
+            script_path.write_text(script, encoding="utf-8")
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                              "-File", str(script_path)], creationflags=flags,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.after(0, self._exit_for_companion_update)
+        except Exception as exc:
+            if staged_path and staged_path.exists():
+                try:
+                    staged_path.unlink()
+                except OSError:
+                    pass
+            self.after(0, lambda error=str(exc): messagebox.showerror(
+                "Companion update failed", f"Could not download or install the update.\n\n{error}"))
+            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for updates"))
+
+    def _exit_for_companion_update(self):
+        self.stop_server()
+        if self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        self.destroy()
 
     def _on_adapter_selected(self, event):
         idx = self.combo_adapter.current()
