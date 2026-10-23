@@ -560,7 +560,8 @@ fun KeyboardScreen(
                 hapticsEnabled = hapticsEnabled,
                 onDown = { triggerKey(HidConstants.KEY_ENTER) }
             )
-            }
+        }
+        }
         }
         Spacer(modifier = Modifier.height(20.dp))
     }
