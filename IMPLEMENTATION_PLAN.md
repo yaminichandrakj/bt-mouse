@@ -109,7 +109,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 4. Publish a new version tag only after Actions builds pass. The tag workflow creates the GitHub Release and attaches both binaries.
 5. Verify the release page, attached asset names, and successful Actions run. Document hardware checks that cannot be performed in this environment.
 
-**Release identity:** `v1.3.2` (`versionCode = 9`) is published with stable pairing PIN persistence, shared Wi-Fi/WAN credentials, and local WebSocket cleartext compatibility. GitHub Actions completed both release builds and the tag workflow published the APK and Windows companion executable. The next release is `v1.3.3` (`versionCode = 10`), which adds a self-updater to the packaged Windows companion; the first install of that updater requires a one-time manual download, after which users can update from the app. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
+**Release identity:** `v1.3.3` (`versionCode = 10`) is published. It includes stable pairing PIN persistence, shared Wi-Fi/WAN credentials, local WebSocket cleartext compatibility, and an in-app Windows companion updater. GitHub Actions passed both release builds and published the APK and Windows executable. Users upgrading from v1.3.2 must install v1.3.3 once; subsequent Windows companion updates can be checked and applied from the companion itself. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
 
 **Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; the current release contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
 
@@ -139,6 +139,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] Codex-owned Python protocol/security regression suite passes locally and in Actions (7 tests).
 - [x] Android release build and Windows executable build pass in Actions.
 - [x] GitHub Release `v1.3.2` is published with APK and EXE assets.
-- [ ] Windows companion can check for, download, validate, and safely apply a later release from within the app (`v1.3.3`).
+- [x] Packaged Windows companion checks GitHub Releases, validates and stages the EXE update, replaces itself after exit, and relaunches (`v1.3.3`).
+- [x] GitHub Release `v1.3.3` is published with APK and Windows companion assets; obsolete root-level APK/EXE downloads were removed.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.
