@@ -31,6 +31,7 @@
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
 
+    <!-- RemoteWanManager limits ws:// to private LAN hosts; public WAN URLs must use wss://. -->
     <application
         android:name=".BtMouseApplication"
         android:allowBackup="true"
@@ -39,6 +40,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.BtMouse"
+        android:usesCleartextTraffic="true"
         tools:targetApi="34">
 
         <activity

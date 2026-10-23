@@ -124,12 +124,14 @@ fun ConnectionScreen(
                 val type = obj.get("type")?.asString ?: ""
                 if (type == "btmouse_wan" || obj.has("url")) {
                     val url = obj.get("url")?.asString ?: ""
-                    val token = obj.get("token")?.asString ?: settings.wanToken.value
+                    val token = obj.get("token")?.asString?.takeIf { it.isNotBlank() }
+                        ?: settings.serverPin.value.ifBlank { settings.wanToken.value }
                     if (url.isNotEmpty()) {
                         settings.setWanUrl(url)
                         coordinator.setMode(ConnectionMode.REMOTE_WAN)
                         if (token.isNotBlank()) {
                             settings.setWanToken(token)
+                            settings.setServerPin(token)
                             coordinator.remoteWanManager.connect(url, token)
                         } else {
                             Toast.makeText(context, "Enter the pairing PIN, then connect", Toast.LENGTH_LONG).show()
@@ -196,7 +198,7 @@ fun ConnectionScreen(
                     if (rawValue.isNotEmpty()) {
                         val success = parseAndConnectQr(rawValue)
                         if (success) {
-                            Toast.makeText(context, "PC details loaded; check connection status", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Details scanned; waiting for the PC connection handshake", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Unrecognized QR format: $rawValue", Toast.LENGTH_LONG).show()
                         }
@@ -450,6 +452,7 @@ fun ConnectionScreen(
 
                         Button(
                             onClick = {
+                                settings.setServerPin(wifiPin)
                                 coordinator.wifiClientManager.discoverServer { host, port, name ->
                                     manualHost = host
                                     manualPort = port.toString()
@@ -557,7 +560,9 @@ fun ConnectionScreen(
                 val storedWanUrl by settings.wanUrl.collectAsState()
                 val storedWanToken by settings.wanToken.collectAsState()
                 var inputWanUrl by remember(storedWanUrl) { mutableStateOf(storedWanUrl) }
-                var inputWanToken by remember(storedWanToken) { mutableStateOf(storedWanToken) }
+                var inputWanToken by remember(storedWanToken, savedServerPin) {
+                    mutableStateOf(savedServerPin.ifBlank { storedWanToken })
+                }
 
                 Column(
                     modifier = Modifier.weight(1f),
@@ -617,6 +622,7 @@ fun ConnectionScreen(
                                 onClick = {
                                     settings.setWanUrl(inputWanUrl.trim())
                                     settings.setWanToken(inputWanToken.trim())
+                                    settings.setServerPin(inputWanToken.trim())
                                     coordinator.remoteWanManager.connect(inputWanUrl.trim(), inputWanToken.trim())
                                 },
                                 modifier = Modifier.fillMaxWidth(),

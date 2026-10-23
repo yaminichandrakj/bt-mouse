@@ -1,6 +1,6 @@
 # BT Mouse & PC Companion — Implementation Plan
 
-**Plan version:** 2.3
+**Plan version:** 2.4
 **Repository:** `BT Mouse`
 **Status:** Active implementation
 **Updated:** 2026-10-23
@@ -28,12 +28,14 @@ The UI and protocol must communicate these capability differences. A disconnecte
 |---|---|---|---|
 | Critical | Network security | Authenticate every UDP command, not only power/app/process commands; remove shell-based arbitrary launch; keep WAN auth before dispatch and require TLS for Internet use. | Implemented; Python syntax check passes; security regression tests pending |
 | High | RFCOMM/WAN buttons | Handle button-only packets and release held mouse/pen/keyboard input on disconnect or prolonged idle. | Implemented in `server.py`; device verification pending |
-| High | Wi-Fi protocol | Align command names and add an acknowledged, PIN-authenticated connect flow with timeout/cancel behavior. | Implemented; device verification pending |
+| High | Pairing PIN | Keep the companion PIN stable across restarts and use the same saved PIN for Wi-Fi and WAN; provide a clear PIN rejection instead of a generic timeout. | Implemented in v1.3.2; persistence regression test passes |
+| High | Wi-Fi protocol | Align command names and use an acknowledged, PIN-authenticated connect flow with timeout/cancel behavior; save the visible PIN before auto-discovery connects. | Implemented; device verification pending |
+| High | First-run network setup | Explain that QR parsing is not a connection, document Windows Firewall UDP ports, and distinguish local WS URLs from public WSS endpoints. | Status copy and connection guidance updated; device/network verification pending |
 | High | RFCOMM response path | Await WinRT `store_async()` on its owning event loop; report and handle failed writes. | Implemented with a bounded response queue; Windows device verification pending |
 | High | Wi-Fi camera stream | Deliver frames/status to the UDP peer or explicitly disable the feature on UDP; do not claim success without a working stream. | UDP streaming now returns an explicit unsupported response; snapshots are size-bounded |
 | High | Numpad | Map every keypad HID usage in the PC companion, including operators and decimal. | Implemented in `server.py`; device verification pending |
 | Medium | Media state | Normalize mute field parsing and isolate state by selected transport; handle non-current WinRT sessions and failed operations. | Core normalization/routing implemented; Windows media-session verification pending |
-| Medium | Connection state | Only show connected after handshake; clear connection on timeout, socket failure, mode change, and disconnect. | Implemented for Wi-Fi/WAN; Bluetooth device verification pending |
+| Medium | Connection state | Only show connected after handshake; clear connection on timeout, socket failure, mode change, and disconnect. | Implemented for Wi-Fi/WAN; app permits local `ws://` while the WAN client rejects public non-TLS `ws://` endpoints |
 | Medium | Writing pad | Use selected color; describe mouse-based mapping accurately; clamp and validate coordinates; do not claim pressure support the PC cannot consume. | Color and capability labels implemented; pressure remains phone-preview-only |
 | Medium | Navigation | Remove redundant Settings bottom tab and provide a clear return path from Settings. | Implemented; Android build verification pending |
 | Medium | Dynamic apps | Query installed Start Menu entries, make launch identifiers safe, support search/pinning, and handle missing apps. | Safe server launch and app query implemented; Android flow verification pending |
@@ -88,6 +90,8 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - Treat stylus pressure and absolute pen mapping as preview-only unless the PC side supports a real digitizer protocol. On Windows, label the fallback as absolute mouse emulation; on other desktop OSes, report unsupported absolute pen mapping until implemented.
 - Show connection mode and transport capability. Hide/disable companion-only features in HID-only mode, show connecting/error state for handshakes, and remove Settings from the crowded bottom bar in favor of the gear launcher/back action.
 - Use the selected external endpoint for WAN QR setup. Require `wss://` for Internet operation; local `ws://` is only for trusted LAN development/use and must be labeled.
+- Keep the pairing PIN stable in a per-user PC companion config file. Use the saved Android Wi-Fi PIN as the default WAN credential because both transports authenticate against the same PC PIN.
+- Explain that scanning only loads an endpoint; the connection handshake must succeed. For Wi-Fi, Windows Firewall must allow inbound UDP 53530 and UDP 53535, and the phone and PC must be able to reach each other on the LAN. The companion's WAN QR is a local endpoint; cellular users must enter their public TLS-terminated `wss://` URL.
 
 **Acceptance:** controls do not silently no-op; Settings navigation works from every screen; WAN help/QR values match the actual configured endpoint; UI does not promise pressure-sensitive digitizing or secure-desktop unlock where unsupported.
 
@@ -105,9 +109,9 @@ The UI and protocol must communicate these capability differences. A disconnecte
 4. Publish a new version tag only after Actions builds pass. The tag workflow creates the GitHub Release and attaches both binaries.
 5. Verify the release page, attached asset names, and successful Actions run. Document hardware checks that cannot be performed in this environment.
 
-**Release identity:** `v1.3.0` already exists as a source tag, so it must not be moved or overwritten. The next release is `v1.3.1` (`versionCode = 8`). Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
+**Release identity:** `v1.3.1` is published. The next release is `v1.3.2` (`versionCode = 9`), with stable pairing PIN persistence, shared Wi-Fi/WAN credentials, and local WebSocket cleartext compatibility. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
 
-**Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; release `v1.3.1` contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
+**Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; the current release contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
 
 ## Current implementation sequence
 
@@ -115,8 +119,8 @@ The UI and protocol must communicate these capability differences. A disconnecte
 2. Handshake and transport parity are implemented; run protocol regression tests and device checks before claiming hardware reliability.
 3. Media, app, writing surface, and mode-aware UI fixes are implemented; verify behavior on Android and Windows.
 4. Codex adds and runs deterministic Python regression tests and adds them to the GitHub Actions workflow.
-5. Bump the app/server version to `1.3.1`, preserve signing identity, push source changes, and let Actions build both release binaries.
-6. After both builds pass, push tag `v1.3.1`, let Actions publish the GitHub Release, and verify both assets.
+5. Bump the app/server version for each release, preserve signing identity, push source changes, and let Actions build both release binaries.
+6. After both builds pass, push the matching version tag, let Actions publish the GitHub Release, and verify both assets.
 
 ## Verification checklist
 

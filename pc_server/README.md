@@ -28,6 +28,8 @@ python app_gui.py
 4. Enter the six-digit pairing PIN shown by the companion, then scan its Wi-Fi QR code or tap **Auto-Discover** / enter the IP manually.
 5. Wait for the PIN-validated connection acknowledgment before sending input.
 
+If the QR details load but the app reports that the PC did not respond, allow inbound **UDP 53530** (input) and **UDP 53535** (discovery) through Windows Firewall. Both devices must be on the same reachable LAN; guest Wi-Fi and client isolation can block device-to-device traffic.
+
 ---
 
 ## Features
@@ -35,8 +37,9 @@ python app_gui.py
 - **Hardware-Accelerated Native Windows Input**: Uses direct `user32.mouse_event` for butter-smooth pointer movement and scrolling.
 - **Writing Pad**: Phone ink preview with mouse input to the PC. Windows absolute positioning is mouse emulation; pressure-sensitive digitizer input and colored PC strokes are not supported.
 - **Camera**: Wi-Fi snapshots are size-limited. Live camera streaming uses RFCOMM or WebSocket because UDP video datagrams are unreliable.
-- **Pairing**: Six-digit PIN appears in the PC companion/terminal. It is not placed in discovery or QR payloads.
+- **Pairing**: A six-digit PIN appears in the PC companion/terminal and is saved on that PC so it stays the same after restart. It is not placed in discovery or QR payloads. Re-enter the displayed PIN on the phone if upgrading from an older companion version.
 - **Remote access**: Internet connections require a `wss://` TLS endpoint, such as a securely configured tunnel or reverse proxy. Never expose the built-in plain `ws://` listener directly to the Internet.
+- **WAN endpoint**: The companion's QR contains its local address for LAN use. For cellular/Internet use, enter the public `wss://` URL of your TLS tunnel or reverse proxy in the phone app; the companion does not create a public endpoint or relay by itself.
 - **Live Keystroke Streaming**: Characters appear on your PC in real-time as you type on your phone.
 - **In-App Updates**: One-tap GitHub release update checker and automatic APK installer.
 - **Bluetooth Assistant**: One-click shortcuts to reset and pair Windows Bluetooth if devices act up.

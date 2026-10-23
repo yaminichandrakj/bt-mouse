@@ -314,6 +314,10 @@ class WifiClientManager(
             _statusMessage.value = "Enter the pairing PIN shown by the PC companion"
             return
         }
+        if (pin.length != 6 || pin.any { !it.isDigit() }) {
+            _statusMessage.value = "The PC companion pairing PIN must be six digits"
+            return
+        }
 
         connectJob = scope.launch(Dispatchers.IO) {
             try {

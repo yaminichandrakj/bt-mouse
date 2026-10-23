@@ -71,8 +71,8 @@ class RemoteWanManager(
 
     fun connect(url: String, token: String) {
         disconnect()
-        if (token.isBlank()) {
-            _statusMessage.value = "Enter the pairing PIN shown by the PC companion"
+        if (token.length != 6 || token.any { !it.isDigit() }) {
+            _statusMessage.value = "Enter the six-digit pairing PIN shown by the PC companion"
             return
         }
         _statusMessage.value = "Connecting to $url..."

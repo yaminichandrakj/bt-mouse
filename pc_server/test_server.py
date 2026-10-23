@@ -1,7 +1,9 @@
 """Hardware-free regression checks for the companion command protocol."""
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -102,6 +104,20 @@ class ServerProtocolTests(unittest.TestCase):
         instance.sock.reset_mock()
         instance._send_udp_json({"data": "x" * 65000}, self.CLIENT)
         instance.sock.sendto.assert_not_called()
+
+    def test_pairing_pin_is_stable_between_server_restarts(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as folder:
+            config_path = Path(folder) / "pairing.json"
+            with patch.object(server, "PAIRING_PIN_PATH", config_path):
+                first_pin = server.load_or_create_pairing_pin()
+                second_pin = server.load_or_create_pairing_pin()
+
+        self.assertRegex(first_pin, r"^\d{6}$")
+        self.assertEqual(second_pin, first_pin)
+
+    def test_pairing_pin_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            server.save_pairing_pin("abc123")
 
 
 if __name__ == "__main__":

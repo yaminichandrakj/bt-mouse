@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import time
-import secrets
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -44,7 +43,7 @@ try:
 except ImportError:
     HAS_TRAY = False
 
-from server import Server, ensure_interactive_desktop, IS_WINDOWS
+from server import Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin, save_pairing_pin
 
 # Color Theme
 BG_DARK = "#0E1118"
@@ -84,7 +83,7 @@ class CompanionApp(tk.Tk):
 
         self.current_port = 53530
         self.ws_port = 53531
-        self.auth_token = f"{secrets.randbelow(1_000_000):06d}"
+        self.auth_token = load_or_create_pairing_pin()
         self._init_server()
 
         # Stats
@@ -565,7 +564,7 @@ class CompanionApp(tk.Tk):
         bar = tk.Frame(self, bg=CARD_BG, height=28, padx=16, pady=4)
         bar.pack(fill="x", side="bottom")
 
-        lbl_foot = tk.Label(bar, text="BT Mouse Companion v1.1 | Minimizes to system tray | Native Windows Hardware Input",
+        lbl_foot = tk.Label(bar, text="BT Mouse Companion v1.3.2 | Minimizes to system tray | Native Windows Hardware Input",
                             font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED)
         lbl_foot.pack(side="left")
 
@@ -677,6 +676,11 @@ class CompanionApp(tk.Tk):
     def _update_auth_token(self):
         new_token = self.ent_token.get().strip()
         if new_token.isdigit() and len(new_token) == 6:
+            try:
+                save_pairing_pin(new_token)
+            except OSError as e:
+                messagebox.showerror("PIN Not Saved", f"Could not save the pairing PIN: {e}")
+                return
             self.auth_token = new_token
             if self.server:
                 self.server.auth_token = new_token

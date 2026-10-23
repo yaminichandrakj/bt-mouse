@@ -15,6 +15,49 @@ import base64
 import asyncio
 import hmac
 import secrets
+from pathlib import Path
+
+
+def _pairing_pin_config_path():
+    """Return the per-user path used to keep the PC pairing PIN stable."""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        config_dir = Path(local_app_data) / "BTMouse"
+    else:
+        config_dir = Path.home() / ".config" / "bt-mouse"
+    return config_dir / "pairing.json"
+
+
+PAIRING_PIN_PATH = _pairing_pin_config_path()
+
+
+def save_pairing_pin(pin):
+    pin = str(pin).strip()
+    if len(pin) != 6 or not pin.isdigit():
+        raise ValueError("Pairing PIN must contain exactly six digits")
+    PAIRING_PIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = PAIRING_PIN_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps({"pin": pin}), encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(temp_path, 0o600)
+    os.replace(temp_path, PAIRING_PIN_PATH)
+
+
+def load_or_create_pairing_pin():
+    try:
+        saved = json.loads(PAIRING_PIN_PATH.read_text(encoding="utf-8"))
+        pin = str(saved.get("pin", "")).strip()
+        if len(pin) == 6 and pin.isdigit():
+            return pin
+    except (OSError, ValueError, TypeError):
+        pass
+
+    pin = f"{secrets.randbelow(1_000_000):06d}"
+    try:
+        save_pairing_pin(pin)
+    except OSError as e:
+        print(f"[!] Could not persist pairing PIN: {e}")
+    return pin
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -771,7 +814,7 @@ class Server:
         self.port = port
         self.discovery_port = discovery_port
         self.ws_port = ws_port
-        self.auth_token = str(auth_token or f"{secrets.randbelow(1_000_000):06d}")
+        self.auth_token = str(auth_token or load_or_create_pairing_pin())
         self.running = False
         self.sock = None
         self.discovery_sock = None
@@ -961,7 +1004,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.1"
+                    "version": "1.3.2"
                 }
             else:
                 self._record_auth_failure(addr)
