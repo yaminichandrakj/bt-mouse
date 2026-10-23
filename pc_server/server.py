@@ -14,6 +14,7 @@ import traceback
 import base64
 import asyncio
 import hmac
+import hashlib
 import secrets
 from pathlib import Path
 
@@ -718,6 +719,10 @@ class CameraManager:
                 cap = cv2.VideoCapture(0)
             if not cap.isOpened():
                 return None
+            # Ask the camera for a still-sized frame. The live stream uses a
+            # separate capture object with its own adaptive preview settings.
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, max_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(max_width * 9 / 16))
             ret, frame = cap.read()
             cap.release()
             if not ret or frame is None:
@@ -1029,6 +1034,11 @@ class Server:
         self.connected_client = None
         self.auth_failures = {}
         self._process_cpu_samples = {}
+        self._query_cache = {}
+        self._query_cache_lock = threading.Lock()
+        self._query_cache_key_locks = {}
+        self._snapshot_transfers = {}
+        self._snapshot_transfer_lock = threading.Lock()
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
         # Bluetooth RFCOMM Server for mobile companion
@@ -1200,7 +1210,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.6"
+                    "version": "1.3.7"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -1417,7 +1427,7 @@ class Server:
             respond({"type": "error", "message": "Workstation unlock is not supported"})
 
         elif cmd_type in ("query_apps", "query_installed_apps", "list_apps"):
-            apps = self._get_installed_apps()
+            apps = self._cached_query("apps", 5.0, self._get_installed_apps)
             resp = {"type": "installed_apps_response", "apps": apps}
             if responder:
                 responder(resp)
@@ -1425,7 +1435,7 @@ class Server:
                 self._send_udp_json(resp, addr)
 
         elif cmd_type in ("query_processes", "list_processes"):
-            procs = self._get_running_processes()
+            procs = self._cached_query("processes", 3.0, self._get_running_processes)
             resp = {"type": "process_list_response", "processes": procs}
             if responder:
                 responder(resp)
@@ -1442,7 +1452,7 @@ class Server:
                 self._send_udp_json(resp, addr)
 
         elif cmd_type in ("query_stats", "system_stats", "query_system_stats"):
-            stats = self._get_system_stats()
+            stats = self._cached_query("stats", 1.0, self._get_system_stats)
             resp = {"type": "system_stats_response"}
             resp.update(stats)
             if responder:
@@ -1450,19 +1460,27 @@ class Server:
             elif addr and self.sock:
                 self._send_udp_json(resp, addr)
 
+        elif cmd_type == "camera_snapshot_ack":
+            self._ack_udp_snapshot_transfer(data, addr)
+
         elif cmd_type == "camera_snapshot":
-            # Limit UDP snapshots to a bounded datagram; WebSocket/RFCOMM can
-            # carry the higher quality default image without UDP fragmentation.
-            b64 = self.camera_manager.get_snapshot(
-                max_width=320 if responder is None else 800,
-                quality=45 if responder is None else 75,
-                max_encoded_bytes=24 * 1024 if responder is None else None
-            )
-            resp = {"type": "camera_frame_response", "frame": b64, "is_snapshot": True, "success": b64 is not None}
+            # Snapshot quality is independent of the lower-resolution live
+            # preview. UDP transfers are split into MTU-safe chunks and can be
+            # selectively retried; reliable transports receive one full frame.
+            b64 = self.camera_manager.get_snapshot(max_width=1920, quality=92)
             if responder:
+                resp = {"type": "camera_frame_response", "frame": b64, "is_snapshot": True, "success": b64 is not None}
                 responder(resp)
+            elif addr and self.sock and b64:
+                try:
+                    raw_frame = base64.b64decode(b64, validate=True)
+                    if not raw_frame or len(raw_frame) > 8 * 1024 * 1024:
+                        raise ValueError("Snapshot exceeds the 8 MiB transfer limit")
+                    self._start_udp_snapshot_transfer(raw_frame, addr)
+                except Exception as exc:
+                    self._send_udp_json({"type": "error", "message": f"Snapshot transfer failed: {exc}"}, addr)
             elif addr and self.sock:
-                self._send_udp_json(resp, addr)
+                self._send_udp_json({"type": "camera_frame_response", "frame": None, "is_snapshot": True, "success": False}, addr)
 
         elif cmd_type in ("camera_stream_start", "start_camera_stream"):
             def _on_frame(b64):
@@ -1546,6 +1564,83 @@ class Server:
             pass
         return False
 
+    def _start_udp_snapshot_transfer(self, raw_frame, addr):
+        chunk_size = 900
+        chunks = [raw_frame[offset:offset + chunk_size] for offset in range(0, len(raw_frame), chunk_size)]
+        snapshot_id = secrets.token_hex(12)
+        now = time.monotonic()
+        with self._snapshot_transfer_lock:
+            expired = [key for key, value in self._snapshot_transfers.items() if now - value["created"] > 45.0]
+            for key in expired:
+                self._snapshot_transfers.pop(key, None)
+            # Bound retained image data to at most two recent snapshots.
+            while len(self._snapshot_transfers) >= 2:
+                oldest = min(self._snapshot_transfers, key=lambda key: self._snapshot_transfers[key]["created"])
+                self._snapshot_transfers.pop(oldest, None)
+            self._snapshot_transfers[snapshot_id] = {
+                "addr": addr,
+                "chunks": chunks,
+                "created": now,
+                "total_bytes": len(raw_frame),
+            }
+        self._send_udp_json({
+            "type": "camera_snapshot_start",
+            "snapshot_id": snapshot_id,
+            "chunk_count": len(chunks),
+            "total_bytes": len(raw_frame),
+            "sha256": hashlib.sha256(raw_frame).hexdigest(),
+        }, addr)
+        threading.Thread(
+            target=self._send_udp_snapshot_chunks,
+            args=(snapshot_id, list(range(len(chunks)))),
+            daemon=True,
+        ).start()
+
+    def _send_udp_snapshot_chunks(self, snapshot_id, indexes):
+        with self._snapshot_transfer_lock:
+            transfer = self._snapshot_transfers.get(snapshot_id)
+            if not transfer:
+                return
+            addr = transfer["addr"]
+            chunks = transfer["chunks"]
+            created = transfer["created"]
+        for offset, index in enumerate(indexes):
+            if time.monotonic() - created > 45.0:
+                return
+            if index < 0 or index >= len(chunks):
+                continue
+            chunk = chunks[index]
+            self._send_udp_json({
+                "type": "camera_snapshot_chunk",
+                "snapshot_id": snapshot_id,
+                "index": index,
+                "data": base64.b64encode(chunk).decode("ascii"),
+            }, addr)
+            if offset % 16 == 15:
+                time.sleep(0.001)
+
+    def _ack_udp_snapshot_transfer(self, data, addr):
+        snapshot_id = str(data.get("snapshot_id", ""))
+        if not snapshot_id or len(snapshot_id) > 32 or not addr:
+            return
+        try:
+            bitmap = base64.b64decode(str(data.get("received_bitmap", "")), validate=True)
+        except Exception:
+            return
+        with self._snapshot_transfer_lock:
+            transfer = self._snapshot_transfers.get(snapshot_id)
+            if not transfer or transfer["addr"] != addr or time.monotonic() - transfer["created"] > 45.0:
+                self._snapshot_transfers.pop(snapshot_id, None)
+                return
+            chunks = transfer["chunks"]
+            if len(bitmap) != (len(chunks) + 7) // 8:
+                return
+            missing = [index for index in range(len(chunks)) if not (bitmap[index // 8] & (1 << (index % 8)))]
+            if not missing:
+                self._snapshot_transfers.pop(snapshot_id, None)
+                return
+        threading.Thread(target=self._send_udp_snapshot_chunks, args=(snapshot_id, missing), daemon=True).start()
+
     def _release_mouse_buttons(self):
         buttons = self.last_buttons
         if buttons and IS_WINDOWS:
@@ -1584,6 +1679,24 @@ class Server:
         if (self.last_buttons or self.last_pen_button is not None or self.pressed_keys) and time.monotonic() - self.last_input_at >= 30.0:
             self._release_mouse_buttons()
             print("[*] Released held input after 30 seconds without client input")
+
+    def _cached_query(self, key, ttl_seconds, loader):
+        now = time.monotonic()
+        with self._query_cache_lock:
+            cached = self._query_cache.get(key)
+            if cached and now - cached[0] < ttl_seconds:
+                return cached[1]
+            key_lock = self._query_cache_key_locks.setdefault(key, threading.Lock())
+        with key_lock:
+            now = time.monotonic()
+            with self._query_cache_lock:
+                cached = self._query_cache.get(key)
+                if cached and now - cached[0] < ttl_seconds:
+                    return cached[1]
+            value = loader()
+            with self._query_cache_lock:
+                self._query_cache[key] = (time.monotonic(), value)
+            return value
 
     def _get_installed_apps(self):
         apps = []
@@ -1626,7 +1739,9 @@ class Server:
                     if not pid:
                         continue
                     live_pids.add(pid)
-                    cpu_times = p.cpu_times()
+                    with p.oneshot():
+                        cpu_times = p.cpu_times()
+                        memory_mb = p.memory_info().rss / (1024.0 * 1024.0)
                     cpu_total = cpu_times.user + cpu_times.system
                     previous = self._process_cpu_samples.get(pid)
                     cpu_percent = 0.0
@@ -1634,7 +1749,6 @@ class Server:
                         elapsed = max(0.001, now - previous[1])
                         cpu_percent = max(0.0, (cpu_total - previous[0]) * 100.0 / elapsed / logical_cpus)
                     self._process_cpu_samples[pid] = (cpu_total, now)
-                    memory_mb = p.memory_info().rss / (1024.0 * 1024.0)
                     if memory_mb >= 1.0:
                         procs.append({
                             'pid': pid,
@@ -1654,7 +1768,7 @@ class Server:
         stats = {"cpu": 0.0, "ram": 0.0, "battery": -1, "power_plugged": True, "disk": 0.0}
         try:
             import psutil
-            stats["cpu"] = round(psutil.cpu_percent(interval=0.1), 1)
+            stats["cpu"] = round(psutil.cpu_percent(interval=None), 1)
             stats["ram"] = round(psutil.virtual_memory().percent, 1)
             disk = psutil.disk_usage(os.path.abspath(os.sep))
             stats["disk"] = round(disk.percent, 1)

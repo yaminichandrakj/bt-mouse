@@ -175,7 +175,6 @@ class RemoteWanManager(
                         _connectedDeviceName.value = "Remote PC (WAN)"
                         startHeartbeat()
                         queryMedia()
-                        querySystemStats()
                     } else {
                         _isConnected.value = false
                         _connectedDeviceName.value = null
@@ -289,7 +288,6 @@ class RemoteWanManager(
                 if (_isConnected.value) {
                     sendPacket(mapOf("type" to "ping"))
                     queryMedia()
-                    querySystemStats()
                 }
                 delay(2000)
             }

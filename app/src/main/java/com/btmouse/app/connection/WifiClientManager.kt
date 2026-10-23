@@ -20,10 +20,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
+import java.security.MessageDigest
 
 class WifiClientManager(
     private val settings: SettingsRepository,
@@ -77,6 +79,18 @@ class WifiClientManager(
         val port: Int,
         val acknowledgement: CompletableDeferred<JsonObject>
     )
+
+    private data class SnapshotAssembly(
+        val id: String,
+        val expectedBytes: Int,
+        val expectedSha256: String,
+        val chunks: Array<ByteArray?>,
+        var receivedBytes: Int = 0,
+        var receivedCount: Int = 0,
+    )
+
+    @Volatile private var pendingSnapshot: SnapshotAssembly? = null
+    private var snapshotRetryJob: Job? = null
 
     // High-performance, zero-jitter non-blocking send queue
     private val sendQueue = Channel<DatagramPacket>(capacity = 1000, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -221,6 +235,94 @@ class WifiClientManager(
                             val bytes = Base64.decode(b64, Base64.DEFAULT)
                             _latestCameraFrame.value = bytes
                         } catch (e: Exception) {}
+                    }
+                }
+                "camera_snapshot_start" -> {
+                    val id = json.get("snapshot_id")?.asString.orEmpty()
+                    val count = json.get("chunk_count")?.asInt ?: 0
+                    val totalBytes = json.get("total_bytes")?.asInt ?: 0
+                    val sha256 = json.get("sha256")?.asString.orEmpty()
+                    if (id.isBlank() || id.length > 32 || count !in 1..10_000 || totalBytes !in 1..(8 * 1024 * 1024) ||
+                        !sha256.matches(Regex("[a-fA-F0-9]{64}"))) {
+                        _statusMessage.value = "PC sent invalid snapshot transfer details"
+                    } else {
+                        snapshotRetryJob?.cancel()
+                        val assembly = SnapshotAssembly(id, totalBytes, sha256, arrayOfNulls(count))
+                        pendingSnapshot = assembly
+                        _statusMessage.value = "Receiving full-quality snapshot…"
+                        snapshotRetryJob = scope.launch(Dispatchers.IO) {
+                            repeat(5) {
+                                delay(700)
+                                if (pendingSnapshot !== assembly) return@launch
+                                val bitmap = synchronized(assembly) {
+                                    ByteArray((assembly.chunks.size + 7) / 8).also { bits ->
+                                        assembly.chunks.forEachIndexed { index, bytes ->
+                                            if (bytes != null) bits[index / 8] = (bits[index / 8].toInt() or (1 shl (index % 8))).toByte()
+                                        }
+                                    }
+                                }
+                                sendPacket(mapOf(
+                                    "type" to "camera_snapshot_ack",
+                                    "snapshot_id" to assembly.id,
+                                    "received_bitmap" to Base64.encodeToString(bitmap, Base64.NO_WRAP),
+                                ))
+                            }
+                            if (pendingSnapshot === assembly) {
+                                pendingSnapshot = null
+                                _statusMessage.value = "Snapshot transfer was incomplete. Please capture it again."
+                            }
+                        }
+                    }
+                }
+                "camera_snapshot_chunk" -> {
+                    val assembly = pendingSnapshot
+                    val id = json.get("snapshot_id")?.asString.orEmpty()
+                    val index = json.get("index")?.asInt ?: -1
+                    val encoded = json.get("data")?.asString.orEmpty()
+                    if (assembly != null && assembly.id == id && index in assembly.chunks.indices && encoded.length <= 1400) {
+                        try {
+                            val chunk = Base64.decode(encoded, Base64.DEFAULT)
+                            var complete = false
+                            synchronized(assembly) {
+                                if (assembly.chunks[index] == null && chunk.size <= 900 && assembly.receivedBytes + chunk.size <= assembly.expectedBytes) {
+                                    assembly.chunks[index] = chunk
+                                    assembly.receivedBytes += chunk.size
+                                    assembly.receivedCount++
+                                    complete = assembly.receivedCount == assembly.chunks.size
+                                }
+                            }
+                            if (complete) {
+                                val image = synchronized(assembly) {
+                                    if (assembly.receivedBytes != assembly.expectedBytes) null
+                                    else ByteArrayOutputStream(assembly.expectedBytes).apply {
+                                        assembly.chunks.forEach { part -> if (part != null) write(part) }
+                                    }.toByteArray()
+                                }
+                                val digest = image?.let {
+                                    MessageDigest.getInstance("SHA-256").digest(it).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                                }
+                                if (image != null && image.size == assembly.expectedBytes && digest.equals(assembly.expectedSha256, ignoreCase = true)) {
+                                    _latestCameraFrame.value = image
+                                    val fullBitmap = ByteArray((assembly.chunks.size + 7) / 8) { 0xFF.toByte() }
+                                    val excessBits = fullBitmap.size * 8 - assembly.chunks.size
+                                    if (excessBits > 0) {
+                                        fullBitmap[fullBitmap.lastIndex] = ((1 shl (8 - excessBits)) - 1).toByte()
+                                    }
+                                    sendPacket(mapOf(
+                                        "type" to "camera_snapshot_ack",
+                                        "snapshot_id" to assembly.id,
+                                        "received_bitmap" to Base64.encodeToString(fullBitmap, Base64.NO_WRAP),
+                                    ))
+                                    pendingSnapshot = null
+                                    snapshotRetryJob?.cancel()
+                                    _statusMessage.value = "Full-quality snapshot received"
+                                } else {
+                                    _statusMessage.value = "Snapshot data was incomplete. Please capture it again."
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(tag, "Could not decode snapshot chunk", e)
+                        }
                     }
                 }
                 "camera_stream_status" -> {
@@ -389,6 +491,9 @@ class WifiClientManager(
     }
 
     private fun clearSessionState() {
+        snapshotRetryJob?.cancel()
+        snapshotRetryJob = null
+        pendingSnapshot = null
         _mediaStatus.value = MediaStatus()
         _systemStats.value = null
         _runningProcesses.value = emptyList()
@@ -577,6 +682,8 @@ class WifiClientManager(
     }
 
     override fun requestCameraSnapshot() {
+        snapshotRetryJob?.cancel()
+        pendingSnapshot = null
         sendPacket(mapOf("type" to "camera_snapshot"))
     }
 

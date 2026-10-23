@@ -54,9 +54,10 @@ except ImportError:
 from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin,
                     save_pairing_pin, load_quick_apps, save_quick_apps)
 
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.7"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
+COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
 
 
 def set_windows_dpi_awareness():
@@ -124,6 +125,7 @@ class CompanionApp(tk.Tk):
         self._build_header()
         self._build_notebook()
         self._build_statusbar()
+        self.after(500, self._show_update_recovery_notice)
 
         # System Tray setup
         self.tray_icon = None
@@ -134,6 +136,17 @@ class CompanionApp(tk.Tk):
 
         # Handle window close: minimize to tray instead of quitting
         self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+        self._write_update_ready_marker()
+
+    @staticmethod
+    def _write_update_ready_marker():
+        """Acknowledge that the replacement reached app initialization."""
+        try:
+            marker_arg = sys.argv.index("--btmouse-update-ready")
+            marker_path = Path(sys.argv[marker_arg + 1])
+            marker_path.write_text(APP_VERSION, encoding="ascii")
+        except (ValueError, IndexError, OSError):
+            pass
 
     def _init_server(self):
         """Initializes a clean Server instance with bound callbacks"""
@@ -635,6 +648,22 @@ class CompanionApp(tk.Tk):
             raise ValueError(f"Unrecognized release version: {version}")
         return tuple(int(part) for part in match.groups())
 
+    def _show_update_recovery_notice(self):
+        """Show a deferred update error after the old executable was restored."""
+        try:
+            if not COMPANION_UPDATE_ERROR_LOG.is_file():
+                return
+            message = COMPANION_UPDATE_ERROR_LOG.read_text(encoding="utf-8-sig", errors="replace").strip()
+            COMPANION_UPDATE_ERROR_LOG.unlink(missing_ok=True)
+            if message:
+                messagebox.showwarning(
+                    "Companion update rolled back",
+                    f"The update could not start, so the previous version was restored.\n\n{message}",
+                    parent=self,
+                )
+        except OSError as exc:
+            self.log(f"Could not read update recovery details: {exc}")
+
     def check_for_companion_updates(self):
         if not getattr(sys, "frozen", False):
             messagebox.showinfo("Companion updates", "In-app updates are available when running the packaged Windows app.")
@@ -729,25 +758,91 @@ class CompanionApp(tk.Tk):
                 raise OSError("The app folder is not writable. Move the companion to a folder you own, then retry.") from exc
 
             script_path = temp_dir / f"btmouse-update-{os.getpid()}.ps1"
-            log_path = temp_dir / "btmouse-update-error.log"
+            log_path = COMPANION_UPDATE_ERROR_LOG
+            replacement_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe"
+            backup_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.backup.exe"
+            ready_marker = temp_dir / f"btmouse-update-ready-{os.getpid()}.txt"
             ps_quote = lambda value: "'" + str(value).replace("'", "''") + "'"
             script = (
+                "$ErrorActionPreference = 'Stop'\n"
                 f"$pidToWait = {os.getpid()}\n"
                 f"$target = {ps_quote(executable)}\n"
                 f"$staged = {ps_quote(staged_path)}\n"
+                f"$replacement = {ps_quote(replacement_path)}\n"
+                f"$backup = {ps_quote(backup_path)}\n"
+                f"$readyMarker = {ps_quote(ready_marker)}\n"
                 f"$log = {ps_quote(log_path)}\n"
-                "while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }\n"
-                "try { Copy-Item -LiteralPath $staged -Destination $target -Force -ErrorAction Stop; "
-                "Start-Process -FilePath $target -ErrorAction Stop; Remove-Item -LiteralPath $staged -Force; "
-                "Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue } "
-                "catch { $_ | Out-File -LiteralPath $log -Encoding utf8; exit 1 }\n"
+                f"$expectedLength = {asset['size']}\n"
+                f"$expectedVersion = {ps_quote(tag_name.lstrip('v'))}\n"
+                "$deadline = (Get-Date).AddSeconds(120)\n"
+                "try {\n"
+                "  while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {\n"
+                "    if ((Get-Date) -gt $deadline) { throw 'The companion did not close in time.' }\n"
+                "    Start-Sleep -Seconds 1\n"
+                "  }\n"
+                "  $copied = $false\n"
+                "  for ($attempt = 0; $attempt -lt 30; $attempt++) {\n"
+                "    try {\n"
+                "      Copy-Item -LiteralPath $staged -Destination $replacement -Force -ErrorAction Stop\n"
+                "      if ((Get-Item -LiteralPath $replacement).Length -eq $expectedLength) { $copied = $true; break }\n"
+                "    } catch {}\n"
+                "    Start-Sleep -Seconds 1\n"
+                "  }\n"
+                "  if (-not $copied) { throw 'Could not stage the replacement beside the app after waiting for Windows to release the executable.' }\n"
+                "  if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $backup -Force }\n"
+                "  Move-Item -LiteralPath $replacement -Destination $target -Force\n"
+                "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
+                "  $quotedMarker = '"' + $readyMarker + '"'\n"
+                "  $started = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ArgumentList @('--btmouse-update-ready', $quotedMarker) -PassThru\n"
+                "  $launchDeadline = (Get-Date).AddSeconds(30)\n"
+                "  $ready = $false\n"
+                "  while ((Get-Date) -lt $launchDeadline) {\n"
+                "    if (Test-Path -LiteralPath $readyMarker) {\n"
+                "      if ((Get-Content -LiteralPath $readyMarker -Raw).Trim() -eq $expectedVersion) { $ready = $true; break }\n"
+                "      throw 'The replacement opened with an unexpected version.'\n"
+                "    }\n"
+                "    if (-not (Get-Process -Id $started.Id -ErrorAction SilentlyContinue)) { throw 'The updated companion exited during startup.' }\n"
+                "    Start-Sleep -Seconds 1\n"
+                "  }\n"
+                "  if (-not $ready) { throw 'The updated companion did not acknowledge startup.' }\n"
+                "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue\n"
+                "} catch {\n"
+                "  $failure = $_.Exception.Message\n"
+                "  try {\n"
+                "    if ($started -and (Get-Process -Id $started.Id -ErrorAction SilentlyContinue)) {\n"
+                "      Stop-Process -Id $started.Id -Force -ErrorAction SilentlyContinue\n"
+                "      Wait-Process -Id $started.Id -Timeout 10 -ErrorAction SilentlyContinue\n"
+                "    }\n"
+                "    if (Test-Path -LiteralPath $backup) {\n"
+                "      Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue\n"
+                "      Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction Stop\n"
+                "    }\n"
+                "    if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $target)) {\n"
+                "      Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ErrorAction Stop\n"
+                "    }\n"
+                "  } catch { $failure = $failure + ' Rollback/relaunch error: ' + $_.Exception.Message }\n"
+                "  $failure | Out-File -LiteralPath $log -Encoding utf8\n"
+                "}\n"
+                "Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue\n"
+                "Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
+                "Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
                 "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n"
             )
             script_path.write_text(script, encoding="utf-8")
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-            subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                              "-File", str(script_path)], creationflags=flags,
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            helper_output = temp_dir / "btmouse-update-helper.log"
+            with helper_output.open("wb") as output:
+                helper = subprocess.Popen(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                     "-File", str(script_path)], creationflags=flags,
+                    stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+            time.sleep(0.5)
+            if helper.poll() is not None:
+                detail = helper_output.read_text(encoding="utf-8", errors="replace").strip()
+                raise RuntimeError(detail or f"The update helper exited early (code {helper.returncode}).")
             self.after(0, self._exit_for_companion_update)
         except Exception as exc:
             if staged_path and staged_path.exists():
@@ -767,6 +862,9 @@ class CompanionApp(tk.Tk):
             except Exception:
                 pass
         self.destroy()
+        # Make the helper's PID wait definitive; destroying Tk alone can leave
+        # the process alive while a non-daemon audio/device worker unwinds.
+        sys.exit(0)
 
     def _on_adapter_selected(self, event):
         idx = self.combo_adapter.current()
