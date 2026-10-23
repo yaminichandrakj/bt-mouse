@@ -221,6 +221,19 @@ class WifiClientManager(
                 )
             )
         }
+    override fun sendPenEvent(action: String, xRatio: Float, yRatio: Float, pressure: Float, isEraser: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            sendPacket(
+                mapOf(
+                    "type" to "pen",
+                    "action" to action,
+                    "x" to xRatio,
+                    "y" to yRatio,
+                    "pressure" to pressure,
+                    "eraser" to isEraser
+                )
+            )
+        }
     }
 
     fun cleanup() {

@@ -17,3 +17,6 @@ __pycache__/
 *.pyc
 app/build/
 *.apk
+*.exe
+pc_server/build/
+pc_server/dist/

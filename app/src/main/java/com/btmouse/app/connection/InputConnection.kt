@@ -14,4 +14,5 @@ interface InputConnection {
     fun sendKeyStroke(keyCode: Byte, modifiers: Byte = 0)
     fun sendMediaKey(usageCode: Int)
     fun sendText(text: String)
+    fun sendPenEvent(action: String, xRatio: Float, yRatio: Float, pressure: Float = 1.0f, isEraser: Boolean = false) {}
 }

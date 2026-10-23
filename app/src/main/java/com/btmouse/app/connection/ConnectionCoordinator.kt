@@ -98,6 +98,10 @@ class ConnectionCoordinator(
         currentInputConnection.sendText(text)
     }
 
+    override fun sendPenEvent(action: String, xRatio: Float, yRatio: Float, pressure: Float, isEraser: Boolean) {
+        currentInputConnection.sendPenEvent(action, xRatio, yRatio, pressure, isEraser)
+    }
+
     fun cleanup() {
         bluetoothHidManager.cleanup()
         wifiClientManager.cleanup()

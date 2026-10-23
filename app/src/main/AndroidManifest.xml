@@ -20,6 +20,12 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- In-App APK installation permission -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- Camera for QR Code Scanning -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- Haptic feedback for tactile clicks -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
@@ -27,6 +33,8 @@
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" tools:targetApi="s" />
 
     <!-- Optional Features -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
@@ -52,6 +60,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- FileProvider for installing in-app APK updates -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>

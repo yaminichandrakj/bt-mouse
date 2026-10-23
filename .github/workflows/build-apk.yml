@@ -39,37 +39,37 @@ jobs:
       - name: Prepare APK for Release
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/debug/*.apk release-output/BT-Mouse-v1.0.0.apk
+          cp app/build/outputs/apk/debug/*.apk release-output/BT-Mouse-v1.1.0.apk
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: BT-Mouse-Debug-APK
-          path: release-output/BT-Mouse-v1.0.0.apk
+          path: release-output/BT-Mouse-v1.1.0.apk
           retention-days: 30
 
       - name: Create GitHub Release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: BT Mouse & Keyboard v1.0.0
+          tag_name: v1.1.0
+          name: BT Mouse & Keyboard v1.1.0
           draft: false
           prerelease: false
-          files: release-output/BT-Mouse-v1.0.0.apk
+          files: |
+            release-output/BT-Mouse-v1.1.0.apk
           body: |
-            ### 📱 BT Mouse & Keyboard v1.0.0
+            ### 📱 BT Mouse & Keyboard v1.1.0
 
-            Turn any Android phone into a high-precision Wireless Mouse, Trackpad, Full PC Keyboard, Numpad, Media Remote, and Gyroscopic Air Mouse for any PC!
+            Major update featuring Tablet Writing Slate mode, instant QR Code connection, live real-time typing, PC shortcut icons, in-app updates, and a standalone PC Companion desktop app!
 
-            #### ✨ Key Features:
-            * **Native Bluetooth HID Mode**: Emulates a real Bluetooth mouse & keyboard. **Zero PC software needed!**
-            * **Wi-Fi Network Mode**: Ultra-low latency UDP mode with Python companion server and auto-discovery.
-            * **High-Precision Trackpad**: Multi-touch gestures (tap-to-click, 2-finger scroll, double-tap & hold drag).
-            * **Full PC Keyboard**: `Esc`, `F1-F12`, `Ctrl`, `Alt`, `Shift`, `Win`, `Del`, and PC shortcuts (`Ctrl+C`, `Ctrl+V`, `Alt+Tab`, etc.).
-            * **10-Key Numpad**: Dedicated numeric keypad for spreadsheets and data entry.
-            * **Media & Presentation Remote**: Media player controls + PowerPoint/Keynote slide clicker.
-            * **Gyroscopic Air Mouse**: Move the PC cursor by waving your phone in the air.
+            #### ✨ What's New in v1.1.0:
+            * **Tablet Writing & Drawing Pad**: Full graphics tablet slate mode with 1:1 screen mapping, pressure sensitivity, palm rejection, and pen/eraser toggles for MS Paint, OneNote, Whiteboard, and Photoshop.
+            * **Instant QR Code Pairing**: Scan the QR code displayed on the PC Companion screen to connect over Wi-Fi instantly with zero typing.
+            * **Live Keystroke Typing**: Real-time keystroke streaming from your phone keyboard directly to your PC with full backspace and deletion synchronization.
+            * **PC Shortcut Icons**: Added icons for Copy, Paste, Cut, Undo, Select All, Switch Window, Desktop, Task Manager, Explorer, Lock, and more.
+            * **In-App Auto Updates**: Check and install updates directly from the app's Settings screen via GitHub Releases.
+            * **Standalone Windows Companion App (`BT-Mouse-Companion.exe`)**: Desktop app with system tray icon, background quick options, and hardware-level mouse input.
 
             #### 📥 Download:
-            Download **`BT-Mouse-v1.0.0.apk`** below and install it directly on your phone!
+            Download **`BT-Mouse-v1.1.0.apk`** below and install it directly on your phone or tablet!

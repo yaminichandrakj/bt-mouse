@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dialpad
+import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PlayCircle
@@ -35,6 +36,7 @@ import com.btmouse.app.ui.screens.MediaRemoteScreen
 import com.btmouse.app.ui.screens.NumpadScreen
 import com.btmouse.app.ui.screens.SettingsScreen
 import com.btmouse.app.ui.screens.TouchpadScreen
+import com.btmouse.app.ui.screens.WritingPadScreen
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.DarkBackground
 import com.btmouse.app.ui.theme.DarkSurface
@@ -45,6 +47,7 @@ import com.btmouse.app.ui.theme.TextPrimary
 sealed class NavigationTab(val title: String, val icon: ImageVector) {
     object Touchpad : NavigationTab("Mouse", Icons.Default.Mouse)
     object Keyboard : NavigationTab("Keys", Icons.Default.Keyboard)
+    object WritingPad : NavigationTab("Pen", Icons.Default.Draw)
     object Numpad : NavigationTab("Numpad", Icons.Default.Dialpad)
     object Media : NavigationTab("Media", Icons.Default.PlayCircle)
     object Connect : NavigationTab("Connect", Icons.Default.Wifi)
@@ -60,6 +63,7 @@ fun MainScreen(
     val tabs = listOf(
         NavigationTab.Touchpad,
         NavigationTab.Keyboard,
+        NavigationTab.WritingPad,
         NavigationTab.Numpad,
         NavigationTab.Media,
         NavigationTab.Connect,
@@ -79,7 +83,7 @@ fun MainScreen(
                         selected = selectedTabIndex == index,
                         onClick = { selectedTabIndex = index },
                         icon = { Icon(imageVector = tab.icon, contentDescription = tab.title) },
-                        label = { Text(text = tab.title, fontSize = 11.sp) },
+                        label = { Text(text = tab.title, fontSize = 10.sp) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AccentCyan,
                             selectedTextColor = AccentCyan,
@@ -101,10 +105,11 @@ fun MainScreen(
             when (selectedTabIndex) {
                 0 -> TouchpadScreen(coordinator, airMouseManager, settings)
                 1 -> KeyboardScreen(coordinator, settings)
-                2 -> NumpadScreen(coordinator, settings)
-                3 -> MediaRemoteScreen(coordinator, settings)
-                4 -> ConnectionScreen(coordinator, settings)
-                5 -> SettingsScreen(settings, airMouseManager)
+                2 -> WritingPadScreen(coordinator, settings)
+                3 -> NumpadScreen(coordinator, settings)
+                4 -> MediaRemoteScreen(coordinator, settings)
+                5 -> ConnectionScreen(coordinator, settings)
+                6 -> SettingsScreen(settings, airMouseManager)
             }
         }
     }

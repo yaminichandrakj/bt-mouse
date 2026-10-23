@@ -1,6 +1,6 @@
 """
 BT Mouse & Keyboard - PC Companion Server
-Ultra-low latency UDP input receiver with auto-discovery beacon.
+Ultra-low latency UDP input receiver with auto-discovery beacon and tablet writing pad support.
 Works on Windows, macOS, and Linux.
 """
 
@@ -9,6 +9,38 @@ import json
 import threading
 import time
 import sys
+import os
+import traceback
+
+# Desktop attachment helper for Windows to ensure background / service tasks can interact with the active user desktop
+def ensure_interactive_desktop():
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            hdesk = u.OpenDesktopW("default", 0, False, 0x01FF)
+            if hdesk:
+                u.SetThreadDesktop(hdesk)
+        except Exception:
+            pass
+
+ensure_interactive_desktop()
+
+# Native Windows mouse input helper for zero-latency, hardware-accelerated movement
+IS_WINDOWS = sys.platform == "win32"
+if IS_WINDOWS:
+    import ctypes
+    u32 = ctypes.windll.user32
+
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    MOUSEEVENTF_MIDDLEDOWN = 0x0020
+    MOUSEEVENTF_MIDDLEUP = 0x0040
+    MOUSEEVENTF_WHEEL = 0x0800
+    MOUSEEVENTF_HWHEEL = 0x1000
 
 try:
     from pynput.mouse import Controller as MouseController, Button
@@ -57,18 +89,35 @@ if HAS_PYNPUT:
 
 class Server:
     def __init__(self, port=53530, discovery_port=53535):
+        ensure_interactive_desktop()
         self.port = port
         self.discovery_port = discovery_port
-        self.running = True
+        self.running = False
+        self.sock = None
+        self.discovery_sock = None
 
         if HAS_PYNPUT:
-            self.mouse = MouseController()
-            self.keyboard = KeyboardController()
+            try:
+                self.mouse = MouseController()
+            except Exception:
+                self.mouse = None
+            try:
+                self.keyboard = KeyboardController()
+            except Exception:
+                self.keyboard = None
         else:
             self.mouse = None
             self.keyboard = None
 
         self.last_buttons = 0
+        self.packets_received = 0
+        self.last_log_time = 0
+        self.connected_client = None
+
+        # Callbacks for PC Companion GUI
+        self.on_packet_callback = None
+        self.on_client_callback = None
+        self.on_status_callback = None
 
     def get_local_ip(self):
         try:
@@ -80,13 +129,41 @@ class Server:
         except Exception:
             return "127.0.0.1"
 
+    def get_all_ips(self):
+        """Returns list of (adapter_name, ip_address) found on this machine"""
+        results = []
+        primary_ip = self.get_local_ip()
+        results.append(("Auto (Primary)", primary_ip))
+
+        if IS_WINDOWS:
+            try:
+                import subprocess
+                cmd = 'powershell -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike \'*Loopback*\' } | Select-Object -Property InterfaceAlias, IPAddress | ConvertTo-Json"'
+                out = subprocess.check_output(cmd, shell=True, text=True, timeout=3)
+                data = json.loads(out)
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    alias = item.get("InterfaceAlias", "Adapter")
+                    ip = item.get("IPAddress", "")
+                    if ip and not ip.startswith("169.254.") and ip != primary_ip:
+                        results.append((alias, ip))
+            except Exception:
+                pass
+
+        return results
+
     def start_discovery_responder(self):
         """Listens for UDP broadcast packets from Android app and responds with server details"""
         def listen_discovery():
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.discovery_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
-                sock.bind(("", self.discovery_port))
+                self.discovery_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            except Exception:
+                pass
+            try:
+                self.discovery_sock.bind(("", self.discovery_port))
+                self.discovery_sock.settimeout(1.0)
             except Exception as e:
                 print(f"[!] Warning: Could not bind discovery port {self.discovery_port}: {e}")
                 return
@@ -94,65 +171,125 @@ class Server:
             hostname = socket.gethostname()
             while self.running:
                 try:
-                    data, addr = sock.recvfrom(1024)
+                    data, addr = self.discovery_sock.recvfrom(1024)
                     message = data.decode("utf-8", errors="ignore").strip()
                     if message == "BT_MOUSE_DISCOVER":
                         reply = f"BT_MOUSE_SERVER:{hostname}:{self.port}"
-                        sock.sendto(reply.encode("utf-8"), addr)
+                        self.discovery_sock.sendto(reply.encode("utf-8"), addr)
                         print(f"[*] Discovery ping from {addr[0]} -> Responded with '{reply}'")
+                except socket.timeout:
+                    continue
                 except Exception:
                     break
-            sock.close()
+            if self.discovery_sock:
+                try:
+                    self.discovery_sock.close()
+                except Exception:
+                    pass
 
         thread = threading.Thread(target=listen_discovery, daemon=True)
         thread.start()
 
-    def handle_packet(self, data):
-        if not HAS_PYNPUT:
-            return
-
+    def handle_packet(self, data, addr=None):
         cmd_type = data.get("type")
 
+        if self.on_packet_callback:
+            try:
+                self.on_packet_callback(cmd_type, addr, data)
+            except Exception:
+                pass
+
         if cmd_type == "mouse":
-            dx = data.get("dx", 0)
-            dy = data.get("dy", 0)
-            btn = data.get("btn", 0)
-            v_scroll = data.get("v_scroll", 0)
-            h_scroll = data.get("h_scroll", 0)
+            dx = int(round(data.get("dx", 0)))
+            dy = int(round(data.get("dy", 0)))
+            btn = int(data.get("btn", 0))
+            v_scroll = int(round(data.get("v_scroll", 0)))
+            h_scroll = int(round(data.get("h_scroll", 0)))
 
-            # Movement
-            if dx != 0 or dy != 0:
-                self.mouse.move(dx, dy)
+            if IS_WINDOWS:
+                if dx != 0 or dy != 0:
+                    u32.mouse_event(MOUSEEVENTF_MOVE, dx, dy, 0, 0)
 
-            # Scrolling
-            if v_scroll != 0 or h_scroll != 0:
-                self.mouse.scroll(h_scroll, v_scroll)
+                if v_scroll != 0:
+                    u32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, v_scroll * 120, 0)
 
-            # Button changes
-            if btn != self.last_buttons:
-                # Left button
-                if (btn & 1) and not (self.last_buttons & 1):
+                if h_scroll != 0:
+                    u32.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, h_scroll * 120, 0)
+
+                if btn != self.last_buttons:
+                    # Left
+                    if (btn & 1) and not (self.last_buttons & 1):
+                        u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    elif not (btn & 1) and (self.last_buttons & 1):
+                        u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+                    # Right
+                    if (btn & 2) and not (self.last_buttons & 2):
+                        u32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                    elif not (btn & 2) and (self.last_buttons & 2):
+                        u32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+
+                    # Middle
+                    if (btn & 4) and not (self.last_buttons & 4):
+                        u32.mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
+                    elif not (btn & 4) and (self.last_buttons & 4):
+                        u32.mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+
+                    self.last_buttons = btn
+            elif self.mouse:
+                if dx != 0 or dy != 0:
+                    self.mouse.move(dx, dy)
+                if v_scroll != 0 or h_scroll != 0:
+                    self.mouse.scroll(h_scroll, v_scroll)
+                if btn != self.last_buttons:
+                    if (btn & 1) and not (self.last_buttons & 1):
+                        self.mouse.press(Button.left)
+                    elif not (btn & 1) and (self.last_buttons & 1):
+                        self.mouse.release(Button.left)
+
+                    if (btn & 2) and not (self.last_buttons & 2):
+                        self.mouse.press(Button.right)
+                    elif not (btn & 2) and (self.last_buttons & 2):
+                        self.mouse.release(Button.right)
+
+                    if (btn & 4) and not (self.last_buttons & 4):
+                        self.mouse.press(Button.middle)
+                    elif not (btn & 4) and (self.last_buttons & 4):
+                        self.mouse.release(Button.middle)
+
+                    self.last_buttons = btn
+
+        elif cmd_type == "pen":
+            # Tablet Drawing / Writing Pad mode
+            action = data.get("action")  # "down", "move", "up"
+            x_ratio = float(data.get("x", 0.0))
+            y_ratio = float(data.get("y", 0.0))
+            is_eraser = bool(data.get("eraser", False))
+
+            if IS_WINDOWS:
+                sw = u32.GetSystemMetrics(0)
+                sh = u32.GetSystemMetrics(1)
+                target_x = max(0, min(sw - 1, int(x_ratio * sw)))
+                target_y = max(0, min(sh - 1, int(y_ratio * sh)))
+
+                u32.SetCursorPos(target_x, target_y)
+
+                btn_down = MOUSEEVENTF_RIGHTDOWN if is_eraser else MOUSEEVENTF_LEFTDOWN
+                btn_up = MOUSEEVENTF_RIGHTUP if is_eraser else MOUSEEVENTF_LEFTUP
+
+                if action == "down":
+                    u32.mouse_event(btn_down, 0, 0, 0, 0)
+                elif action == "up":
+                    u32.mouse_event(btn_up, 0, 0, 0, 0)
+            elif self.mouse:
+                if action == "down":
                     self.mouse.press(Button.left)
-                elif not (btn & 1) and (self.last_buttons & 1):
+                elif action == "up":
                     self.mouse.release(Button.left)
-
-                # Right button
-                if (btn & 2) and not (self.last_buttons & 2):
-                    self.mouse.press(Button.right)
-                elif not (btn & 2) and (self.last_buttons & 2):
-                    self.mouse.release(Button.right)
-
-                # Middle button
-                if (btn & 4) and not (self.last_buttons & 4):
-                    self.mouse.press(Button.middle)
-                elif not (btn & 4) and (self.last_buttons & 4):
-                    self.mouse.release(Button.middle)
-
-                self.last_buttons = btn
 
         elif cmd_type == "text":
             text = data.get("text", "")
-            if text:
+            if text and self.keyboard:
                 self.keyboard.type(text)
 
         elif cmd_type == "key_stroke":
@@ -160,73 +297,116 @@ class Server:
             mod = data.get("mod", 0)
             self._execute_keystroke(code, mod)
 
+        elif cmd_type == "key_down":
+            code = data.get("code")
+            mod = data.get("mod", 0)
+            self._execute_key_down(code, mod)
+
+        elif cmd_type == "key_up":
+            code = data.get("code")
+            mod = data.get("mod", 0)
+            self._execute_key_up(code, mod)
+
         elif cmd_type == "media":
             code = data.get("code")
             self._execute_media(code)
 
         elif cmd_type == "connect":
             client = data.get("client", "Phone")
-            print(f"[+] Client connected: {client}")
+            self.connected_client = f"{client} ({addr[0] if addr else ''})"
+            print(f"[+] Client connected: {self.connected_client}")
+            if self.on_client_callback:
+                self.on_client_callback(self.connected_client, True)
 
         elif cmd_type == "disconnect":
-            print(f"[-] Client disconnected")
+            print(f"[-] Client disconnected: {self.connected_client}")
+            if self.on_client_callback:
+                self.on_client_callback(self.connected_client, False)
+            self.connected_client = None
+
+    def _resolve_key(self, code):
+        if not HAS_PYNPUT:
+            return None
+        key = KEY_MAP.get(code)
+        if key:
+            return key
+        if 0x04 <= code <= 0x1D:  # A-Z
+            return chr(ord('a') + (code - 0x04))
+        elif 0x1E <= code <= 0x27:  # 1-9, 0
+            return '0' if code == 0x27 else str(code - 0x1E + 1)
+        return None
+
+    def _execute_key_down(self, code, mod):
+        if not self.keyboard:
+            return
+        if mod & 1:
+            self.keyboard.press(Key.ctrl)
+        if mod & 2:
+            self.keyboard.press(Key.shift)
+        if mod & 4:
+            self.keyboard.press(Key.alt)
+        if mod & 8:
+            self.keyboard.press(Key.cmd)
+        key = self._resolve_key(code)
+        if key:
+            self.keyboard.press(key)
+
+    def _execute_key_up(self, code, mod):
+        if not self.keyboard:
+            return
+        key = self._resolve_key(code)
+        if key:
+            self.keyboard.release(key)
+        if mod & 8:
+            self.keyboard.release(Key.cmd)
+        if mod & 4:
+            self.keyboard.release(Key.alt)
+        if mod & 2:
+            self.keyboard.release(Key.shift)
+        if mod & 1:
+            self.keyboard.release(Key.ctrl)
 
     def _execute_keystroke(self, code, mod):
-        # Apply modifiers
-        mods_to_release = []
-        if mod & 1:  # Ctrl
-            self.keyboard.press(Key.ctrl)
-            mods_to_release.append(Key.ctrl)
-        if mod & 2:  # Shift
-            self.keyboard.press(Key.shift)
-            mods_to_release.append(Key.shift)
-        if mod & 4:  # Alt
-            self.keyboard.press(Key.alt)
-            mods_to_release.append(Key.alt)
-        if mod & 8:  # Win/Cmd
-            self.keyboard.press(Key.cmd)
-            mods_to_release.append(Key.cmd)
+        self._execute_key_down(code, mod)
+        time.sleep(0.01)
+        self._execute_key_up(code, mod)
 
-        key = KEY_MAP.get(code)
+    def _execute_media(self, code):
+        if not self.keyboard:
+            return
+        mapping = {
+            0xCD: Key.media_play_pause,
+            0xB5: Key.media_next,
+            0xB6: Key.media_previous,
+            0xE9: Key.media_volume_up,
+            0xEA: Key.media_volume_down,
+            0xE2: Key.media_volume_mute,
+        }
+        key = mapping.get(code)
         if key:
             self.keyboard.press(key)
             self.keyboard.release(key)
-        else:
-            # Check ASCII letters / digits
-            if 0x04 <= code <= 0x1D:  # A-Z
-                char = chr(ord('a') + (code - 0x04))
-                self.keyboard.press(char)
-                self.keyboard.release(char)
-            elif 0x1E <= code <= 0x27:  # 1-9, 0
-                char = '0' if code == 0x27 else str(code - 0x1E + 1)
-                self.keyboard.press(char)
-                self.keyboard.release(char)
 
-        for m in reversed(mods_to_release):
-            self.keyboard.release(m)
-
-    def _execute_media(self, code):
-        # Media key mapping
-        if code == 0xCD:  # Play/Pause
-            self.keyboard.press(Key.media_play_pause)
-            self.keyboard.release(Key.media_play_pause)
-        elif code == 0xB5:  # Next
-            self.keyboard.press(Key.media_next)
-            self.keyboard.release(Key.media_next)
-        elif code == 0xB6:  # Prev
-            self.keyboard.press(Key.media_previous)
-            self.keyboard.release(Key.media_previous)
-        elif code == 0xE9:  # Volume Up
-            self.keyboard.press(Key.media_volume_up)
-            self.keyboard.release(Key.media_volume_up)
-        elif code == 0xEA:  # Volume Down
-            self.keyboard.press(Key.media_volume_down)
-            self.keyboard.release(Key.media_volume_down)
-        elif code == 0xE2:  # Mute
-            self.keyboard.press(Key.media_volume_mute)
-            self.keyboard.release(Key.media_volume_mute)
+    def stop(self):
+        self.running = False
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+        if self.discovery_sock:
+            try:
+                self.discovery_sock.close()
+            except Exception:
+                pass
+            self.discovery_sock = None
+        if self.on_status_callback:
+            self.on_status_callback(False)
 
     def start(self):
+        ensure_interactive_desktop()
+        self.running = True
         local_ip = self.get_local_ip()
         print("=" * 60)
         print("        BT MOUSE & KEYBOARD - PC COMPANION SERVER")
@@ -234,33 +414,70 @@ class Server:
         print(f"[*] Local PC IP Address : {local_ip}")
         print(f"[*] Input UDP Port      : {self.port}")
         print(f"[*] Auto-Discovery Port : {self.discovery_port}")
+        print(f"[*] Input Backend       : {'Native Windows user32 + pynput' if IS_WINDOWS else 'pynput'}")
         print(f"[*] Status              : READY & LISTENING")
         print("=" * 60)
         print("Tips:")
         print("1. In the Android App -> Go to 'Connect' tab -> Select 'Wi-Fi Network'")
         print("2. Tap 'Auto-Discover PC Server' or enter the IP above.")
-        print("3. Press Ctrl+C in this terminal window to stop.\n")
+        print("3. Press Ctrl+C to stop.\n")
+
+        if self.on_status_callback:
+            self.on_status_callback(True)
 
         self.start_discovery_responder()
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("0.0.0.0", self.port))
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except Exception:
+            pass
+        try:
+            self.sock.bind(("0.0.0.0", self.port))
+            self.sock.settimeout(0.5)
+        except Exception as e:
+            print(f"[!] Socket bind error: {e}")
+            if self.on_status_callback:
+                self.on_status_callback(False)
+            return
 
         while self.running:
             try:
-                data, addr = sock.recvfrom(2048)
+                data, addr = self.sock.recvfrom(2048)
                 msg_str = data.decode("utf-8")
                 parsed = json.loads(msg_str)
-                self.handle_packet(parsed)
+                self.handle_packet(parsed, addr)
+
+                self.packets_received += 1
+                now = time.time()
+                if now - self.last_log_time >= 3.0:
+                    if self.packets_received > 0:
+                        print(f"[*] Active - Received {self.packets_received} input packets from {addr[0]}")
+                    self.last_log_time = now
+            except socket.timeout:
+                continue
             except KeyboardInterrupt:
                 print("\n[!] Stopping server...")
                 self.running = False
                 break
             except Exception as e:
-                pass
+                if self.running:
+                    print(f"[!] Error processing packet: {e}")
+                    traceback.print_exc()
 
-        sock.close()
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+
+        if self.on_status_callback:
+            self.on_status_callback(False)
 
 if __name__ == "__main__":
     server = Server()
-    server.start()
+    try:
+        server.start()
+    except KeyboardInterrupt:
+        server.stop()

@@ -25,12 +25,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -45,6 +50,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -54,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -72,6 +79,8 @@ import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 
 @SuppressLint("MissingPermission")
 @Composable
@@ -80,6 +89,7 @@ fun ConnectionScreen(
     settings: SettingsRepository
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val activeMode by coordinator.activeMode.collectAsState()
     val isConnected by coordinator.isConnected.collectAsState()
     val statusMessage by coordinator.statusMessage.collectAsState()
@@ -93,6 +103,58 @@ fun ConnectionScreen(
 
     var manualHost by remember(wifiHost) { mutableStateOf(wifiHost) }
     var manualPort by remember(wifiPort) { mutableStateOf(wifiPort.toString()) }
+
+    var showQrDialog by remember { mutableStateOf(false) }
+    var qrInputText by remember { mutableStateOf("") }
+    var qrError by remember { mutableStateOf<String?>(null) }
+
+    fun parseAndConnectQr(rawText: String): Boolean {
+        return try {
+            val trimmed = rawText.trim()
+            if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+                val gson = Gson()
+                val obj = gson.fromJson(trimmed, JsonObject::class.java)
+                val ip = obj.get("ip")?.asString ?: ""
+                val port = obj.get("port")?.asInt ?: 53530
+                val name = obj.get("name")?.asString ?: "PC Server"
+
+                if (ip.isNotEmpty()) {
+                    manualHost = ip
+                    manualPort = port.toString()
+                    settings.setWifiHost(ip)
+                    settings.setWifiPort(port)
+                    coordinator.wifiClientManager.connectManual(ip, port, name)
+                    return true
+                }
+            } else if (trimmed.startsWith("btmouse://")) {
+                val uri = android.net.Uri.parse(trimmed)
+                val ip = uri.getQueryParameter("ip") ?: ""
+                val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 53530
+                val name = uri.getQueryParameter("name") ?: "PC Server"
+                if (ip.isNotEmpty()) {
+                    manualHost = ip
+                    manualPort = port.toString()
+                    settings.setWifiHost(ip)
+                    settings.setWifiPort(port)
+                    coordinator.wifiClientManager.connectManual(ip, port, name)
+                    return true
+                }
+            } else if (trimmed.matches(Regex("""^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$"""))) {
+                val parts = trimmed.split(":")
+                val ip = parts[0]
+                val port = if (parts.size > 1) parts[1].toIntOrNull() ?: 53530 else 53530
+                manualHost = ip
+                manualPort = port.toString()
+                settings.setWifiHost(ip)
+                settings.setWifiPort(port)
+                coordinator.wifiClientManager.connectManual(ip, port, "PC Server")
+                return true
+            }
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -268,20 +330,37 @@ fun ConnectionScreen(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Button(
-                    onClick = {
-                        coordinator.wifiClientManager.discoverServer { host, port, name ->
-                            manualHost = host
-                            manualPort = port.toString()
-                        }
-                    },
+                // QR Code & Auto Discover Action Row
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
-                    shape = RoundedCornerShape(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.Search, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Auto-Discover PC Server on Wi-Fi")
+                    Button(
+                        onClick = { showQrDialog = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = DarkBackground)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan QR Code", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            coordinator.wifiClientManager.discoverServer { host, port, name ->
+                                manualHost = host
+                                manualPort = port.toString()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Auto-Discover")
+                    }
                 }
 
                 Card(
@@ -296,7 +375,7 @@ fun ConnectionScreen(
                         OutlinedTextField(
                             value = manualHost,
                             onValueChange = { manualHost = it },
-                            label = { Text("PC IP Address (e.g. 192.168.1.10)") },
+                            label = { Text("PC IP Address (e.g. 172.25.100.123)") },
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = PrimaryIndigo,
@@ -329,10 +408,10 @@ fun ConnectionScreen(
                                 coordinator.wifiClientManager.connectManual(manualHost, portInt)
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("Connect to PC", color = DarkBackground, fontWeight = FontWeight.Bold)
+                            Text("Connect to PC", color = TextPrimary, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -343,10 +422,10 @@ fun ConnectionScreen(
                     shape = RoundedCornerShape(14.dp)
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
-                        Text("PC Server Companion", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text("PC Companion App", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "To use Wi-Fi mode, run 'server.py' in the 'pc_server' folder on your PC. It will automatically listen and accept inputs from this app.",
+                            "Launch 'run_pc_app.bat' on your PC to see the instant connection QR code and live packet monitor.",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )
@@ -354,6 +433,95 @@ fun ConnectionScreen(
                 }
             }
         }
+    }
+
+    // QR Code Connect Modal Dialog
+    if (showQrDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showQrDialog = false
+                qrError = null
+            },
+            containerColor = DarkSurface,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = AccentCyan)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Connect via QR Code", color = TextPrimary, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "On your PC, open the PC Companion App (run_pc_app.bat) to view your Wi-Fi QR Code.",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+
+                    OutlinedTextField(
+                        value = qrInputText,
+                        onValueChange = {
+                            qrInputText = it
+                            qrError = null
+                        },
+                        label = { Text("QR Code Payload or IP:Port") },
+                        placeholder = { Text("e.g. {\"ip\":\"172.25.100.123\",\"port\":53530}") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentCyan,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        singleLine = false,
+                        maxLines = 3
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = {
+                                val clipText = clipboardManager.getText()?.text ?: ""
+                                if (clipText.isNotEmpty()) {
+                                    qrInputText = clipText
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentCyan)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Paste Clipboard", color = AccentCyan, fontSize = 12.sp)
+                        }
+                    }
+
+                    if (qrError != null) {
+                        Text(qrError!!, color = AccentRose, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val success = parseAndConnectQr(qrInputText)
+                        if (success) {
+                            showQrDialog = false
+                            qrError = null
+                        } else {
+                            qrError = "Invalid QR code payload format. Please scan or enter a valid IP:port."
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+                ) {
+                    Text("Connect", color = DarkBackground, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showQrDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
     }
 }
 
@@ -375,34 +543,32 @@ private fun DeviceItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = Icons.Default.Computer,
+                    imageVector = if (isCurrentlyConnected) Icons.Default.BluetoothConnected else Icons.Default.Computer,
                     contentDescription = null,
-                    tint = if (isCurrentlyConnected) AccentEmerald else TextSecondary,
-                    modifier = Modifier.size(28.dp)
+                    tint = if (isCurrentlyConnected) AccentEmerald else AccentCyan
                 )
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(text = devName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     Text(text = device.address, color = TextMuted, fontSize = 11.sp)
                 }
             }
 
-            if (isCurrentlyConnected) {
-                Text(text = "Connected", color = AccentEmerald, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            } else {
-                Button(
-                    onClick = onConnect,
-                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("Connect", fontSize = 12.sp)
-                }
+            Button(
+                onClick = onConnect,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isCurrentlyConnected) AccentEmerald.copy(alpha = 0.2f) else PrimaryIndigo,
+                    contentColor = if (isCurrentlyConnected) AccentEmerald else TextPrimary
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(if (isCurrentlyConnected) "Active" else "Connect", fontSize = 12.sp)
             }
         }
     }

@@ -4,10 +4,16 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -18,7 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -39,14 +45,16 @@ import com.btmouse.app.ui.theme.TextSecondary
 @Composable
 fun KeyButton(
     modifier: Modifier = Modifier,
-    label: String,
-    fontSize: TextUnit = 13.sp,
+    label: String = "",
+    icon: ImageVector? = null,
+    iconSize: Dp = 15.dp,
+    fontSize: TextUnit = 12.sp,
     minHeight: Dp = 44.dp,
     isActive: Boolean = false,
     isAccent: Boolean = false,
     hapticsEnabled: Boolean = true,
     onDown: () -> Unit,
-    onUp: () -> Unit
+    onUp: () -> Unit = {}
 ) {
     val view = LocalView.current
     var isPressed by remember { mutableStateOf(false) }
@@ -65,7 +73,7 @@ fun KeyButton(
         else -> DarkBorder
     }
 
-    val textColor = when {
+    val contentColor = when {
         isActive || isPressed -> TextPrimary
         isAccent -> AccentCyan
         else -> TextSecondary
@@ -96,13 +104,31 @@ fun KeyButton(
             .padding(horizontal = 4.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = label,
-            color = textColor,
-            fontSize = fontSize,
-            fontWeight = if (isActive || isPressed || isAccent) FontWeight.Bold else FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            maxLines = 1
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label.ifEmpty { null },
+                    modifier = Modifier.size(iconSize),
+                    tint = contentColor
+                )
+                if (label.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+            }
+            if (label.isNotEmpty()) {
+                Text(
+                    text = label,
+                    color = contentColor,
+                    fontSize = fontSize,
+                    fontWeight = if (isActive || isPressed || isAccent) FontWeight.Bold else FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
