@@ -11,6 +11,8 @@ import time
 import sys
 import os
 import traceback
+import base64
+import asyncio
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -409,11 +411,247 @@ class BluetoothRfcommServer:
             pass
 
 
+class CameraManager:
+    """Manages laptop webcam snapshots and video streaming"""
+    def __init__(self):
+        self.streaming = False
+        self.stream_thread = None
+        self.lock = threading.Lock()
+        self.has_cv2 = False
+        try:
+            import cv2
+            self.has_cv2 = True
+        except ImportError:
+            pass
+
+    def get_snapshot(self):
+        if not self.has_cv2:
+            return None
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                return None
+            ret, frame = cap.read()
+            cap.release()
+            if not ret or frame is None:
+                return None
+            h, w = frame.shape[:2]
+            if w > 800:
+                frame = cv2.resize(frame, (800, int(h * 800 / w)))
+            ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            if ret:
+                return base64.b64encode(buf).decode('utf-8')
+        except Exception as e:
+            print(f"[-] Camera snapshot error: {e}")
+        return None
+
+    def start_stream(self, on_frame_callback):
+        if not self.has_cv2:
+            return
+        with self.lock:
+            if self.streaming:
+                return
+            self.streaming = True
+
+        def _loop():
+            try:
+                import cv2
+                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(0)
+                if not cap.isOpened():
+                    self.streaming = False
+                    return
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                while self.streaming:
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                        if ret:
+                            b64 = base64.b64encode(buf).decode('utf-8')
+                            on_frame_callback(b64)
+                    time.sleep(0.066) # ~15 FPS
+                cap.release()
+            except Exception as e:
+                print(f"[-] Camera stream error: {e}")
+            finally:
+                self.streaming = False
+
+        self.stream_thread = threading.Thread(target=_loop, daemon=True)
+        self.stream_thread.start()
+
+    def stop_stream(self):
+        with self.lock:
+            self.streaming = False
+
+
+class AudioManager:
+    """Manages laptop microphone audio recording"""
+    def __init__(self):
+        self.recording = False
+        self.record_thread = None
+        self.recordings_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+        os.makedirs(self.recordings_dir, exist_ok=True)
+        self.current_filename = None
+        self.has_audio = False
+        try:
+            import sounddevice as sd
+            import wave
+            self.has_audio = True
+        except ImportError:
+            pass
+
+    def start_recording(self):
+        if not self.has_audio:
+            return None
+        if self.recording:
+            return self.current_filename
+        self.recording = True
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        self.current_filename = os.path.join(self.recordings_dir, f"audio_{ts}.wav")
+
+        def _loop():
+            try:
+                import sounddevice as sd
+                import wave
+                fs = 16000
+                with wave.open(self.current_filename, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(fs)
+                    with sd.InputStream(samplerate=fs, channels=1, dtype='int16') as stream:
+                        while self.recording:
+                            data, _ = stream.read(1024)
+                            wf.writeframes(data.tobytes())
+            except Exception as e:
+                print(f"[-] Audio recording error: {e}")
+            finally:
+                self.recording = False
+
+        self.record_thread = threading.Thread(target=_loop, daemon=True)
+        self.record_thread.start()
+        print(f"[+] Started microphone recording to {self.current_filename}")
+        return self.current_filename
+
+    def stop_recording(self):
+        self.recording = False
+        if self.record_thread and self.record_thread.is_alive():
+            self.record_thread.join(timeout=1.0)
+        print(f"[+] Stopped microphone recording: {self.current_filename}")
+        return self.current_filename
+
+
+class RemoteWebSocketServer:
+    """Secure WebSocket Server for remote WAN & internet connections"""
+    def __init__(self, port=53531, command_handler=None, on_client_callback=None, auth_token="123456"):
+        self.port = port
+        self.command_handler = command_handler
+        self.on_client_callback = on_client_callback
+        self.auth_token = auth_token
+        self.clients = set()
+        self.running = False
+        self.loop = None
+        self.has_ws = False
+        try:
+            import websockets
+            self.has_ws = True
+        except ImportError:
+            pass
+
+    def start(self):
+        if not self.has_ws or self.running:
+            return
+        self.running = True
+        def _runner():
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_until_complete(self._listen())
+        threading.Thread(target=_runner, daemon=True).start()
+
+    async def _listen(self):
+        try:
+            import websockets
+            async with websockets.serve(self._handle_client, "0.0.0.0", self.port):
+                print(f"[*] Remote WAN WebSocket Server listening on ws://0.0.0.0:{self.port}")
+                while self.running:
+                    await asyncio.sleep(1)
+        except Exception as e:
+            print(f"[!] WebSocket server start error: {e}")
+
+    async def _handle_client(self, websocket):
+        self.clients.add(websocket)
+        authenticated = False
+        client_id = "Remote-WAN Client"
+        if self.on_client_callback:
+            self.on_client_callback(client_id, True)
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                except Exception:
+                    continue
+
+                cmd_type = data.get("type")
+                if not authenticated:
+                    if cmd_type == "auth":
+                        token = str(data.get("token", "")).strip()
+                        if not self.auth_token or token == self.auth_token:
+                            authenticated = True
+                            await websocket.send(json.dumps({"type": "auth_response", "authenticated": True, "message": "Access granted"}))
+                            continue
+                        else:
+                            await websocket.send(json.dumps({"type": "auth_response", "authenticated": False, "message": "Invalid Security Key"}))
+                            await websocket.close()
+                            return
+                    else:
+                        if not self.auth_token:
+                            authenticated = True
+                        else:
+                            await websocket.send(json.dumps({"type": "auth_response", "authenticated": False, "message": "Authentication required"}))
+                            continue
+
+                def _respond(resp_dict):
+                    if self.loop and self.loop.is_running():
+                        try:
+                            payload = json.dumps(resp_dict)
+                            asyncio.run_coroutine_threadsafe(websocket.send(payload), self.loop)
+                        except Exception:
+                            pass
+
+                if self.command_handler:
+                    self.command_handler(data, addr=("WebSocket", 0), responder=_respond)
+        except Exception:
+            pass
+        finally:
+            self.clients.discard(websocket)
+            if self.on_client_callback:
+                self.on_client_callback(client_id, False)
+
+    def broadcast(self, data_dict):
+        if not self.clients or not self.loop or not self.loop.is_running():
+            return
+        payload = json.dumps(data_dict)
+        for client in list(self.clients):
+            try:
+                asyncio.run_coroutine_threadsafe(client.send(payload), self.loop)
+            except Exception:
+                pass
+
+    def stop(self):
+        self.running = False
+
+
 class Server:
-    def __init__(self, port=53530, discovery_port=53535):
+    def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token="123456"):
         ensure_interactive_desktop()
         self.port = port
         self.discovery_port = discovery_port
+        self.ws_port = ws_port
+        self.auth_token = auth_token
         self.running = False
         self.sock = None
         self.discovery_sock = None
@@ -440,12 +678,29 @@ class Server:
         # Bluetooth RFCOMM Server for mobile companion
         self.bt_server = BluetoothRfcommServer(self.handle_packet, on_client_callback=self._on_bt_client)
 
+        # Remote WebSocket Server for WAN / Internet connections
+        self.ws_server = RemoteWebSocketServer(port=self.ws_port, command_handler=self.handle_packet,
+                                               on_client_callback=self._on_ws_client, auth_token=self.auth_token)
+
+        # Camera & Audio Managers
+        self.camera_manager = CameraManager()
+        self.audio_manager = AudioManager()
+
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
         self.on_client_callback = None
         self.on_status_callback = None
 
     def _on_bt_client(self, client_name, is_connected):
+        if is_connected:
+            self.connected_client = client_name
+        else:
+            if self.connected_client == client_name:
+                self.connected_client = None
+        if self.on_client_callback:
+            self.on_client_callback(self.connected_client, is_connected)
+
+    def _on_ws_client(self, client_name, is_connected):
         if is_connected:
             self.connected_client = client_name
         else:
@@ -657,7 +912,7 @@ class Server:
             self.media_controller.set_mute(muted)
 
         elif cmd_type == "launch_app":
-            app_id = str(data.get("app", "")).lower().strip()
+            app_id = str(data.get("app", "")).strip()
             self._launch_application(app_id)
 
         elif cmd_type == "system_power":
@@ -667,6 +922,78 @@ class Server:
         elif cmd_type == "unlock":
             password = str(data.get("password", ""))
             self._unlock_workstation(password)
+
+        elif cmd_type in ("query_apps", "list_apps"):
+            apps = self._get_installed_apps()
+            resp = {"type": "installed_apps_response", "apps": apps}
+            if responder:
+                responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
+
+        elif cmd_type in ("query_processes", "list_processes"):
+            procs = self._get_running_processes()
+            resp = {"type": "process_list_response", "processes": procs}
+            if responder:
+                responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
+
+        elif cmd_type == "kill_process":
+            pid = data.get("pid")
+            success = self._kill_process(int(pid)) if pid else False
+            resp = {"type": "kill_process_response", "pid": pid, "success": success}
+            if responder:
+                responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
+
+        elif cmd_type in ("query_stats", "system_stats"):
+            stats = self._get_system_stats()
+            resp = {"type": "system_stats_response"}
+            resp.update(stats)
+            if responder:
+                responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
+
+        elif cmd_type == "camera_snapshot":
+            b64 = self.camera_manager.get_snapshot()
+            resp = {"type": "camera_frame_response", "frame": b64, "is_snapshot": True, "success": b64 is not None}
+            if responder:
+                responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
+
+        elif cmd_type == "camera_stream_start":
+            def _on_frame(b64):
+                frame_data = {"type": "camera_frame_response", "frame": b64, "is_streaming": True}
+                if responder:
+                    responder(frame_data)
+                if hasattr(self, "ws_server") and self.ws_server:
+                    self.ws_server.broadcast(frame_data)
+            self.camera_manager.start_stream(_on_frame)
+            resp = {"type": "camera_stream_status", "streaming": True}
+            if responder:
+                responder(resp)
+
+        elif cmd_type == "camera_stream_stop":
+            self.camera_manager.stop_stream()
+            resp = {"type": "camera_stream_status", "streaming": False}
+            if responder:
+                responder(resp)
+
+        elif cmd_type == "audio_record_start":
+            rec_file = self.audio_manager.start_recording()
+            resp = {"type": "audio_status_response", "recording": True, "file": os.path.basename(rec_file) if rec_file else ""}
+            if responder:
+                responder(resp)
+
+        elif cmd_type == "audio_record_stop":
+            rec_file = self.audio_manager.stop_recording()
+            resp = {"type": "audio_status_response", "recording": False, "file": os.path.basename(rec_file) if rec_file else ""}
+            if responder:
+                responder(resp)
 
         elif cmd_type == "text":
             text = data.get("text", "")
@@ -705,6 +1032,87 @@ class Server:
                 self.on_client_callback(self.connected_client, False)
             self.connected_client = None
 
+    def _send_udp_json(self, resp_dict, addr):
+        try:
+            payload = json.dumps(resp_dict).encode("utf-8")
+            if len(payload) <= 65000:
+                self.sock.sendto(payload, addr)
+        except Exception:
+            pass
+
+    def _get_installed_apps(self):
+        apps = []
+        seen = set()
+        start_paths = [
+            os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
+            os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs")
+        ]
+        for p in start_paths:
+            if not os.path.exists(p):
+                continue
+            for root, _, files in os.walk(p):
+                for f in files:
+                    if f.lower().endswith(".lnk"):
+                        name = os.path.splitext(f)[0]
+                        clean_name = name.lower()
+                        if any(skip in clean_name for skip in ["uninstall", "help", "readme", "documentation", "setup", "install"]):
+                            continue
+                        if clean_name not in seen:
+                            seen.add(clean_name)
+                            apps.append({"name": name, "path": os.path.join(root, f)})
+        apps.sort(key=lambda x: x["name"].lower())
+        return apps[:150]
+
+    def _get_running_processes(self):
+        procs = []
+        try:
+            import psutil
+            for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+                try:
+                    info = p.info
+                    mem = info.get('memory_percent') or 0.0
+                    if mem >= 0.3:
+                        procs.append({
+                            'pid': info['pid'],
+                            'name': info['name'],
+                            'cpu': round(info.get('cpu_percent') or 0, 1),
+                            'ram': round(mem, 1)
+                        })
+                except Exception:
+                    pass
+            procs.sort(key=lambda x: x['ram'], reverse=True)
+        except Exception as e:
+            print(f"[-] Error querying processes: {e}")
+        return procs[:35]
+
+    def _get_system_stats(self):
+        stats = {"cpu": 0.0, "ram": 0.0, "battery": -1, "power_plugged": True, "disk": 0.0}
+        try:
+            import psutil
+            stats["cpu"] = round(psutil.cpu_percent(interval=None), 1)
+            stats["ram"] = round(psutil.virtual_memory().percent, 1)
+            battery = psutil.sensors_battery()
+            if battery:
+                stats["battery"] = round(battery.percent, 1)
+                stats["power_plugged"] = battery.power_plugged
+            disk = psutil.disk_usage(os.path.abspath(os.sep))
+            stats["disk"] = round(disk.percent, 1)
+        except Exception as e:
+            print(f"[-] Error querying system stats: {e}")
+        return stats
+
+    def _kill_process(self, pid):
+        try:
+            import psutil
+            p = psutil.Process(pid)
+            name = p.name()
+            p.terminate()
+            print(f"[+] Terminated process PID {pid} ({name})")
+            return True
+        except Exception as e:
+            print(f"[-] Could not kill PID {pid}: {e}")
+            return False
+
     def _launch_application(self, app_id):
         import subprocess
         apps = {
@@ -720,7 +1128,15 @@ class Server:
             "vscode": "start code",
             "edge": "start msedge",
         }
-        cmd = apps.get(app_id, f"start {app_id}" if app_id else "")
+        if os.path.exists(app_id):
+            try:
+                os.startfile(app_id)
+                print(f"[+] Launched file/shortcut: {app_id}")
+                return
+            except Exception as e:
+                print(f"[-] os.startfile failed for {app_id}: {e}")
+        clean_key = app_id.lower().strip()
+        cmd = apps.get(clean_key, f"start {app_id}" if app_id else "")
         if cmd:
             try:
                 subprocess.Popen(cmd, shell=True)
@@ -757,10 +1173,20 @@ class Server:
             try:
                 if self.keyboard:
                     from pynput.keyboard import Key
+                    # Wake up display and dismiss lock screen
                     self.keyboard.tap(Key.enter)
+                    time.sleep(0.3)
+                    self.keyboard.tap(Key.esc)
+                    time.sleep(0.3)
+                    self.keyboard.tap(Key.space)
                     time.sleep(0.7)
+                    # Clear any stale text in PIN input
+                    for _ in range(12):
+                        self.keyboard.tap(Key.backspace)
+                    time.sleep(0.1)
+                    # Type password/PIN
                     self.keyboard.type(password)
-                    time.sleep(0.15)
+                    time.sleep(0.2)
                     self.keyboard.tap(Key.enter)
                     print("[+] Unlock keystrokes dispatched")
             except Exception as e:
@@ -837,6 +1263,21 @@ class Server:
                 self.bt_server.stop()
             except Exception:
                 pass
+        if hasattr(self, "ws_server") and self.ws_server:
+            try:
+                self.ws_server.stop()
+            except Exception:
+                pass
+        if hasattr(self, "camera_manager") and self.camera_manager:
+            try:
+                self.camera_manager.stop_stream()
+            except Exception:
+                pass
+        if hasattr(self, "audio_manager") and self.audio_manager:
+            try:
+                self.audio_manager.stop_recording()
+            except Exception:
+                pass
         if self.sock:
             try:
                 self.sock.close()
@@ -862,12 +1303,13 @@ class Server:
         print(f"[*] Local PC IP Address : {local_ip}")
         print(f"[*] Input UDP Port      : {self.port}")
         print(f"[*] Auto-Discovery Port : {self.discovery_port}")
+        print(f"[*] Remote WAN WS Port  : {self.ws_port}")
         print(f"[*] Bluetooth RFCOMM    : Active (SPP)")
         print(f"[*] Input Backend       : {'Native Windows user32 + pynput' if IS_WINDOWS else 'pynput'}")
         print(f"[*] Status              : READY & LISTENING")
         print("=" * 60)
         print("Tips:")
-        print("1. In Android App: Connect via Wi-Fi or Bluetooth (SPP)!")
+        print("1. In Android App: Connect via Wi-Fi, Bluetooth (SPP), or Remote WAN!")
         print("2. Tap 'Auto-Discover PC Server' or select your PC in Bluetooth tab.")
         print("3. Press Ctrl+C to stop.\n")
 
@@ -880,6 +1322,12 @@ class Server:
                 self.bt_server.start()
             except Exception as e:
                 print(f"[!] Bluetooth RFCOMM server start note: {e}")
+
+        if hasattr(self, "ws_server") and self.ws_server:
+            try:
+                self.ws_server.start()
+            except Exception as e:
+                print(f"[!] WebSocket server start note: {e}")
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:

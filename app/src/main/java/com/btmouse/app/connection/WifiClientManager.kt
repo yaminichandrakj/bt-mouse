@@ -1,9 +1,11 @@
 package com.btmouse.app.connection
 
+import android.util.Base64
 import android.util.Log
 import com.btmouse.app.data.MediaStatus
 import com.btmouse.app.data.SettingsRepository
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,24 @@ class WifiClientManager(
     private val _mediaStatus = MutableStateFlow(MediaStatus())
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
 
+    private val _systemStats = MutableStateFlow<SystemStats?>(null)
+    override val systemStats: StateFlow<SystemStats?> = _systemStats.asStateFlow()
+
+    private val _runningProcesses = MutableStateFlow<List<ProcessInfo>>(emptyList())
+    override val runningProcesses: StateFlow<List<ProcessInfo>> = _runningProcesses.asStateFlow()
+
+    private val _installedApps = MutableStateFlow<List<AppInfo>>(emptyList())
+    override val installedApps: StateFlow<List<AppInfo>> = _installedApps.asStateFlow()
+
+    private val _latestCameraFrame = MutableStateFlow<ByteArray?>(null)
+    override val latestCameraFrame: StateFlow<ByteArray?> = _latestCameraFrame.asStateFlow()
+
+    private val _isCameraStreaming = MutableStateFlow(false)
+    override val isCameraStreaming: StateFlow<Boolean> = _isCameraStreaming.asStateFlow()
+
+    private val _isAudioRecording = MutableStateFlow(false)
+    override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
+
     private var udpSocket: DatagramSocket? = null
     private var heartbeatJob: Job? = null
     private var discoveryJob: Job? = null
@@ -76,7 +96,7 @@ class WifiClientManager(
     private fun startReceiver() {
         receiverJob?.cancel()
         receiverJob = scope.launch(Dispatchers.IO) {
-            val buffer = ByteArray(4096)
+            val buffer = ByteArray(65507)
             while (isActive) {
                 val socket = udpSocket ?: break
                 try {
@@ -98,28 +118,86 @@ class WifiClientManager(
         try {
             val json = gson.fromJson(jsonStr, JsonObject::class.java)
             val type = json.get("type")?.asString ?: ""
-            if (type == "media_status") {
-                val hasMedia = json.get("has_media")?.asBoolean ?: false
-                val title = json.get("title")?.asString ?: ""
-                val artist = json.get("artist")?.asString ?: ""
-                val album = json.get("album")?.asString ?: ""
-                val status = json.get("status")?.asString ?: "Stopped"
-                val position = json.get("position")?.asFloat ?: 0f
-                val duration = json.get("duration")?.asFloat ?: 0f
-                val volume = json.get("volume")?.asFloat ?: 0.5f
-                val muted = json.get("muted")?.asBoolean ?: false
+            when (type) {
+                "media_status" -> {
+                    val hasMedia = json.get("has_media")?.asBoolean ?: false
+                    val title = json.get("title")?.asString ?: ""
+                    val artist = json.get("artist")?.asString ?: ""
+                    val album = json.get("album")?.asString ?: ""
+                    val status = json.get("status")?.asString ?: "Stopped"
+                    val position = json.get("position")?.asFloat ?: 0f
+                    val duration = json.get("duration")?.asFloat ?: 0f
+                    val volume = json.get("volume")?.asFloat ?: 0.5f
+                    val muted = json.get("muted")?.asBoolean ?: false
 
-                _mediaStatus.value = MediaStatus(
-                    hasMedia = hasMedia,
-                    title = title,
-                    artist = artist,
-                    album = album,
-                    status = status,
-                    position = position,
-                    duration = duration,
-                    volume = volume,
-                    isMuted = muted
-                )
+                    _mediaStatus.value = MediaStatus(
+                        hasMedia = hasMedia,
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        status = status,
+                        position = position,
+                        duration = duration,
+                        volume = volume,
+                        isMuted = muted
+                    )
+                }
+                "system_stats_response" -> {
+                    val cpu = json.get("cpu")?.asFloat ?: 0f
+                    val ram = json.get("ram")?.asFloat ?: 0f
+                    val battery = json.get("battery")?.asFloat ?: -1f
+                    val powerPlugged = json.get("power_plugged")?.asBoolean ?: true
+                    val disk = json.get("disk")?.asFloat ?: 0f
+                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk)
+                }
+                "process_list_response" -> {
+                    val array = json.getAsJsonArray("processes") ?: JsonArray()
+                    val list = mutableListOf<ProcessInfo>()
+                    for (elem in array) {
+                        val obj = elem.asJsonObject
+                        list.add(
+                            ProcessInfo(
+                                pid = obj.get("pid")?.asInt ?: 0,
+                                name = obj.get("name")?.asString ?: "",
+                                cpu = obj.get("cpu")?.asFloat ?: 0f,
+                                ram = obj.get("ram")?.asFloat ?: 0f
+                            )
+                        )
+                    }
+                    _runningProcesses.value = list
+                }
+                "installed_apps_response" -> {
+                    val array = json.getAsJsonArray("apps") ?: JsonArray()
+                    val list = mutableListOf<AppInfo>()
+                    for (elem in array) {
+                        val obj = elem.asJsonObject
+                        list.add(
+                            AppInfo(
+                                name = obj.get("name")?.asString ?: "",
+                                path = obj.get("path")?.asString ?: "",
+                                cmd = obj.get("cmd")?.asString ?: ""
+                            )
+                        )
+                    }
+                    _installedApps.value = list
+                }
+                "camera_frame_response" -> {
+                    val b64 = json.get("frame")?.asString
+                    if (!b64.isNullOrEmpty()) {
+                        try {
+                            val bytes = Base64.decode(b64, Base64.DEFAULT)
+                            _latestCameraFrame.value = bytes
+                        } catch (e: Exception) {}
+                    }
+                }
+                "camera_stream_status" -> {
+                    val streaming = json.get("streaming")?.asBoolean ?: false
+                    _isCameraStreaming.value = streaming
+                }
+                "audio_status_response" -> {
+                    val recording = json.get("recording")?.asBoolean ?: false
+                    _isAudioRecording.value = recording
+                }
             }
         } catch (e: Exception) {
             Log.e(tag, "Error parsing incoming packet: $jsonStr", e)
@@ -376,6 +454,42 @@ class WifiClientManager(
                 "password" to password
             )
         )
+    }
+
+    override fun querySystemStats() {
+        sendPacket(mapOf("type" to "query_system_stats"))
+    }
+
+    override fun queryRunningProcesses() {
+        sendPacket(mapOf("type" to "query_processes"))
+    }
+
+    override fun killProcess(pid: Int) {
+        sendPacket(mapOf("type" to "kill_process", "pid" to pid))
+    }
+
+    override fun queryInstalledApps() {
+        sendPacket(mapOf("type" to "query_installed_apps"))
+    }
+
+    override fun requestCameraSnapshot() {
+        sendPacket(mapOf("type" to "camera_snapshot"))
+    }
+
+    override fun startCameraStream() {
+        sendPacket(mapOf("type" to "start_camera_stream"))
+    }
+
+    override fun stopCameraStream() {
+        sendPacket(mapOf("type" to "stop_camera_stream"))
+    }
+
+    override fun startAudioRecord() {
+        sendPacket(mapOf("type" to "start_audio_record"))
+    }
+
+    override fun stopAudioRecord() {
+        sendPacket(mapOf("type" to "stop_audio_record"))
     }
 
     fun cleanup() {

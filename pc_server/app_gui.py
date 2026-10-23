@@ -82,6 +82,8 @@ class CompanionApp(tk.Tk):
         self.is_server_running = False
 
         self.current_port = 53530
+        self.ws_port = 53531
+        self.auth_token = "123456"
         self._init_server()
 
         # Stats
@@ -108,7 +110,7 @@ class CompanionApp(tk.Tk):
 
     def _init_server(self):
         """Initializes a clean Server instance with bound callbacks"""
-        self.server = Server(port=self.current_port)
+        self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
         self.adapters = self.server.get_all_ips()
         self.current_ip = self.server.get_local_ip()
 
@@ -215,6 +217,14 @@ class CompanionApp(tk.Tk):
         self.tab_bt = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
         self.notebook.add(self.tab_bt, text="📶 Bluetooth Assistant")
         self._build_bt_tab()
+
+        self.tab_wan = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
+        self.notebook.add(self.tab_wan, text="🌐 Remote Access (WAN)")
+        self._build_wan_tab()
+
+        self.tab_desktop = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
+        self.notebook.add(self.tab_desktop, text="🚀 Desktop & Hardware")
+        self._build_desktop_tab()
 
         self.tab_tablet = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
         self.notebook.add(self.tab_tablet, text="✍️ Tablet Writing Pad")
@@ -380,6 +390,146 @@ class CompanionApp(tk.Tk):
                                    relief="flat", padx=14, pady=8, command=self.open_paint, cursor="hand2")
         btn_open_paint.pack(anchor="w", pady=12)
 
+    def _build_wan_tab(self):
+        container = tk.Frame(self.tab_wan, bg=BG_DARK)
+        container.pack(fill="both", expand=True)
+
+        qr_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
+                           highlightbackground=CARD_BORDER, highlightthickness=1)
+        qr_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        lbl_qr_title = tk.Label(qr_card, text="Remote WAN Access (Over Internet)", font=("Segoe UI", 12, "bold"),
+                                bg=CARD_BG, fg=TEXT_PRIMARY)
+        lbl_qr_title.pack(anchor="center", pady=(0, 4))
+
+        lbl_qr_desc = tk.Label(qr_card, text="Access your laptop anywhere on Cellular 5G / Remote Wi-Fi",
+                               font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_qr_desc.pack(anchor="center", pady=(0, 10))
+
+        self.wan_qr_label = tk.Label(qr_card, bg=CARD_BG)
+        self.wan_qr_label.pack(anchor="center", pady=6)
+
+        lbl_hint = tk.Label(qr_card, text="Open Phone App -> Connect -> Remote WAN -> Scan QR",
+                            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN)
+        lbl_hint.pack(anchor="center", pady=(8, 0))
+
+        info_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
+                             highlightbackground=CARD_BORDER, highlightthickness=1)
+        info_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
+
+        lbl_info_title = tk.Label(info_card, text="WAN Server Configuration", font=("Segoe UI", 12, "bold"),
+                                  bg=CARD_BG, fg=TEXT_PRIMARY)
+        lbl_info_title.pack(anchor="w", pady=(0, 10))
+
+        lbl_ws_port = tk.Label(info_card, text=f"WebSocket Port: {self.ws_port}", font=("Segoe UI", 11, "bold"),
+                               bg=CARD_BG, fg=ACCENT_CYAN)
+        lbl_ws_port.pack(anchor="w", pady=(4, 6))
+
+        lbl_token_head = tk.Label(info_card, text="Security Access Key (PIN):", font=("Segoe UI", 9, "bold"),
+                                  bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_token_head.pack(anchor="w", pady=(6, 2))
+
+        token_row = tk.Frame(info_card, bg=CARD_BG)
+        token_row.pack(fill="x", pady=(0, 8))
+
+        self.ent_token = tk.Entry(token_row, font=("Segoe UI", 11, "bold"), bg=BUTTON_BG, fg=TEXT_PRIMARY,
+                                  insertbackground=TEXT_PRIMARY, relief="flat")
+        self.ent_token.insert(0, self.auth_token)
+        self.ent_token.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=4)
+
+        btn_set_token = tk.Button(token_row, text="Update Key", font=("Segoe UI", 9, "bold"),
+                                  bg=CARD_BORDER, fg=TEXT_PRIMARY, relief="flat", padx=10,
+                                  command=self._update_auth_token, cursor="hand2")
+        btn_set_token.pack(side="right")
+
+        lbl_url_head = tk.Label(info_card, text="Direct WebSocket Address:", font=("Segoe UI", 9, "bold"),
+                                bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_url_head.pack(anchor="w", pady=(8, 2))
+
+        self.lbl_wan_url = tk.Label(info_card, text=f"ws://{self.current_ip}:{self.ws_port}",
+                                    font=("Consolas", 10, "bold"), bg=BUTTON_BG, fg=ACCENT_GREEN, padx=8, pady=6)
+        self.lbl_wan_url.pack(anchor="w", fill="x")
+
+        btn_copy_url = tk.Button(info_card, text="📋 Copy WebSocket URL", font=("Segoe UI", 9, "bold"),
+                                 bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+                                 relief="flat", padx=10, pady=8, command=self.copy_wan_url, cursor="hand2")
+        btn_copy_url.pack(fill="x", pady=(14, 6))
+
+        btn_refresh_wan = tk.Button(info_card, text="🔄 Refresh WAN QR Code", font=("Segoe UI", 9),
+                                    bg=CARD_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
+                                    relief="flat", padx=10, pady=6, command=self.generate_wan_qr, cursor="hand2")
+        btn_refresh_wan.pack(fill="x")
+
+        lbl_tips = tk.Label(info_card, text="Tip: For remote access across the internet, forward port 53531 on your router, or use Cloudflare Tunnel / Ngrok.",
+                            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED, wraplength=280, justify="left")
+        lbl_tips.pack(anchor="w", pady=(12, 0))
+
+        self.generate_wan_qr()
+
+    def _build_desktop_tab(self):
+        card = tk.Frame(self.tab_desktop, bg=CARD_BG, padx=18, pady=16, relief="flat",
+                        highlightbackground=CARD_BORDER, highlightthickness=1)
+        card.pack(fill="both", expand=True)
+
+        lbl_title = tk.Label(card, text="Desktop Controls, Camera & Mic Diagnostics",
+                             font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
+        lbl_title.pack(anchor="w", pady=(0, 6))
+
+        lbl_sub = tk.Label(card, text="Test remote control actions locally on this PC:",
+                           font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_sub.pack(anchor="w", pady=(0, 14))
+
+        # Action buttons grid
+        btn_grid = tk.Frame(card, bg=CARD_BG)
+        btn_grid.pack(anchor="w", fill="x", pady=4)
+
+        apps_to_test = [
+            ("🌐 Chrome", "chrome"),
+            ("📝 OneNote", "onenote"),
+            ("🎵 Spotify", "spotify"),
+            ("💻 Terminal", "terminal"),
+            ("📊 Task Manager", "taskmgr"),
+            ("🧮 Calculator", "calc")
+        ]
+        for idx, (label, app_id) in enumerate(apps_to_test):
+            b = tk.Button(btn_grid, text=label, font=("Segoe UI", 9), bg=BUTTON_BG, fg=TEXT_PRIMARY,
+                          relief="flat", padx=10, pady=6, cursor="hand2",
+                          command=lambda a=app_id: self.server._launch_application(a) if self.server else None)
+            b.grid(row=idx // 3, column=idx % 3, padx=4, pady=4, sticky="ew")
+
+        # Power Controls
+        pwr_frame = tk.Frame(card, bg=CARD_BG)
+        pwr_frame.pack(anchor="w", fill="x", pady=10)
+
+        lbl_pwr = tk.Label(pwr_frame, text="Power Actions:", font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_pwr.pack(side="left", padx=(0, 8))
+
+        btn_lock = tk.Button(pwr_frame, text="🔒 Lock Workstation", font=("Segoe UI", 9, "bold"),
+                             bg=BUTTON_BG, fg=ACCENT_RED, relief="flat", padx=10, pady=4, cursor="hand2",
+                             command=lambda: self.server._handle_system_power("lock") if self.server else None)
+        btn_lock.pack(side="left", padx=4)
+
+        # Hardware & Multimedia tests
+        media_frame = tk.Frame(card, bg=CARD_BG)
+        media_frame.pack(anchor="w", fill="x", pady=12)
+
+        btn_cam = tk.Button(media_frame, text="📸 Test Webcam Snapshot", font=("Segoe UI", 9, "bold"),
+                            bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6, cursor="hand2",
+                            command=self.test_camera_snapshot)
+        btn_cam.pack(side="left", padx=(0, 8))
+
+        btn_mic = tk.Button(media_frame, text="🎙️ Test Mic (3-sec Record)", font=("Segoe UI", 9, "bold"),
+                            bg=BUTTON_BG, fg=ACCENT_GREEN, relief="flat", padx=10, pady=6, cursor="hand2",
+                            command=self.test_mic_record)
+        btn_mic.pack(side="left")
+
+        self.lbl_cam_preview = tk.Label(card, bg=CARD_BG)
+        self.lbl_cam_preview.pack(anchor="w", pady=8)
+
+        self.lbl_media_status = tk.Label(card, text="Webcam & Mic ready for remote commands.",
+                                         font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
+        self.lbl_media_status.pack(anchor="w", pady=4)
+
     def _build_logs_tab(self):
         container = tk.Frame(self.tab_logs, bg=BG_DARK)
         container.pack(fill="both", expand=True)
@@ -523,16 +673,100 @@ class CompanionApp(tk.Tk):
         else:
             self.start_server()
 
+    def _update_auth_token(self):
+        new_token = self.ent_token.get().strip()
+        if new_token:
+            self.auth_token = new_token
+            if self.server and hasattr(self.server, "ws_server") and self.server.ws_server:
+                self.server.ws_server.auth_token = new_token
+            self.generate_wan_qr()
+            messagebox.showinfo("Security Key Updated", f"Security Key set to: {new_token}")
+
+    def copy_wan_url(self):
+        url = f"ws://{self.current_ip}:{self.ws_port}"
+        self.clipboard_clear()
+        self.clipboard_append(url)
+        messagebox.showinfo("Copied", f"WAN WebSocket URL '{url}' copied to clipboard!")
+
+    def generate_wan_qr(self):
+        if not HAS_QR:
+            if hasattr(self, "wan_qr_label"):
+                self.wan_qr_label.config(text="QR library not found.", fg=ACCENT_RED)
+            return
+        hostname = socket.gethostname()
+        payload = json.dumps({
+            "type": "btmouse_wan",
+            "url": f"ws://{self.current_ip}:{self.ws_port}",
+            "ip": self.current_ip,
+            "port": self.ws_port,
+            "token": self.auth_token,
+            "name": hostname
+        })
+        try:
+            qr = qrcode.QRCode(version=1, box_size=3, border=2)
+            qr.add_data(payload)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            img = img.resize((190, 190), Image.Resampling.NEAREST)
+            self.wan_qr_photo = ImageTk.PhotoImage(img)
+            self.wan_qr_label.config(image=self.wan_qr_photo)
+            if hasattr(self, "lbl_wan_url"):
+                self.lbl_wan_url.config(text=f"ws://{self.current_ip}:{self.ws_port}")
+        except Exception as e:
+            if hasattr(self, "wan_qr_label"):
+                self.wan_qr_label.config(text=f"Error: {e}", fg=ACCENT_RED)
+
+    def test_camera_snapshot(self):
+        if not self.server:
+            return
+        self.lbl_media_status.config(text="Capturing camera frame...", fg=ACCENT_CYAN)
+        def _snap():
+            b64 = self.server.camera_manager.get_snapshot()
+            if b64:
+                import io
+                raw = base64.b64decode(b64)
+                img = Image.open(io.BytesIO(raw))
+                img = img.resize((240, 180), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                def _update_ui():
+                    self.cam_photo = photo
+                    self.lbl_cam_preview.config(image=self.cam_photo)
+                    self.lbl_media_status.config(text="✓ Camera snapshot captured successfully!", fg=ACCENT_GREEN)
+                self.after(0, _update_ui)
+            else:
+                self.after(0, lambda: self.lbl_media_status.config(text="✕ Could not access camera.", fg=ACCENT_RED))
+        threading.Thread(target=_snap, daemon=True).start()
+
+    def test_mic_record(self):
+        if not self.server:
+            return
+        self.lbl_media_status.config(text="Recording microphone for 3 seconds...", fg=ACCENT_CYAN)
+        def _rec():
+            rec_file = self.server.audio_manager.start_recording()
+            time.sleep(3.0)
+            final_file = self.server.audio_manager.stop_recording()
+            if final_file and os.path.exists(final_file):
+                sz = os.path.getsize(final_file)
+                self.after(0, lambda: self.lbl_media_status.config(
+                    text=f"✓ Recorded {os.path.basename(final_file)} ({sz} bytes)", fg=ACCENT_GREEN))
+            else:
+                self.after(0, lambda: self.lbl_media_status.config(text="✕ Mic recording failed.", fg=ACCENT_RED))
+        threading.Thread(target=_rec, daemon=True).start()
+
     def restart_server(self):
         self.log("Restarting server...")
-        if self.server:
-            self.server.stop()
-            if self.server_thread and self.server_thread.is_alive():
-                self.server_thread.join(timeout=0.6)
-
-        # Fresh instance
-        self._init_server()
-        self.start_server()
+        self.lbl_status_pill.config(text="● RESTARTING...", fg=ACCENT_CYAN)
+        def _do_restart():
+            if self.server:
+                self.server.stop()
+                if self.server_thread and self.server_thread.is_alive():
+                    self.server_thread.join(timeout=1.0)
+            time.sleep(0.3)
+            self._init_server()
+            self.server_thread = threading.Thread(target=self.server.start, daemon=True)
+            self.server_thread.start()
+            self.after(0, lambda: self.log("Server successfully restarted."))
+        threading.Thread(target=_do_restart, daemon=True).start()
 
     def quit_application(self):
         if self.tray_icon:

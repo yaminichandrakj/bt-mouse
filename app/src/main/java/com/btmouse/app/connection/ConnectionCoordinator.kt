@@ -2,6 +2,7 @@ package com.btmouse.app.connection
 
 import android.content.Context
 import com.btmouse.app.data.ConnectionMode
+import com.btmouse.app.data.MediaStatus
 import com.btmouse.app.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,7 @@ class ConnectionCoordinator(
     val bluetoothHidManager = BluetoothHidManager(context, scope)
     val bluetoothRfcommManager = BluetoothRfcommManager(context, scope)
     val wifiClientManager = WifiClientManager(settings, scope)
+    val remoteWanManager = RemoteWanManager(settings, scope)
 
     val activeMode: StateFlow<ConnectionMode> = settings.connectionMode
 
@@ -28,11 +30,13 @@ class ConnectionCoordinator(
         settings.connectionMode,
         bluetoothRfcommManager.isConnected,
         bluetoothHidManager.isConnected,
-        wifiClientManager.isConnected
-    ) { mode, btRfcommConnected, btHidConnected, wifiConnected ->
+        wifiClientManager.isConnected,
+        remoteWanManager.isConnected
+    ) { mode, btRfcommConnected, btHidConnected, wifiConnected, wanConnected ->
         when (mode) {
             ConnectionMode.BLUETOOTH -> btRfcommConnected || btHidConnected
             ConnectionMode.WIFI -> wifiConnected
+            ConnectionMode.REMOTE_WAN -> wanConnected
         }
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
@@ -40,8 +44,9 @@ class ConnectionCoordinator(
         settings.connectionMode,
         bluetoothRfcommManager.statusMessage,
         bluetoothHidManager.statusMessage,
-        wifiClientManager.statusMessage
-    ) { mode, btRfcommStatus, btHidStatus, wifiStatus ->
+        wifiClientManager.statusMessage,
+        remoteWanManager.statusMessage
+    ) { mode, btRfcommStatus, btHidStatus, wifiStatus, wanStatus ->
         when (mode) {
             ConnectionMode.BLUETOOTH -> {
                 if (bluetoothRfcommManager.isConnected.value) btRfcommStatus
@@ -49,6 +54,7 @@ class ConnectionCoordinator(
                 else btRfcommStatus
             }
             ConnectionMode.WIFI -> wifiStatus
+            ConnectionMode.REMOTE_WAN -> wanStatus
         }
     }.stateIn(scope, SharingStarted.Eagerly, "Initializing...")
 
@@ -56,11 +62,13 @@ class ConnectionCoordinator(
         settings.connectionMode,
         bluetoothRfcommManager.connectedDeviceName,
         bluetoothHidManager.connectedDeviceName,
-        wifiClientManager.connectedDeviceName
-    ) { mode, btRfcommName, btHidName, wifiName ->
+        wifiClientManager.connectedDeviceName,
+        remoteWanManager.connectedDeviceName
+    ) { mode, btRfcommName, btHidName, wifiName, wanName ->
         when (mode) {
             ConnectionMode.BLUETOOTH -> btRfcommName ?: btHidName
             ConnectionMode.WIFI -> wifiName
+            ConnectionMode.REMOTE_WAN -> wanName
         }
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
@@ -72,6 +80,7 @@ class ConnectionCoordinator(
                 else bluetoothRfcommManager
             }
             ConnectionMode.WIFI -> wifiClientManager
+            ConnectionMode.REMOTE_WAN -> remoteWanManager
         }
 
     fun initialize() {
@@ -115,8 +124,12 @@ class ConnectionCoordinator(
         currentInputConnection.sendPenEvent(action, xRatio, yRatio, pressure, isEraser)
     }
 
-    override val mediaStatus: StateFlow<com.btmouse.app.data.MediaStatus>
-        get() = if (bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager.mediaStatus else wifiClientManager.mediaStatus
+    override val mediaStatus: StateFlow<MediaStatus>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.mediaStatus
+            ConnectionMode.BLUETOOTH -> if (bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager.mediaStatus else wifiClientManager.mediaStatus
+            ConnectionMode.WIFI -> wifiClientManager.mediaStatus
+        }
 
     override fun queryMedia() {
         currentInputConnection.queryMedia()
@@ -127,7 +140,9 @@ class ConnectionCoordinator(
     }
 
     override fun sendMediaToggle() {
-        if (settings.connectionMode.value == ConnectionMode.WIFI || bluetoothRfcommManager.isConnected.value) {
+        if (settings.connectionMode.value == ConnectionMode.WIFI ||
+            settings.connectionMode.value == ConnectionMode.REMOTE_WAN ||
+            bluetoothRfcommManager.isConnected.value) {
             currentInputConnection.sendMediaToggle()
         } else {
             sendMediaKey(com.btmouse.app.data.HidConstants.CONSUMER_PLAY_PAUSE)
@@ -135,7 +150,9 @@ class ConnectionCoordinator(
     }
 
     override fun sendMediaNext() {
-        if (settings.connectionMode.value == ConnectionMode.WIFI || bluetoothRfcommManager.isConnected.value) {
+        if (settings.connectionMode.value == ConnectionMode.WIFI ||
+            settings.connectionMode.value == ConnectionMode.REMOTE_WAN ||
+            bluetoothRfcommManager.isConnected.value) {
             currentInputConnection.sendMediaNext()
         } else {
             sendMediaKey(com.btmouse.app.data.HidConstants.CONSUMER_SCAN_NEXT)
@@ -143,7 +160,9 @@ class ConnectionCoordinator(
     }
 
     override fun sendMediaPrev() {
-        if (settings.connectionMode.value == ConnectionMode.WIFI || bluetoothRfcommManager.isConnected.value) {
+        if (settings.connectionMode.value == ConnectionMode.WIFI ||
+            settings.connectionMode.value == ConnectionMode.REMOTE_WAN ||
+            bluetoothRfcommManager.isConnected.value) {
             currentInputConnection.sendMediaPrev()
         } else {
             sendMediaKey(com.btmouse.app.data.HidConstants.CONSUMER_SCAN_PREV)
@@ -170,7 +189,87 @@ class ConnectionCoordinator(
         currentInputConnection.unlockWorkstation(password)
     }
 
+    // Rich Desktop, Hardware & Process queries
+    override val systemStats: StateFlow<SystemStats?>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.systemStats
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.systemStats
+            ConnectionMode.WIFI -> wifiClientManager.systemStats
+        }
+
+    override val runningProcesses: StateFlow<List<ProcessInfo>>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.runningProcesses
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.runningProcesses
+            ConnectionMode.WIFI -> wifiClientManager.runningProcesses
+        }
+
+    override val installedApps: StateFlow<List<AppInfo>>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.installedApps
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.installedApps
+            ConnectionMode.WIFI -> wifiClientManager.installedApps
+        }
+
+    override val latestCameraFrame: StateFlow<ByteArray?>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.latestCameraFrame
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.latestCameraFrame
+            ConnectionMode.WIFI -> wifiClientManager.latestCameraFrame
+        }
+
+    override val isCameraStreaming: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isCameraStreaming
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isCameraStreaming
+            ConnectionMode.WIFI -> wifiClientManager.isCameraStreaming
+        }
+
+    override val isAudioRecording: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isAudioRecording
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isAudioRecording
+            ConnectionMode.WIFI -> wifiClientManager.isAudioRecording
+        }
+
+    override fun querySystemStats() {
+        currentInputConnection.querySystemStats()
+    }
+
+    override fun queryRunningProcesses() {
+        currentInputConnection.queryRunningProcesses()
+    }
+
+    override fun killProcess(pid: Int) {
+        currentInputConnection.killProcess(pid)
+    }
+
+    override fun queryInstalledApps() {
+        currentInputConnection.queryInstalledApps()
+    }
+
+    override fun requestCameraSnapshot() {
+        currentInputConnection.requestCameraSnapshot()
+    }
+
+    override fun startCameraStream() {
+        currentInputConnection.startCameraStream()
+    }
+
+    override fun stopCameraStream() {
+        currentInputConnection.stopCameraStream()
+    }
+
+    override fun startAudioRecord() {
+        currentInputConnection.startAudioRecord()
+    }
+
+    override fun stopAudioRecord() {
+        currentInputConnection.stopAudioRecord()
+    }
+
     fun cleanup() {
+        remoteWanManager.disconnect()
         bluetoothRfcommManager.disconnect()
         bluetoothHidManager.cleanup()
         wifiClientManager.cleanup()

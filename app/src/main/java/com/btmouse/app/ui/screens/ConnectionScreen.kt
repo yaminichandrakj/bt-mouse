@@ -117,6 +117,18 @@ fun ConnectionScreen(
             if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
                 val gson = Gson()
                 val obj = gson.fromJson(trimmed, JsonObject::class.java)
+                val type = obj.get("type")?.asString ?: ""
+                if (type == "btmouse_wan" || obj.has("url")) {
+                    val url = obj.get("url")?.asString ?: ""
+                    val token = obj.get("token")?.asString ?: "123456"
+                    if (url.isNotEmpty()) {
+                        settings.setWanUrl(url)
+                        settings.setWanToken(token)
+                        coordinator.setMode(ConnectionMode.REMOTE_WAN)
+                        coordinator.remoteWanManager.connect(url, token)
+                        return true
+                    }
+                }
                 val ip = obj.get("ip")?.asString ?: ""
                 val port = obj.get("port")?.asInt ?: 53530
                 val name = obj.get("name")?.asString ?: "PC Server"
@@ -201,13 +213,19 @@ fun ConnectionScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Mode Selector Tabs
+        val selectedTab = when (activeMode) {
+            ConnectionMode.BLUETOOTH -> 0
+            ConnectionMode.WIFI -> 1
+            ConnectionMode.REMOTE_WAN -> 2
+        }
+
         TabRow(
-            selectedTabIndex = if (activeMode == ConnectionMode.BLUETOOTH) 0 else 1,
+            selectedTabIndex = selectedTab,
             containerColor = DarkSurface,
             contentColor = TextPrimary,
             indicator = { tabPositions ->
                 TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[if (activeMode == ConnectionMode.BLUETOOTH) 0 else 1]),
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
                     color = AccentCyan
                 )
             }
@@ -217,9 +235,9 @@ fun ConnectionScreen(
                 onClick = { coordinator.setMode(ConnectionMode.BLUETOOTH) },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Bluetooth, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Bluetooth HID", fontWeight = FontWeight.SemiBold)
+                        Icon(imageVector = Icons.Default.Bluetooth, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Bluetooth", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                     }
                 }
             )
@@ -228,9 +246,20 @@ fun ConnectionScreen(
                 onClick = { coordinator.setMode(ConnectionMode.WIFI) },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Wi-Fi Network", fontWeight = FontWeight.SemiBold)
+                        Icon(imageVector = Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Wi-Fi", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    }
+                }
+            )
+            Tab(
+                selected = activeMode == ConnectionMode.REMOTE_WAN,
+                onClick = { coordinator.setMode(ConnectionMode.REMOTE_WAN) },
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(imageVector = Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentCyan)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Remote WAN", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                     }
                 }
             )
@@ -284,11 +313,17 @@ fun ConnectionScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = {
-                            if (activeMode == ConnectionMode.BLUETOOTH) {
-                                coordinator.bluetoothRfcommManager.disconnect()
-                                coordinator.bluetoothHidManager.disconnect()
-                            } else {
-                                coordinator.wifiClientManager.disconnect()
+                            when (activeMode) {
+                                ConnectionMode.BLUETOOTH -> {
+                                    coordinator.bluetoothRfcommManager.disconnect()
+                                    coordinator.bluetoothHidManager.disconnect()
+                                }
+                                ConnectionMode.WIFI -> {
+                                    coordinator.wifiClientManager.disconnect()
+                                }
+                                ConnectionMode.REMOTE_WAN -> {
+                                    coordinator.remoteWanManager.disconnect()
+                                }
                             }
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
@@ -302,186 +337,288 @@ fun ConnectionScreen(
         }
 
         // Mode Content
-        if (activeMode == ConnectionMode.BLUETOOTH) {
-            // Bluetooth Content
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Paired Devices", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Row {
-                    IconButton(onClick = {
-                        coordinator.bluetoothRfcommManager.refreshPairedDevices()
-                        coordinator.bluetoothHidManager.refreshPairedDevices()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AccentCyan)
+        when (activeMode) {
+            ConnectionMode.BLUETOOTH -> {
+                // Bluetooth Content
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Paired Devices", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Row {
+                        IconButton(onClick = {
+                            coordinator.bluetoothRfcommManager.refreshPairedDevices()
+                            coordinator.bluetoothHidManager.refreshPairedDevices()
+                        }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AccentCyan)
+                        }
+                        IconButton(onClick = {
+                            val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                            context.startActivity(intent)
+                        }) {
+                            Icon(Icons.Default.Settings, contentDescription = "BT Settings", tint = TextSecondary)
+                        }
                     }
-                    IconButton(onClick = {
-                        val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
-                        context.startActivity(intent)
-                    }) {
-                        Icon(Icons.Default.Settings, contentDescription = "BT Settings", tint = TextSecondary)
+                }
+
+                if (pairedDevices.isEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "No Paired Devices Found",
+                                color = TextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Pair your PC with this phone in Windows Bluetooth Settings. It will connect via Bluetooth RFCOMM or HID!",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                                    context.startActivity(intent)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Open Bluetooth Settings")
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(pairedDevices) { device ->
+                            DeviceItem(
+                                device = device,
+                                isCurrentlyConnected = isConnected && connectedDevice?.contains(device.name ?: "") == true,
+                                onConnect = {
+                                    coordinator.bluetoothRfcommManager.connectToDevice(device)
+                                    coordinator.bluetoothHidManager.connectToDevice(device)
+                                }
+                            )
+                        }
                     }
                 }
             }
 
-            if (pairedDevices.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(14.dp)
+            ConnectionMode.WIFI -> {
+                // Wi-Fi Content
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    // QR Code & Auto Discover Action Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "No Paired Devices Found",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Pair your PC with this phone in Windows Bluetooth Settings. It will connect via Bluetooth RFCOMM or HID!",
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = { launchQrScanner() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = DarkBackground)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Scan QR Code", color = DarkBackground, fontWeight = FontWeight.Bold)
+                        }
+
                         Button(
                             onClick = {
-                                val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
-                                context.startActivity(intent)
+                                coordinator.wifiClientManager.discoverServer { host, port, name ->
+                                    manualHost = host
+                                    manualPort = port.toString()
+                                }
                             },
+                            modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text("Open Bluetooth Settings")
+                            Icon(Icons.Default.Search, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Auto-Discover")
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Manual IP Configuration", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+
+                            OutlinedTextField(
+                                value = manualHost,
+                                onValueChange = { manualHost = it },
+                                label = { Text("PC IP Address (e.g. 172.25.100.123)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = PrimaryIndigo,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true
+                            )
+
+                            OutlinedTextField(
+                                value = manualPort,
+                                onValueChange = { manualPort = it },
+                                label = { Text("Port (Default: 53530)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = PrimaryIndigo,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true
+                            )
+
+                            Button(
+                                onClick = {
+                                    val portInt = manualPort.toIntOrNull() ?: 53530
+                                    settings.setWifiHost(manualHost)
+                                    settings.setWifiPort(portInt)
+                                    coordinator.wifiClientManager.connectManual(manualHost, portInt)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Connect to PC", color = TextPrimary, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text("PC Companion App", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "Launch 'BT-Mouse-Companion.exe' or 'run_pc_app.bat' on your PC to see the instant connection QR code and live packet monitor.",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
                         }
                     }
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(pairedDevices) { device ->
-                        DeviceItem(
-                            device = device,
-                            isCurrentlyConnected = isConnected && connectedDevice?.contains(device.name ?: "") == true,
-                            onConnect = {
-                                coordinator.bluetoothRfcommManager.connectToDevice(device)
-                                coordinator.bluetoothHidManager.connectToDevice(device)
-                            }
-                        )
-                    }
-                }
             }
-        } else {
-            // Wi-Fi Content
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                // QR Code & Auto Discover Action Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+
+            ConnectionMode.REMOTE_WAN -> {
+                // Remote WAN Content
+                val storedWanUrl by settings.wanUrl.collectAsState()
+                val storedWanToken by settings.wanToken.collectAsState()
+                var inputWanUrl by remember(storedWanUrl) { mutableStateOf(storedWanUrl) }
+                var inputWanToken by remember(storedWanToken) { mutableStateOf(storedWanToken) }
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Button(
                         onClick = { launchQrScanner() },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = DarkBackground)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Scan QR Code", color = DarkBackground, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Scan WAN QR Code from PC", color = DarkBackground, fontWeight = FontWeight.Bold)
                     }
 
-                    Button(
-                        onClick = {
-                            coordinator.wifiClientManager.discoverServer { host, port, name ->
-                                manualHost = host
-                                manualPort = port.toString()
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
-                        shape = RoundedCornerShape(12.dp)
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
                     ) {
-                        Icon(Icons.Default.Search, contentDescription = null)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Auto-Discover")
-                    }
-                }
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Remote WAN / 5G Setup", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(16.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Manual IP Configuration", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            OutlinedTextField(
+                                value = inputWanUrl,
+                                onValueChange = { inputWanUrl = it },
+                                label = { Text("WebSocket URL (ws://...:53531 or wss://...)") },
+                                placeholder = { Text("ws://your-ip-or-domain:53531") },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = AccentCyan,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true
+                            )
 
-                        OutlinedTextField(
-                            value = manualHost,
-                            onValueChange = { manualHost = it },
-                            label = { Text("PC IP Address (e.g. 172.25.100.123)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PrimaryIndigo,
-                                unfocusedBorderColor = DarkBorder,
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary
-                            ),
-                            singleLine = true
-                        )
+                            OutlinedTextField(
+                                value = inputWanToken,
+                                onValueChange = { inputWanToken = it },
+                                label = { Text("Security Access Key / PIN") },
+                                placeholder = { Text("123456") },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = AccentCyan,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true
+                            )
 
-                        OutlinedTextField(
-                            value = manualPort,
-                            onValueChange = { manualPort = it },
-                            label = { Text("Port (Default: 53530)") },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = PrimaryIndigo,
-                                unfocusedBorderColor = DarkBorder,
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary
-                            ),
-                            singleLine = true
-                        )
-
-                        Button(
-                            onClick = {
-                                val portInt = manualPort.toIntOrNull() ?: 53530
-                                settings.setWifiHost(manualHost)
-                                settings.setWifiPort(portInt)
-                                coordinator.wifiClientManager.connectManual(manualHost, portInt)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Connect to PC", color = TextPrimary, fontWeight = FontWeight.Bold)
+                            Button(
+                                onClick = {
+                                    settings.setWanUrl(inputWanUrl.trim())
+                                    settings.setWanToken(inputWanToken.trim())
+                                    coordinator.remoteWanManager.connect(inputWanUrl.trim(), inputWanToken.trim())
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Connect Over Internet", color = DarkBackground, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
-                }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Text("PC Companion App", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "Launch 'run_pc_app.bat' on your PC to see the instant connection QR code and live packet monitor.",
-                            color = TextSecondary,
-                            fontSize = 12.sp
-                        )
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Language, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Anywhere Access (WAN / Cellular)", color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                "Connect to your laptop from outside your home network! Use your router's port forward (port 53531), Cloudflare Tunnel, ngrok, or Tailscale. Your connection is secured with the Security Access Key.",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }

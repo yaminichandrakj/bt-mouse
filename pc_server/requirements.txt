@@ -4,9 +4,14 @@ qrcode>=8.0
 pillow>=10.0
 pycaw>=20240210
 comtypes>=1.4.0
+psutil>=5.9.0
+opencv-python>=4.8.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+websockets>=12.0
+pystray>=0.19.5
 winrt-Windows.Media.Control>=3.2.1; sys_platform == 'win32'
 winrt-Windows.Foundation>=3.2.1; sys_platform == 'win32'
 winrt-Windows.Devices.Bluetooth.Rfcomm>=3.2.1; sys_platform == 'win32'
 winrt-Windows.Networking.Sockets>=3.2.1; sys_platform == 'win32'
 winrt-Windows.Storage.Streams>=3.2.1; sys_platform == 'win32'
-

@@ -1,4 +1,4 @@
-name: Build Android APK & Release
+name: Build Android APK & Windows Companion EXE
 
 on:
   push:
@@ -13,8 +13,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build & Release APK
+  build-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -45,7 +45,7 @@ jobs:
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
-            TAG="v1.2.0"
+            TAG="v1.3.0"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
@@ -61,14 +61,67 @@ jobs:
           path: release-output/*.apk
           retention-days: 30
 
+  build-exe:
+    name: Build Windows Companion EXE
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: pc_server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Compile Standalone Executable
+        working-directory: pc_server
+        run: |
+          pyinstaller BT-Mouse-Companion.spec
+
+      - name: Upload Standalone EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BT-Mouse-Companion-EXE
+          path: pc_server/dist/BT-Mouse-Companion.exe
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-apk, build-exe]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create Output Directory
+        run: mkdir -p release-assets
+
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BT-Mouse-Release-APK
+          path: release-assets
+
+      - name: Download EXE Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: BT-Mouse-Companion-EXE
+          path: release-assets
+
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version_info.outputs.tag }}
-          name: BT Mouse & Keyboard ${{ steps.version_info.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          name: BT Remote & Companion ${{ github.ref_name }}
           draft: false
           prerelease: false
           files: |
-            release-output/*.apk
+            release-assets/*
           generate_release_notes: true

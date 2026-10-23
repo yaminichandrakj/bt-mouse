@@ -6,9 +6,11 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
+import android.util.Base64
 import android.util.Log
 import com.btmouse.app.data.MediaStatus
 import com.google.gson.Gson
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +55,24 @@ class BluetoothRfcommManager(
 
     private val _mediaStatus = MutableStateFlow(MediaStatus())
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
+
+    private val _systemStats = MutableStateFlow<SystemStats?>(null)
+    override val systemStats: StateFlow<SystemStats?> = _systemStats.asStateFlow()
+
+    private val _runningProcesses = MutableStateFlow<List<ProcessInfo>>(emptyList())
+    override val runningProcesses: StateFlow<List<ProcessInfo>> = _runningProcesses.asStateFlow()
+
+    private val _installedApps = MutableStateFlow<List<AppInfo>>(emptyList())
+    override val installedApps: StateFlow<List<AppInfo>> = _installedApps.asStateFlow()
+
+    private val _latestCameraFrame = MutableStateFlow<ByteArray?>(null)
+    override val latestCameraFrame: StateFlow<ByteArray?> = _latestCameraFrame.asStateFlow()
+
+    private val _isCameraStreaming = MutableStateFlow(false)
+    override val isCameraStreaming: StateFlow<Boolean> = _isCameraStreaming.asStateFlow()
+
+    private val _isAudioRecording = MutableStateFlow(false)
+    override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
 
     private val sendQueue = Channel<String>(capacity = 256)
     private val gson = Gson()
@@ -160,28 +180,86 @@ class BluetoothRfcommManager(
         try {
             val root = gson.fromJson(line, JsonObject::class.java) ?: return
             val type = root.get("type")?.asString ?: ""
-            if (type == "media_status") {
-                val hasMedia = root.get("has_media")?.asBoolean ?: false
-                val title = root.get("title")?.asString ?: ""
-                val artist = root.get("artist")?.asString ?: ""
-                val album = root.get("album")?.asString ?: ""
-                val status = root.get("status")?.asString ?: ""
-                val position = root.get("position")?.asFloat ?: 0f
-                val duration = root.get("duration")?.asFloat ?: 0f
-                val volume = root.get("volume")?.asFloat ?: 0.5f
-                val isMuted = root.get("is_muted")?.asBoolean ?: false
+            when (type) {
+                "media_status" -> {
+                    val hasMedia = root.get("has_media")?.asBoolean ?: false
+                    val title = root.get("title")?.asString ?: ""
+                    val artist = root.get("artist")?.asString ?: ""
+                    val album = root.get("album")?.asString ?: ""
+                    val status = root.get("status")?.asString ?: ""
+                    val position = root.get("position")?.asFloat ?: 0f
+                    val duration = root.get("duration")?.asFloat ?: 0f
+                    val volume = root.get("volume")?.asFloat ?: 0.5f
+                    val isMuted = root.get("is_muted")?.asBoolean ?: false
 
-                _mediaStatus.value = MediaStatus(
-                    hasMedia = hasMedia,
-                    title = title,
-                    artist = artist,
-                    album = album,
-                    status = status,
-                    position = position,
-                    duration = duration,
-                    volume = volume,
-                    isMuted = isMuted
-                )
+                    _mediaStatus.value = MediaStatus(
+                        hasMedia = hasMedia,
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        status = status,
+                        position = position,
+                        duration = duration,
+                        volume = volume,
+                        isMuted = isMuted
+                    )
+                }
+                "system_stats_response" -> {
+                    val cpu = root.get("cpu")?.asFloat ?: 0f
+                    val ram = root.get("ram")?.asFloat ?: 0f
+                    val battery = root.get("battery")?.asFloat ?: -1f
+                    val powerPlugged = root.get("power_plugged")?.asBoolean ?: true
+                    val disk = root.get("disk")?.asFloat ?: 0f
+                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk)
+                }
+                "process_list_response" -> {
+                    val array = root.getAsJsonArray("processes") ?: JsonArray()
+                    val list = mutableListOf<ProcessInfo>()
+                    for (elem in array) {
+                        val obj = elem.asJsonObject
+                        list.add(
+                            ProcessInfo(
+                                pid = obj.get("pid")?.asInt ?: 0,
+                                name = obj.get("name")?.asString ?: "",
+                                cpu = obj.get("cpu")?.asFloat ?: 0f,
+                                ram = obj.get("ram")?.asFloat ?: 0f
+                            )
+                        )
+                    }
+                    _runningProcesses.value = list
+                }
+                "installed_apps_response" -> {
+                    val array = root.getAsJsonArray("apps") ?: JsonArray()
+                    val list = mutableListOf<AppInfo>()
+                    for (elem in array) {
+                        val obj = elem.asJsonObject
+                        list.add(
+                            AppInfo(
+                                name = obj.get("name")?.asString ?: "",
+                                path = obj.get("path")?.asString ?: "",
+                                cmd = obj.get("cmd")?.asString ?: ""
+                            )
+                        )
+                    }
+                    _installedApps.value = list
+                }
+                "camera_frame_response" -> {
+                    val b64 = root.get("frame")?.asString
+                    if (!b64.isNullOrEmpty()) {
+                        try {
+                            val bytes = Base64.decode(b64, Base64.DEFAULT)
+                            _latestCameraFrame.value = bytes
+                        } catch (e: Exception) {}
+                    }
+                }
+                "camera_stream_status" -> {
+                    val streaming = root.get("streaming")?.asBoolean ?: false
+                    _isCameraStreaming.value = streaming
+                }
+                "audio_status_response" -> {
+                    val recording = root.get("recording")?.asBoolean ?: false
+                    _isAudioRecording.value = recording
+                }
             }
         } catch (e: Exception) {
             Log.e(tag, "Error parsing incoming packet", e)
@@ -340,6 +418,54 @@ class BluetoothRfcommManager(
             addProperty("type", "unlock")
             addProperty("password", password)
         }
+        sendJson(obj)
+    }
+
+    override fun querySystemStats() {
+        val obj = JsonObject().apply { addProperty("type", "query_stats") }
+        sendJson(obj)
+    }
+
+    override fun queryRunningProcesses() {
+        val obj = JsonObject().apply { addProperty("type", "query_processes") }
+        sendJson(obj)
+    }
+
+    override fun killProcess(pid: Int) {
+        val obj = JsonObject().apply {
+            addProperty("type", "kill_process")
+            addProperty("pid", pid)
+        }
+        sendJson(obj)
+    }
+
+    override fun queryInstalledApps() {
+        val obj = JsonObject().apply { addProperty("type", "query_apps") }
+        sendJson(obj)
+    }
+
+    override fun requestCameraSnapshot() {
+        val obj = JsonObject().apply { addProperty("type", "camera_snapshot") }
+        sendJson(obj)
+    }
+
+    override fun startCameraStream() {
+        val obj = JsonObject().apply { addProperty("type", "camera_stream_start") }
+        sendJson(obj)
+    }
+
+    override fun stopCameraStream() {
+        val obj = JsonObject().apply { addProperty("type", "camera_stream_stop") }
+        sendJson(obj)
+    }
+
+    override fun startAudioRecord() {
+        val obj = JsonObject().apply { addProperty("type", "audio_record_start") }
+        sendJson(obj)
+    }
+
+    override fun stopAudioRecord() {
+        val obj = JsonObject().apply { addProperty("type", "audio_record_stop") }
         sendJson(obj)
     }
 }

@@ -8,7 +8,8 @@ import kotlinx.coroutines.flow.asStateFlow
 
 enum class ConnectionMode {
     BLUETOOTH,
-    WIFI
+    WIFI,
+    REMOTE_WAN
 }
 
 class SettingsRepository(context: Context) {
@@ -38,6 +39,18 @@ class SettingsRepository(context: Context) {
 
     private val _wifiPort = MutableStateFlow(prefs.getInt(KEY_WIFI_PORT, 53530))
     val wifiPort: StateFlow<Int> = _wifiPort.asStateFlow()
+
+    private val _wanUrl = MutableStateFlow(prefs.getString(KEY_WAN_URL, "ws://192.168.1.100:53531") ?: "ws://192.168.1.100:53531")
+    val wanUrl: StateFlow<String> = _wanUrl.asStateFlow()
+
+    private val _wanToken = MutableStateFlow(prefs.getString(KEY_WAN_TOKEN, "123456") ?: "123456")
+    val wanToken: StateFlow<String> = _wanToken.asStateFlow()
+
+    private val _laptopPin = MutableStateFlow(prefs.getString(KEY_LAPTOP_PIN, "") ?: "")
+    val laptopPin: StateFlow<String> = _laptopPin.asStateFlow()
+
+    private val _customAppsJson = MutableStateFlow(prefs.getString(KEY_CUSTOM_APPS, "[]") ?: "[]")
+    val customAppsJson: StateFlow<String> = _customAppsJson.asStateFlow()
 
     private val _connectionMode = MutableStateFlow(
         try {
@@ -88,6 +101,26 @@ class SettingsRepository(context: Context) {
         prefs.edit().putInt(KEY_WIFI_PORT, value).apply()
     }
 
+    fun setWanUrl(value: String) {
+        _wanUrl.value = value
+        prefs.edit().putString(KEY_WAN_URL, value).apply()
+    }
+
+    fun setWanToken(value: String) {
+        _wanToken.value = value
+        prefs.edit().putString(KEY_WAN_TOKEN, value).apply()
+    }
+
+    fun setLaptopPin(value: String) {
+        _laptopPin.value = value
+        prefs.edit().putString(KEY_LAPTOP_PIN, value).apply()
+    }
+
+    fun setCustomAppsJson(value: String) {
+        _customAppsJson.value = value
+        prefs.edit().putString(KEY_CUSTOM_APPS, value).apply()
+    }
+
     fun setConnectionMode(mode: ConnectionMode) {
         _connectionMode.value = mode
         prefs.edit().putString(KEY_CONNECTION_MODE, mode.name).apply()
@@ -102,6 +135,10 @@ class SettingsRepository(context: Context) {
         private const val KEY_AIR_MOUSE_SENSITIVITY = "air_mouse_sensitivity"
         private const val KEY_WIFI_HOST = "wifi_host"
         private const val KEY_WIFI_PORT = "wifi_port"
+        private const val KEY_WAN_URL = "wan_url"
+        private const val KEY_WAN_TOKEN = "wan_token"
+        private const val KEY_LAPTOP_PIN = "laptop_pin"
+        private const val KEY_CUSTOM_APPS = "custom_apps"
         private const val KEY_CONNECTION_MODE = "connection_mode"
     }
 }
