@@ -103,7 +103,7 @@ fun WritingPadSurface(
                             // Quadratic Bezier smoothing for natural handwriting
                             val midX = (prev.x + x) / 2f
                             val midY = (prev.y + y) / 2f
-                            currentPath?.quadraticTo(prev.x, prev.y, midX, midY)
+                            currentPath?.quadraticBezierTo(prev.x, prev.y, midX, midY)
                             lastPoint = Offset(x, y)
                         }
 
