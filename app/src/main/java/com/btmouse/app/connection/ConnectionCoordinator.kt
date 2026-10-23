@@ -146,8 +146,8 @@ class ConnectionCoordinator(
             ConnectionMode.WIFI -> wifiClientManager.mediaStatus
         }
 
-    override fun queryMedia() {
-        currentInputConnection.queryMedia()
+    override fun queryMedia(includePreview: Boolean) {
+        currentInputConnection.queryMedia(includePreview)
     }
 
     override fun sendMediaSeek(position: Float) {

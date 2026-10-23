@@ -9,5 +9,8 @@ data class MediaStatus(
     val position: Float = 0f,
     val duration: Float = 0f,
     val volume: Float = 0.5f,
-    val isMuted: Boolean = false
+    val isMuted: Boolean = false,
+    val artworkBase64: String = "",
+    val volumeAvailable: Boolean = true,
+    val volumeError: String = ""
 )

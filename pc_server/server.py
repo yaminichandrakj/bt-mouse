@@ -215,6 +215,8 @@ class MediaController:
         self.fallback_media_func = fallback_media_func
         self.has_winrt = False
         self.has_pycaw = False
+        self._artwork_cache_key = None
+        self._artwork_cache_value = ""
         self.last_state = {
             "has_media": False,
             "title": "",
@@ -246,40 +248,117 @@ class MediaController:
 
     def get_volume(self):
         if self.has_pycaw:
+            initialized = False
             try:
+                import comtypes
+                comtypes.CoInitialize()
+                initialized = True
                 speakers = self.audio_utilities.GetSpeakers()
+                if speakers is None:
+                    raise RuntimeError("Windows has no default playback device.")
                 vol = speakers.EndpointVolume
-                return vol.GetMasterVolumeLevelScalar(), bool(vol.GetMute())
-            except Exception:
-                pass
-        return 0.5, False
+                level, muted = vol.GetMasterVolumeLevelScalar(), bool(vol.GetMute())
+                self.last_state["volume_available"] = True
+                self.last_state["volume_error"] = ""
+                return level, muted
+            except Exception as e:
+                self.last_state["volume_available"] = False
+                self.last_state["volume_error"] = str(e)
+            finally:
+                if initialized:
+                    comtypes.CoUninitialize()
+        else:
+            self.last_state["volume_available"] = False
+            self.last_state["volume_error"] = "Windows audio control is unavailable."
+        return self.last_state.get("volume", 0.5), self.last_state.get("muted", False)
 
     def set_volume(self, scalar):
         if self.has_pycaw:
+            initialized = False
             try:
+                import comtypes
+                comtypes.CoInitialize()
+                initialized = True
                 speakers = self.audio_utilities.GetSpeakers()
+                if speakers is None:
+                    raise RuntimeError("Windows has no default playback device.")
                 vol = speakers.EndpointVolume
                 val = max(0.0, min(1.0, float(scalar)))
                 vol.SetMasterVolumeLevelScalar(val, None)
-                self.last_state["volume"] = round(val, 2)
+                self.last_state["volume"] = round(vol.GetMasterVolumeLevelScalar(), 3)
+                self.last_state["volume_available"] = True
+                self.last_state["volume_error"] = ""
                 return True
-            except Exception:
-                pass
+            except Exception as e:
+                self.last_state["volume_available"] = False
+                self.last_state["volume_error"] = str(e)
+            finally:
+                if initialized:
+                    comtypes.CoUninitialize()
         return False
 
     def set_mute(self, muted):
         if self.has_pycaw:
+            initialized = False
             try:
+                import comtypes
+                comtypes.CoInitialize()
+                initialized = True
                 speakers = self.audio_utilities.GetSpeakers()
+                if speakers is None:
+                    raise RuntimeError("Windows has no default playback device.")
                 vol = speakers.EndpointVolume
                 vol.SetMute(1 if muted else 0, None)
-                self.last_state["muted"] = bool(muted)
+                self.last_state["muted"] = bool(vol.GetMute())
+                self.last_state["is_muted"] = self.last_state["muted"]
+                self.last_state["volume_available"] = True
+                self.last_state["volume_error"] = ""
                 return True
-            except Exception:
-                pass
+            except Exception as e:
+                self.last_state["volume_available"] = False
+                self.last_state["volume_error"] = str(e)
+            finally:
+                if initialized:
+                    comtypes.CoUninitialize()
         return False
 
-    def get_media_state(self):
+    async def _get_media_artwork(self, props, cache_key, max_encoded_bytes):
+        if cache_key == self._artwork_cache_key:
+            return self._artwork_cache_value
+        self._artwork_cache_key = cache_key
+        self._artwork_cache_value = ""
+        try:
+            thumbnail = props.thumbnail
+            if not thumbnail:
+                return ""
+            stream = await thumbnail.open_read_async()
+            size = int(stream.size)
+            if size <= 0 or size > 4 * 1024 * 1024:
+                return ""
+            from winrt.windows.storage.streams import DataReader
+            reader = DataReader(stream.get_input_stream_at(0))
+            loaded = int(await reader.load_async(size))
+            raw = bytearray(loaded)
+            reader.read_bytes(raw)
+            reader.close()
+            stream.close()
+
+            from io import BytesIO
+            from PIL import Image
+            image = Image.open(BytesIO(raw)).convert("RGB")
+            image.thumbnail((192, 192), Image.Resampling.LANCZOS)
+            for quality in (70, 55, 40, 28):
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=quality, optimize=True)
+                encoded = base64.b64encode(output.getvalue()).decode("ascii")
+                if len(encoded) <= max_encoded_bytes:
+                    self._artwork_cache_value = encoded
+                    return encoded
+        except Exception as e:
+            print(f"[-] Media artwork unavailable: {e}")
+        return ""
+
+    def get_media_state(self, include_preview=False, max_artwork_bytes=12 * 1024):
         vol, muted = self.get_volume()
         self.last_state["volume"] = round(vol, 2)
         self.last_state["muted"] = muted
@@ -292,36 +371,35 @@ class MediaController:
                 async def _query():
                     mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
                     session = mgr.get_current_session()
-                    if not session:
+                    sessions = list(mgr.get_sessions() or [])
+                    candidates = ([session] if session else []) + [s for s in sessions if s != session]
+                    # Prefer an actually Playing session, then Paused. A stale
+                    # current session must not hide an active player.
+                    active = []
+                    for candidate in candidates:
                         try:
-                            sessions = mgr.get_sessions()
-                            if sessions:
-                                for s in sessions:
-                                    try:
-                                        info = s.get_playback_info()
-                                        if info and int(info.playback_status) in (4, 5):
-                                            session = s
-                                            break
-                                    except Exception:
-                                        pass
-                                if not session and len(sessions) > 0:
-                                    session = sessions[0]
+                            playback = candidate.get_playback_info()
+                            status = int(playback.playback_status) if playback else 0
+                            if status in (4, 5):
+                                active.append((status, candidate))
                         except Exception:
-                            pass
+                            continue
+                    if active:
+                        session = next((item for status, item in active if status == 5), active[0][1])
 
                     if session:
                         props = await session.try_get_media_properties_async()
                         info = session.get_playback_info()
                         timeline = session.get_timeline_properties()
                         status_map = {0: "Closed", 1: "Opened", 2: "Changing", 3: "Stopped", 4: "Paused", 5: "Playing"}
-                        status_str = status_map.get(int(info.playback_status), "Playing")
+                        status_str = status_map.get(int(info.playback_status), "Unknown")
                         pos_sec = timeline.position.total_seconds() if timeline and timeline.position else 0.0
                         end_sec = timeline.end_time.total_seconds() if timeline and timeline.end_time else 0.0
-                        return {
-                            "has_media": True,
-                            "title": props.title or "Unknown Track",
-                            "artist": props.artist or "Unknown Artist",
-                            "album": props.album_title or "",
+                        state = {
+                            "has_media": bool(props and (props.title or props.artist or status_str in ("Playing", "Paused"))),
+                            "title": (props.title or "Unknown Track") if props else "",
+                            "artist": (props.artist or "Unknown Artist") if props else "",
+                            "album": (props.album_title or "") if props else "",
                             "status": status_str,
                             "position": round(pos_sec, 1),
                             "duration": round(end_sec, 1),
@@ -329,6 +407,10 @@ class MediaController:
                             "muted": muted,
                             "is_muted": muted
                         }
+                        if include_preview:
+                            cache_key = (props.title, props.artist, props.album_title) if props else ()
+                            state["artwork"] = await self._get_media_artwork(props, cache_key, max_artwork_bytes) if props else ""
+                        return state
                     return None
 
                 res = asyncio.run(_query())
@@ -338,7 +420,8 @@ class MediaController:
                 else:
                     self.last_state.update({
                         "has_media": False, "title": "", "artist": "", "album": "",
-                        "status": "NoMedia", "position": 0.0, "duration": 0.0
+                        "status": "NoMedia", "position": 0.0, "duration": 0.0,
+                        "artwork": ""
                     })
             except Exception:
                 pass
@@ -1097,7 +1180,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.4"
+                    "version": "1.3.5"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -1270,7 +1353,9 @@ class Server:
 
         elif cmd_type in ("media_query", "query_media"):
             # Mobile app querying live media status, track title, progression, and volume
-            state = self.media_controller.get_media_state()
+            state = self.media_controller.get_media_state(
+                include_preview=bool(data.get("include_preview", False))
+            )
             response = {"type": "media_status"}
             response.update(state)
             if responder:

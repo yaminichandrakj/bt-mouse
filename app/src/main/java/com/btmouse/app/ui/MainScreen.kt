@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
@@ -50,6 +51,7 @@ import com.btmouse.app.ui.screens.KeyboardScreen
 import com.btmouse.app.ui.screens.MediaRemoteScreen
 import com.btmouse.app.ui.screens.SettingsScreen
 import com.btmouse.app.ui.screens.TouchpadScreen
+import com.btmouse.app.ui.screens.UtilitiesScreen
 import com.btmouse.app.ui.screens.WritingPadScreen
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
@@ -65,6 +67,7 @@ sealed class NavigationTab(val title: String, val icon: ImageVector) {
     object Keyboard : NavigationTab("Keys", Icons.Default.Keyboard)
     object WritingPad : NavigationTab("Pen", Icons.Default.Draw)
     object Media : NavigationTab("Media", Icons.Default.PlayCircle)
+    object Utilities : NavigationTab("Tools", Icons.Default.Build)
     object Connect : NavigationTab("Connect", Icons.Default.Wifi)
 }
 
@@ -79,6 +82,7 @@ fun MainScreen(
         NavigationTab.Keyboard,
         NavigationTab.WritingPad,
         NavigationTab.Media,
+        NavigationTab.Utilities,
         NavigationTab.Connect
     )
 
@@ -111,7 +115,8 @@ fun MainScreen(
                             1 -> "KEYBOARD & SHORTCUTS"
                             2 -> "PEN & TOUCHSCREEN"
                             3 -> "MEDIA & VOLUME REMOTE"
-                            4 -> "CONNECTION & QR"
+                            4 -> "PC UTILITIES"
+                            5 -> "CONNECTION & QR"
                             else -> "BT MOUSE"
                         },
                         color = TextPrimary,
@@ -182,7 +187,8 @@ fun MainScreen(
                 1 -> KeyboardScreen(coordinator, settings)
                 2 -> WritingPadScreen(coordinator, settings)
                 3 -> MediaRemoteScreen(coordinator, settings)
-                4 -> ConnectionScreen(coordinator, settings)
+                4 -> UtilitiesScreen(coordinator, settings)
+                5 -> ConnectionScreen(coordinator, settings)
             }
         }
     }

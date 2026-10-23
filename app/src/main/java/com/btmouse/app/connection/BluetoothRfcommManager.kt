@@ -191,6 +191,7 @@ class BluetoothRfcommManager(
                     val duration = root.get("duration")?.asFloat ?: 0f
                     val volume = root.get("volume")?.asFloat ?: 0.5f
                     val isMuted = root.get("is_muted")?.asBoolean ?: false
+                    val old = _mediaStatus.value
 
                     _mediaStatus.value = MediaStatus(
                         hasMedia = hasMedia,
@@ -201,7 +202,10 @@ class BluetoothRfcommManager(
                         position = position,
                         duration = duration,
                         volume = volume,
-                        isMuted = isMuted
+                        isMuted = isMuted,
+                        artworkBase64 = root.get("artwork")?.asString ?: if (old.title == title && old.artist == artist) old.artworkBase64 else "",
+                        volumeAvailable = root.get("volume_available")?.asBoolean ?: true,
+                        volumeError = root.get("volume_error")?.asString ?: ""
                     )
                 }
                 "system_stats_response" -> {
@@ -352,9 +356,10 @@ class BluetoothRfcommManager(
         sendJson(obj)
     }
 
-    override fun queryMedia() {
+    override fun queryMedia(includePreview: Boolean) {
         val obj = JsonObject().apply {
             addProperty("type", "media_query")
+            addProperty("include_preview", includePreview)
         }
         sendJson(obj)
     }

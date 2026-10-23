@@ -196,7 +196,7 @@ fun KeyboardScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Typing Mode & Sub-tab Selector
+        // Keyboard and numpad remain in Keys; PC utilities live in their own tab.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -208,50 +208,6 @@ fun KeyboardScreen(
                 selected = activeSubTab == "keys",
                 onClick = { activeSubTab = "keys" },
                 label = { Text("⌨️ Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-            FilterChip(
-                selected = activeSubTab == "apps",
-                onClick = { activeSubTab = "apps" },
-                label = { Text("🚀 Quick Apps", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-            FilterChip(
-                selected = activeSubTab == "tasks",
-                onClick = { activeSubTab = "tasks" },
-                label = { Text("📊 Tasks & Stats", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-            FilterChip(
-                selected = activeSubTab == "media_hw",
-                onClick = { activeSubTab = "media_hw" },
-                label = { Text("📷 Cam & Mic", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-            FilterChip(
-                selected = activeSubTab == "power",
-                onClick = { activeSubTab = "power" },
-                label = { Text("🔒 Power & Lock", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -288,10 +244,6 @@ fun KeyboardScreen(
 
         when (activeSubTab) {
             "numpad" -> NumpadScreen(coordinator, settings)
-            "apps" -> QuickAppsSection(coordinator, settings, hapticsEnabled)
-            "tasks" -> TasksAndHardwareSection(coordinator)
-            "media_hw" -> CameraAndRecorderSection(coordinator)
-            "power" -> PowerAndUnlockSection(coordinator)
             else -> {
 
         // Live Text Input Box

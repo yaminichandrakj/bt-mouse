@@ -45,7 +45,7 @@ interface InputConnection {
     fun sendPenEvent(action: String, xRatio: Float, yRatio: Float, pressure: Float = 1.0f, isEraser: Boolean = false) {}
 
     val mediaStatus: StateFlow<com.btmouse.app.data.MediaStatus>? get() = null
-    fun queryMedia() {}
+    fun queryMedia(includePreview: Boolean = false) {}
     fun sendMediaSeek(position: Float) {}
     fun sendMediaToggle() {}
     fun sendMediaNext() {}

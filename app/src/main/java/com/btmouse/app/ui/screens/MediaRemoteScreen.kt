@@ -1,10 +1,12 @@
 package com.btmouse.app.ui.screens
 
 import android.view.HapticFeedbackConstants
-import androidx.compose.animation.AnimatedVisibility
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,10 +61,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,6 +96,7 @@ fun MediaRemoteScreen(
     val isConnected by coordinator.isConnected.collectAsState()
     val volumeNavigation by settings.presentationVolumeNavigation.collectAsState()
     val view = LocalView.current
+    var previewEnabled by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         settings.setMediaRemoteVisible(true)
@@ -102,10 +104,10 @@ fun MediaRemoteScreen(
     }
 
     // Periodically poll PC media state while on this screen
-    LaunchedEffect(isConnected) {
+    LaunchedEffect(isConnected, previewEnabled, mediaStatus.artworkBase64) {
         while (true) {
             if (isConnected) {
-                coordinator.queryMedia()
+                coordinator.queryMedia(includePreview = previewEnabled && mediaStatus.artworkBase64.isEmpty())
             }
             delay(1000)
         }
@@ -126,6 +128,25 @@ fun MediaRemoteScreen(
 
     var isScrubbing by remember { mutableStateOf(false) }
     var scrubbedPos by remember { mutableFloatStateOf(0f) }
+    var isVolumeScrubbing by remember { mutableStateOf(false) }
+    var volumeDraft by remember { mutableFloatStateOf(mediaStatus.volume) }
+    var pendingVolumeTarget by remember { mutableStateOf<Float?>(null) }
+    LaunchedEffect(mediaStatus.volume, pendingVolumeTarget, isVolumeScrubbing) {
+        val target = pendingVolumeTarget
+        if (isVolumeScrubbing) return@LaunchedEffect
+        if (target == null) {
+            volumeDraft = mediaStatus.volume
+        } else if (kotlin.math.abs(mediaStatus.volume - target) < 0.02f) {
+            volumeDraft = mediaStatus.volume
+            pendingVolumeTarget = null
+        } else {
+            delay(1800)
+            if (pendingVolumeTarget == target) {
+                pendingVolumeTarget = null
+                volumeDraft = mediaStatus.volume
+            }
+        }
+    }
 
     val activePos = if (isScrubbing) scrubbedPos else mediaStatus.position
     val totalDuration = maxOf(1f, mediaStatus.duration)
@@ -158,6 +179,12 @@ fun MediaRemoteScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val artworkBitmap = remember(mediaStatus.artworkBase64) {
+                        runCatching {
+                            val bytes = Base64.decode(mediaStatus.artworkBase64, Base64.DEFAULT)
+                            if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                        }.getOrNull()
+                    }
                     Box(
                         modifier = Modifier
                             .size(54.dp)
@@ -169,12 +196,16 @@ fun MediaRemoteScreen(
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = "Music",
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        if (previewEnabled && artworkBitmap != null) {
+                            Image(bitmap = artworkBitmap, contentDescription = "Playing media artwork", modifier = Modifier.fillMaxSize())
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.MusicNote,
+                                contentDescription = "Music",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -208,13 +239,27 @@ fun MediaRemoteScreen(
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = if (isPlaying) "PLAYING" else (if (mediaStatus.hasMedia) "PAUSED" else "IDLE"),
+                            text = when (mediaStatus.status.lowercase()) {
+                                "playing" -> "PLAYING"
+                                "paused" -> "PAUSED"
+                                "stopped" -> if (mediaStatus.hasMedia) "STOPPED" else "IDLE"
+                                else -> if (mediaStatus.hasMedia) mediaStatus.status.uppercase() else "IDLE"
+                            },
                             color = if (isPlaying) AccentEmerald else TextMuted,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             softWrap = false
                         )
                     }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Show playing media artwork", color = TextSecondary, fontSize = 11.sp)
+                    Switch(checked = previewEnabled, onCheckedChange = { previewEnabled = it })
                 }
 
                 // Usable Timeline / Progression Scrubber
@@ -405,8 +450,8 @@ fun MediaRemoteScreen(
                     }
 
                     Text(
-                        text = if (mediaStatus.isMuted) "MUTED" else "${(mediaStatus.volume * 100).toInt()}%",
-                        color = if (mediaStatus.isMuted) AccentRose else AccentCyan,
+                        text = if (!mediaStatus.volumeAvailable) "UNAVAILABLE" else if (mediaStatus.isMuted) "MUTED" else "${(volumeDraft * 100).toInt()}%",
+                        color = if (!mediaStatus.volumeAvailable || mediaStatus.isMuted) AccentRose else AccentCyan,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -414,9 +459,15 @@ fun MediaRemoteScreen(
 
                 // Volume Slider
                 Slider(
-                    value = mediaStatus.volume,
+                    value = volumeDraft,
                     onValueChange = { newVol ->
-                        coordinator.setVolume(newVol)
+                        isVolumeScrubbing = true
+                        volumeDraft = newVol
+                    },
+                    onValueChangeFinished = {
+                        isVolumeScrubbing = false
+                        pendingVolumeTarget = volumeDraft
+                        coordinator.setVolume(volumeDraft)
                     },
                     valueRange = 0f..1f,
                     colors = SliderDefaults.colors(
@@ -426,6 +477,14 @@ fun MediaRemoteScreen(
                     ),
                     modifier = Modifier.fillMaxWidth().height(26.dp)
                 )
+
+                if (!mediaStatus.volumeAvailable) {
+                    Text(
+                        text = mediaStatus.volumeError.ifBlank { "Windows master volume is unavailable." },
+                        color = AccentRose,
+                        fontSize = 11.sp
+                    )
+                }
 
                 // Volume Quick Presets
                 Row(
@@ -450,6 +509,8 @@ fun MediaRemoteScreen(
                         OutlinedButton(
                             onClick = {
                                 performHaptic()
+                                volumeDraft = preset
+                                pendingVolumeTarget = preset
                                 coordinator.setVolume(preset)
                                 if (mediaStatus.isMuted) coordinator.setMute(false)
                             },

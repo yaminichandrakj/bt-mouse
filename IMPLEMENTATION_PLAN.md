@@ -1,9 +1,9 @@
 # BT Mouse & PC Companion — Implementation Plan
 
-**Plan version:** 2.5
+**Plan version:** 2.6
 **Repository:** `BT Mouse`
 **Status:** Active implementation
-**Updated:** 2026-10-23
+**Updated:** 2026-10-24
 
 ## Product goal
 
@@ -145,3 +145,64 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] Python source is bundled into a single-file executable by PyInstaller; that EXE embeds its Python runtime. The in-app updater updates this bundle. Native Windows UI/runtime migration remains a separate multi-phase project and must retain network/security and updater parity before replacing the current app.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.
+
+## Next release plan — media reliability, Utilities, and long-running device features
+
+**Implementation ownership:** Codex owns implementation and integration. Antigravity is not assigned work. Earlier request to use two agents was superseded by the user's instruction to do it all here.
+
+### In progress: v1.3.5 media and navigation fixes
+
+- Initialize COM on each Windows audio-control call; report explicit master-volume availability and error state instead of presenting a fake 50% level as a working control.
+- Keep Android volume changes local while dragging and send one final value at release. Keep the chosen thumb position while the PC acknowledges the change, so background polling cannot fight the gesture.
+- Select the currently Playing media session ahead of stale sessions and show Playing, Paused, Stopped, and Idle distinctly.
+- Add an opt-in media artwork preview through Windows' media-session thumbnail. The OS session API does not expose a protected live video surface; this preview is album/artwork metadata only.
+- Move Quick Apps, task/system stats, camera/microphone, and power controls to a dedicated Tools tab; keep keyboard and numpad in Keys.
+- Do not begin a release until the Android and companion builds pass and the user-visible version is updated together.
+
+**Acceptance:** volume feedback is acknowledged or reports unavailable; slider does not snap while dragging; media status is not guessed as Paused; optional artwork is small and absent from routine status polls; PC utilities are reachable from Tools.
+
+### Phase A: transport supervisor and reconnection
+
+1. Add a `TransportSupervisor` above the existing mode-specific managers. The three interfaces remain independently identifiable: Bluetooth HID for input-only, Bluetooth RFCOMM for companion features, Wi-Fi UDP for LAN features, and authenticated TLS WebSocket for remote access.
+2. Add a capability/health model per candidate transport: authenticated, reachable, round-trip latency, last-good time, feature set, and failure reason. Probe without issuing user input commands.
+3. Select one output route at a time using a stable priority and hysteresis (for example, prefer LAN Wi-Fi when healthy, then RFCOMM, then configured WAN; keep direct HID available as an input fallback). Do not broadcast mouse/key events on every live path because that duplicates actions.
+4. Preserve credentials in Android's protected storage and PC per-user settings; do not put the WAN endpoint secret in QR/discovery. Reuse current authenticated handshakes and define expiry/rotation behavior before auto reconnect.
+5. Add a reconnect state machine with bounded exponential backoff, cancellation on manual disconnect, re-probe after network changes, Bluetooth adapter changes, PC resume, and socket failures. Reset per-session feature state on route change.
+6. On Windows, register an explicit user-controlled launch-at-logon option for the companion and attempt reconnect after resume. Show the chosen active path and recovery state in Connect.
+7. On Android, request opt-in for an ongoing foreground connection service and notification before enabling background recovery. Handle boot and connectivity broadcasts only within current Android background-execution policy; offer a battery-optimization note rather than silently promising always-on behavior.
+
+**Acceptance:** connection state reports the active route and capability; only one route injects an event; sleep, Wi-Fi changes, and transient disconnects recover without a duplicate action; manual disconnect disables retries; users can disable PC/phone background startup.
+
+### Phase B: recordings library and responsive camera/audio
+
+1. Add a bounded PC recording catalog under the existing per-user recordings folder with generated IDs, capture kind, timestamp, duration, media type, file size, and optional thumbnail. Enforce an explicit storage cap and retention/deletion controls.
+2. Implement PC camera video recording with a selected camera, visible recording state, clean stop/finalization, and recovery of interrupted temporary files. Keep snapshots and microphone recordings in the same library.
+3. Add authenticated list, metadata, delete, and chunked-download commands. Use a reliable transport for media transfer; do not put full recordings into UDP or JSON. WAN transfer must remain TLS protected.
+4. Add a phone Library screen for preview, streaming/download progress, playback, deletion, and local cache/storage visibility. Stop or cancel transfers when the active connection changes.
+5. Reduce live-feed latency by measuring capture/encode/send time, maintaining only the newest frame, adapting JPEG resolution and frame rate to observed RTT and transport, and stopping frames when the screen is hidden.
+6. Keep recorded-video transfer distinct from live preview. Use backpressure and bounded queues so a slow phone cannot accumulate unbounded frames or memory.
+
+**Acceptance:** snapshots, microphone audio, and camera video appear in the PC catalog; authorized phone can list and play/download them; deletion and storage caps work; live feed stays responsive on slower transports; no recording is exposed to an unauthenticated peer.
+
+### Phase C: startup, install/update, and security boundaries
+
+- Keep the companion's single-file Windows distribution and self-updater so updates do not require a manual GitHub download. Explain that a PyInstaller executable still embeds the Python runtime; it is not a separate Python install or source-script launch.
+- Improve companion UI rendering with DPI-aware fonts/layout and vector/native controls. Do not trade legibility for a rasterized fixed-size interface.
+- Before enabling background startup, implement signed/validated update staging, safe rollback, clear version display, and a user-visible disable/startup repair path.
+- Do not implement a custom phone-to-Windows password or biometric unlock bridge. Keep the secure desktop protected. Investigate native Windows Hello/passkey/FIDO2 sign-in eligibility for this PC/account; Windows FIDO2 logon has device/account policy constraints, and a companion app cannot bypass them.
+
+**Acceptance:** startup/update toggles are explicit and reversible; old stable installs keep upgrading in place; no password or biometric secret crosses the app protocol; unsupported Windows sign-in scenarios are reported clearly.
+
+### Execution and release sequence
+
+1. Finish the in-progress v1.3.5 media and Tools changes; compile Android and companion artifacts and review the full diff.
+2. Ship media/navigation reliability separately from the larger multipath and recording changes so failures can be isolated and rolled back.
+3. Implement Phase A with transport-state/UI work first and exercise it under Wi-Fi loss, Bluetooth loss, PC sleep/resume, and manual disconnect before enabling startup by default.
+4. Implement Phase B in authenticated catalog/listing/transfer slices, then add video capture and phone playback after bounded transfer behavior is established.
+5. Implement Phase C only after signed update/rollback behavior and Android foreground-service consent are integrated.
+6. For each release: update Android and PC version identity together, push source, require GitHub Actions Android/Windows builds to pass, then tag and publish both assets. Device-dependent results remain marked pending until verified on real devices.
+
+### External constraints and design references
+
+- Windows media sessions can expose playback state and thumbnail artwork but do not provide a general live capture of another app's protected video surface: [GlobalSystemMediaTransportControlsSession](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssession?view=winrt-26100), [media thumbnail property](https://learn.microsoft.com/nl-be/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessionmediaproperties.thumbnail?view=winrt-22000).
+- Windows passkeys support companion-device flows in the native sign-in experience; FIDO2 Windows logon depends on eligible Entra device/account policy: [Windows passkeys](https://learn.microsoft.com/windows/security/identity-protection/passkeys/), [FIDO2 security-key sign-in](https://learn.microsoft.com/en-us/azure/active-directory/authentication/howto-authentication-passwordless-security-key-windows).

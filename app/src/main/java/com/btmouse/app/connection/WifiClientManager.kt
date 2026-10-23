@@ -157,6 +157,7 @@ class WifiClientManager(
                     val duration = json.get("duration")?.asFloat ?: 0f
                     val volume = json.get("volume")?.asFloat ?: 0.5f
                     val muted = (json.get("is_muted") ?: json.get("muted"))?.asBoolean ?: false
+                    val old = _mediaStatus.value
 
                     _mediaStatus.value = MediaStatus(
                         hasMedia = hasMedia,
@@ -167,7 +168,10 @@ class WifiClientManager(
                         position = position,
                         duration = duration,
                         volume = volume,
-                        isMuted = muted
+                        isMuted = muted,
+                        artworkBase64 = json.get("artwork")?.asString ?: if (old.title == title && old.artist == artist) old.artworkBase64 else "",
+                        volumeAvailable = json.get("volume_available")?.asBoolean ?: true,
+                        volumeError = json.get("volume_error")?.asString ?: ""
                     )
                 }
                 "system_stats_response" -> {
@@ -473,8 +477,8 @@ class WifiClientManager(
         )
     }
 
-    override fun queryMedia() {
-        sendPacket(mapOf("type" to "media_query"))
+    override fun queryMedia(includePreview: Boolean) {
+        sendPacket(mapOf("type" to "media_query", "include_preview" to includePreview))
     }
 
     override fun sendMediaSeek(position: Float) {
