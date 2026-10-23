@@ -47,6 +47,7 @@ if IS_WINDOWS:
     MOUSEEVENTF_MIDDLEUP = 0x0040
     MOUSEEVENTF_WHEEL = 0x0800
     MOUSEEVENTF_HWHEEL = 0x1000
+    MOUSEEVENTF_ABSOLUTE = 0x8000
 
 try:
     from pynput.mouse import Controller as MouseController, Button
@@ -93,6 +94,205 @@ if HAS_PYNPUT:
         0x58: Key.enter,
     }
 
+
+class MediaController:
+    """Windows native media transport & master volume controller"""
+    def __init__(self, fallback_media_func=None):
+        self.fallback_media_func = fallback_media_func
+        self.has_winrt = False
+        self.has_pycaw = False
+        self.last_state = {
+            "has_media": False,
+            "title": "",
+            "artist": "",
+            "album": "",
+            "status": "Stopped",
+            "position": 0.0,
+            "duration": 0.0,
+            "volume": 0.5,
+            "muted": False
+        }
+        self._init_backends()
+
+    def _init_backends(self):
+        if IS_WINDOWS:
+            try:
+                import winrt.windows.media.control as wmc
+                self.wmc = wmc
+                self.has_winrt = True
+            except Exception:
+                self.has_winrt = False
+
+            try:
+                from pycaw.pycaw import AudioUtilities
+                self.audio_utilities = AudioUtilities
+                self.has_pycaw = True
+            except Exception:
+                self.has_pycaw = False
+
+    def get_volume(self):
+        if self.has_pycaw:
+            try:
+                speakers = self.audio_utilities.GetSpeakers()
+                vol = speakers.EndpointVolume
+                return vol.GetMasterVolumeLevelScalar(), bool(vol.GetMute())
+            except Exception:
+                pass
+        return 0.5, False
+
+    def set_volume(self, scalar):
+        if self.has_pycaw:
+            try:
+                speakers = self.audio_utilities.GetSpeakers()
+                vol = speakers.EndpointVolume
+                val = max(0.0, min(1.0, float(scalar)))
+                vol.SetMasterVolumeLevelScalar(val, None)
+                self.last_state["volume"] = round(val, 2)
+                return True
+            except Exception:
+                pass
+        return False
+
+    def set_mute(self, muted):
+        if self.has_pycaw:
+            try:
+                speakers = self.audio_utilities.GetSpeakers()
+                vol = speakers.EndpointVolume
+                vol.SetMute(1 if muted else 0, None)
+                self.last_state["muted"] = bool(muted)
+                return True
+            except Exception:
+                pass
+        return False
+
+    def get_media_state(self):
+        vol, muted = self.get_volume()
+        self.last_state["volume"] = round(vol, 2)
+        self.last_state["muted"] = muted
+
+        if self.has_winrt:
+            try:
+                import asyncio
+
+                async def _query():
+                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+                    session = mgr.get_current_session()
+                    if session:
+                        props = await session.try_get_media_properties_async()
+                        info = session.get_playback_info()
+                        timeline = session.get_timeline_properties()
+                        status_map = {0: "Closed", 1: "Opened", 2: "Changing", 3: "Stopped", 4: "Paused", 5: "Playing"}
+                        status_str = status_map.get(int(info.playback_status), "Playing")
+                        pos_sec = timeline.position.total_seconds() if timeline and timeline.position else 0.0
+                        end_sec = timeline.end_time.total_seconds() if timeline and timeline.end_time else 0.0
+                        return {
+                            "has_media": True,
+                            "title": props.title or "Unknown Track",
+                            "artist": props.artist or "Unknown Artist",
+                            "album": props.album_title or "",
+                            "status": status_str,
+                            "position": round(pos_sec, 1),
+                            "duration": round(end_sec, 1),
+                            "volume": round(vol, 2),
+                            "muted": muted
+                        }
+                    return None
+
+                res = asyncio.run(_query())
+                if res:
+                    self.last_state.update(res)
+                    return self.last_state
+                else:
+                    self.last_state["has_media"] = False
+                    self.last_state["status"] = "NoMedia"
+            except Exception:
+                pass
+        return self.last_state
+
+    def seek(self, seconds):
+        if self.has_winrt:
+            try:
+                import asyncio
+                import datetime
+
+                async def _seek():
+                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+                    session = mgr.get_current_session()
+                    if session:
+                        delta = datetime.timedelta(seconds=float(seconds))
+                        await session.try_change_playback_position_async(delta)
+                        return True
+                    return False
+
+                return asyncio.run(_seek())
+            except Exception:
+                pass
+        return False
+
+    def toggle_play_pause(self):
+        if self.has_winrt:
+            try:
+                import asyncio
+
+                async def _toggle():
+                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+                    session = mgr.get_current_session()
+                    if session:
+                        await session.try_toggle_play_pause_async()
+                        return True
+                    return False
+
+                if asyncio.run(_toggle()):
+                    return True
+            except Exception:
+                pass
+        if self.fallback_media_func:
+            self.fallback_media_func(0xCD)
+        return True
+
+    def next_track(self):
+        if self.has_winrt:
+            try:
+                import asyncio
+
+                async def _next():
+                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+                    session = mgr.get_current_session()
+                    if session:
+                        await session.try_skip_next_async()
+                        return True
+                    return False
+
+                if asyncio.run(_next()):
+                    return True
+            except Exception:
+                pass
+        if self.fallback_media_func:
+            self.fallback_media_func(0xB5)
+        return True
+
+    def prev_track(self):
+        if self.has_winrt:
+            try:
+                import asyncio
+
+                async def _prev():
+                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+                    session = mgr.get_current_session()
+                    if session:
+                        await session.try_skip_previous_async()
+                        return True
+                    return False
+
+                if asyncio.run(_prev()):
+                    return True
+            except Exception:
+                pass
+        if self.fallback_media_func:
+            self.fallback_media_func(0xB6)
+        return True
+
+
 class Server:
     def __init__(self, port=53530, discovery_port=53535):
         ensure_interactive_desktop()
@@ -119,6 +319,7 @@ class Server:
         self.packets_received = 0
         self.last_log_time = 0
         self.connected_client = None
+        self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
@@ -266,32 +467,64 @@ class Server:
                     self.last_buttons = btn
 
         elif cmd_type == "pen":
-            # Tablet Drawing / Writing Pad mode
+            # Tablet Drawing / Writing Pad mode (1:1 Touchscreen & Stylus replacement)
             action = data.get("action")  # "down", "move", "up"
             x_ratio = float(data.get("x", 0.0))
             y_ratio = float(data.get("y", 0.0))
             is_eraser = bool(data.get("eraser", False))
 
             if IS_WINDOWS:
-                sw = u32.GetSystemMetrics(0)
-                sh = u32.GetSystemMetrics(1)
-                target_x = max(0, min(sw - 1, int(x_ratio * sw)))
-                target_y = max(0, min(sh - 1, int(y_ratio * sh)))
-
-                u32.SetCursorPos(target_x, target_y)
+                norm_x = int(max(0.0, min(1.0, x_ratio)) * 65535)
+                norm_y = int(max(0.0, min(1.0, y_ratio)) * 65535)
 
                 btn_down = MOUSEEVENTF_RIGHTDOWN if is_eraser else MOUSEEVENTF_LEFTDOWN
                 btn_up = MOUSEEVENTF_RIGHTUP if is_eraser else MOUSEEVENTF_LEFTUP
 
                 if action == "down":
+                    u32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
                     u32.mouse_event(btn_down, 0, 0, 0, 0)
+                elif action == "move":
+                    u32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
                 elif action == "up":
                     u32.mouse_event(btn_up, 0, 0, 0, 0)
             elif self.mouse:
                 if action == "down":
-                    self.mouse.press(Button.left)
+                    self.mouse.press(Button.right if is_eraser else Button.left)
                 elif action == "up":
-                    self.mouse.release(Button.left)
+                    self.mouse.release(Button.right if is_eraser else Button.left)
+
+        elif cmd_type == "media_query":
+            # Mobile app querying live media status, track title, progression, and volume
+            if addr and self.sock:
+                state = self.media_controller.get_media_state()
+                response = {"type": "media_status"}
+                response.update(state)
+                try:
+                    payload = json.dumps(response).encode("utf-8")
+                    self.sock.sendto(payload, addr)
+                except Exception:
+                    pass
+
+        elif cmd_type == "media_seek":
+            pos = float(data.get("position", 0.0))
+            self.media_controller.seek(pos)
+
+        elif cmd_type == "media_toggle":
+            self.media_controller.toggle_play_pause()
+
+        elif cmd_type == "media_next":
+            self.media_controller.next_track()
+
+        elif cmd_type == "media_prev":
+            self.media_controller.prev_track()
+
+        elif cmd_type == "set_volume":
+            vol = float(data.get("volume", 0.5))
+            self.media_controller.set_volume(vol)
+
+        elif cmd_type == "set_mute":
+            muted = bool(data.get("mute", False))
+            self.media_controller.set_mute(muted)
 
         elif cmd_type == "text":
             text = data.get("text", "")

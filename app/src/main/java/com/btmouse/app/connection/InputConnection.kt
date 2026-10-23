@@ -15,4 +15,13 @@ interface InputConnection {
     fun sendMediaKey(usageCode: Int)
     fun sendText(text: String)
     fun sendPenEvent(action: String, xRatio: Float, yRatio: Float, pressure: Float = 1.0f, isEraser: Boolean = false) {}
+
+    val mediaStatus: StateFlow<com.btmouse.app.data.MediaStatus>? get() = null
+    fun queryMedia() {}
+    fun sendMediaSeek(position: Float) {}
+    fun sendMediaToggle() {}
+    fun sendMediaNext() {}
+    fun sendMediaPrev() {}
+    fun setVolume(volume: Float) {}
+    fun setMute(mute: Boolean) {}
 }

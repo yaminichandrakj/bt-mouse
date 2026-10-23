@@ -1,6 +1,7 @@
 package com.btmouse.app.ui.screens
 
 import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,26 +23,45 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Slideshow
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeDown
 import androidx.compose.material.icons.filled.VolumeMute
+import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
@@ -49,13 +69,19 @@ import com.btmouse.app.data.HidConstants
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.KeyButton
 import com.btmouse.app.ui.theme.AccentCyan
+import com.btmouse.app.ui.theme.AccentEmerald
+import com.btmouse.app.ui.theme.AccentRose
+import com.btmouse.app.ui.theme.ButtonDark
 import com.btmouse.app.ui.theme.DarkBackground
 import com.btmouse.app.ui.theme.DarkBorder
 import com.btmouse.app.ui.theme.DarkSurface
 import com.btmouse.app.ui.theme.DarkSurfaceVariant
 import com.btmouse.app.ui.theme.PrimaryIndigo
+import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
+import java.util.Locale
 
 @Composable
 fun MediaRemoteScreen(
@@ -63,7 +89,19 @@ fun MediaRemoteScreen(
     settings: SettingsRepository
 ) {
     val hapticsEnabled by settings.hapticFeedback.collectAsState()
+    val mediaStatus by coordinator.mediaStatus.collectAsState()
+    val isConnected by coordinator.isConnected.collectAsState()
     val view = LocalView.current
+
+    // Periodically poll PC media state while on this screen
+    LaunchedEffect(isConnected) {
+        while (true) {
+            if (isConnected) {
+                coordinator.queryMedia()
+            }
+            delay(1000)
+        }
+    }
 
     fun performHaptic() {
         if (hapticsEnabled) {
@@ -71,17 +109,32 @@ fun MediaRemoteScreen(
         }
     }
 
+    fun formatSeconds(seconds: Float): String {
+        val totalSec = seconds.toInt().coerceAtLeast(0)
+        val m = totalSec / 60
+        val s = totalSec % 60
+        return String.format(Locale.US, "%02d:%02d", m, s)
+    }
+
+    var isScrubbing by remember { mutableStateOf(false) }
+    var scrubbedPos by remember { mutableFloatStateOf(0f) }
+
+    val activePos = if (isScrubbing) scrubbedPos else mediaStatus.position
+    val totalDuration = maxOf(1f, mediaStatus.duration)
+
+    val isPlaying = mediaStatus.status.equals("Playing", ignoreCase = true)
+
     val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(DarkBackground)
-            .padding(16.dp)
+            .padding(14.dp)
             .verticalScroll(scrollState),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Section 1: Media Player Card
+        // Section 1: Now Playing & Progression Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -89,97 +142,223 @@ fun MediaRemoteScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(
-                modifier = Modifier.padding(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text(
-                    text = "Media Player Control",
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Volume row
+                // Track Info Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MediaCircleButton(
-                        icon = Icons.Default.VolumeDown,
-                        label = "Vol -",
-                        onClick = {
-                            performHaptic()
-                            coordinator.sendMediaKey(HidConstants.CONSUMER_VOLUME_DOWN)
-                        }
-                    )
-                    MediaCircleButton(
-                        icon = Icons.Default.VolumeMute,
-                        label = "Mute",
-                        onClick = {
-                            performHaptic()
-                            coordinator.sendMediaKey(HidConstants.CONSUMER_MUTE)
-                        }
-                    )
-                    MediaCircleButton(
-                        icon = Icons.Default.VolumeUp,
-                        label = "Vol +",
-                        onClick = {
-                            performHaptic()
-                            coordinator.sendMediaKey(HidConstants.CONSUMER_VOLUME_UP)
-                        }
-                    )
-                }
-
-                // Playback row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    MediaCircleButton(
-                        icon = Icons.Default.FastRewind,
-                        label = "Prev",
-                        onClick = {
-                            performHaptic()
-                            coordinator.sendMediaKey(HidConstants.CONSUMER_SCAN_PREV)
-                        }
-                    )
-
-                    // Large Play / Pause button
                     Box(
                         modifier = Modifier
-                            .size(76.dp)
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(PrimaryIndigo, AccentCyan.copy(alpha = 0.5f))
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "Music",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (mediaStatus.hasMedia && mediaStatus.title.isNotEmpty()) mediaStatus.title else "No Media Playing",
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = if (mediaStatus.hasMedia && mediaStatus.artist.isNotEmpty()) mediaStatus.artist else "Windows Media Session",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    // Playback Status Pill
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isPlaying) AccentEmerald.copy(alpha = 0.15f) else PrimaryIndigo.copy(alpha = 0.2f))
+                            .border(1.dp, if (isPlaying) AccentEmerald.copy(alpha = 0.4f) else DarkBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (isPlaying) "PLAYING" else (if (mediaStatus.hasMedia) "PAUSED" else "IDLE"),
+                            color = if (isPlaying) AccentEmerald else TextMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            softWrap = false
+                        )
+                    }
+                }
+
+                // Usable Timeline / Progression Scrubber
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Slider(
+                        value = activePos.coerceIn(0f, totalDuration),
+                        onValueChange = {
+                            isScrubbing = true
+                            scrubbedPos = it
+                        },
+                        onValueChangeFinished = {
+                            coordinator.sendMediaSeek(scrubbedPos)
+                            isScrubbing = false
+                        },
+                        valueRange = 0f..totalDuration,
+                        colors = SliderDefaults.colors(
+                            thumbColor = AccentCyan,
+                            activeTrackColor = AccentCyan,
+                            inactiveTrackColor = DarkSurfaceVariant
+                        ),
+                        modifier = Modifier.fillMaxWidth().height(26.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = formatSeconds(activePos),
+                            color = AccentCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = if (mediaStatus.duration > 0f) formatSeconds(mediaStatus.duration) else "--:--",
+                            color = TextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                // Sleek Playback Buttons Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Replay 10s
+                    IconButton(
+                        onClick = {
+                            performHaptic()
+                            coordinator.sendMediaSeek(maxOf(0f, activePos - 10f))
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
                             .clip(CircleShape)
-                            .background(PrimaryIndigo)
+                            .background(ButtonDark)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Replay10,
+                            contentDescription = "Back 10s",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    // Previous Track
+                    IconButton(
+                        onClick = {
+                            performHaptic()
+                            coordinator.sendMediaPrev()
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(ButtonDark)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipPrevious,
+                            contentDescription = "Previous Track",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    // Large Glowing Play/Pause FAB
+                    Box(
+                        modifier = Modifier
+                            .size(68.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.radialGradient(
+                                    colors = listOf(PrimaryIndigo, Color(0xFF3B38A6))
+                                )
+                            )
+                            .border(2.dp, AccentCyan.copy(alpha = 0.6f), CircleShape)
                             .clickable {
                                 performHaptic()
-                                coordinator.sendMediaKey(HidConstants.CONSUMER_PLAY_PAUSE)
+                                coordinator.sendMediaToggle()
                             },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Play/Pause",
-                            tint = TextPrimary,
-                            modifier = Modifier.size(42.dp)
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp)
                         )
                     }
 
-                    MediaCircleButton(
-                        icon = Icons.Default.FastForward,
-                        label = "Next",
+                    // Next Track
+                    IconButton(
                         onClick = {
                             performHaptic()
-                            coordinator.sendMediaKey(HidConstants.CONSUMER_SCAN_NEXT)
-                        }
-                    )
+                            coordinator.sendMediaNext()
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(ButtonDark)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipNext,
+                            contentDescription = "Next Track",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+
+                    // Forward 10s
+                    IconButton(
+                        onClick = {
+                            performHaptic()
+                            coordinator.sendMediaSeek(minOf(totalDuration, activePos + 10f))
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(ButtonDark)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Forward10,
+                            contentDescription = "Forward 10s",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
         }
 
-        // Section 2: Presentation Clicker Card
+        // Section 2: Sleek Master Volume Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -187,121 +366,163 @@ fun MediaRemoteScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val volIcon = when {
+                            mediaStatus.isMuted || mediaStatus.volume <= 0.01f -> Icons.Default.VolumeOff
+                            mediaStatus.volume < 0.33f -> Icons.Default.VolumeMute
+                            mediaStatus.volume < 0.66f -> Icons.Default.VolumeDown
+                            else -> Icons.Default.VolumeUp
+                        }
+                        Icon(
+                            imageVector = volIcon,
+                            contentDescription = "Volume",
+                            tint = if (mediaStatus.isMuted) AccentRose else AccentCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "PC Master Volume",
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Text(
+                        text = if (mediaStatus.isMuted) "MUTED" else "${(mediaStatus.volume * 100).toInt()}%",
+                        color = if (mediaStatus.isMuted) AccentRose else AccentCyan,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // Volume Slider
+                Slider(
+                    value = mediaStatus.volume,
+                    onValueChange = { newVol ->
+                        coordinator.setVolume(newVol)
+                    },
+                    valueRange = 0f..1f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = AccentCyan,
+                        activeTrackColor = AccentCyan,
+                        inactiveTrackColor = DarkSurfaceVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(26.dp)
+                )
+
+                // Volume Quick Presets
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            performHaptic()
+                            coordinator.setMute(!mediaStatus.isMuted)
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (mediaStatus.isMuted) AccentRose else TextSecondary
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (mediaStatus.isMuted) "Unmute" else "Mute", fontSize = 11.sp, softWrap = false, maxLines = 1)
+                    }
+
+                    listOf(0.25f, 0.50f, 0.75f, 1.0f).forEach { preset ->
+                        OutlinedButton(
+                            onClick = {
+                                performHaptic()
+                                coordinator.setVolume(preset)
+                                if (mediaStatus.isMuted) coordinator.setMute(false)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("${(preset * 100).toInt()}%", color = TextPrimary, fontSize = 11.sp, softWrap = false, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section 3: Presentation Clicker Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.Slideshow, contentDescription = null, tint = AccentCyan)
+                    Icon(imageVector = Icons.Default.Slideshow, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(20.dp))
                     Text(
                         text = "Presentation Remote (Slides)",
                         color = TextPrimary,
-                        fontSize = 16.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
-                // Start & Exit Slideshow
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    KeyButton(
+                        modifier = Modifier.weight(1f),
+                        label = "Previous",
+                        isAccent = true,
+                        hapticsEnabled = hapticsEnabled,
+                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_PAGE_UP, 0) }
+                    )
+                    KeyButton(
+                        modifier = Modifier.weight(1f),
+                        label = "Next Slide",
+                        isAccent = true,
+                        hapticsEnabled = hapticsEnabled,
+                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_PAGE_DOWN, 0) }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     KeyButton(
                         modifier = Modifier.weight(1f),
                         label = "Start (F5)",
-                        isAccent = true,
                         hapticsEnabled = hapticsEnabled,
-                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_F5, 0) },
-                        onUp = {}
+                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_F5, 0) }
                     )
                     KeyButton(
                         modifier = Modifier.weight(1f),
                         label = "Exit (Esc)",
                         hapticsEnabled = hapticsEnabled,
-                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_ESC, 0) },
-                        onUp = {}
-                    )
-                }
-
-                // Big Previous & Next Slide buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    KeyButton(
-                        modifier = Modifier.weight(1f),
-                        label = "◄ Prev Slide",
-                        minHeight = 80.dp,
-                        fontSize = 16.sp,
-                        hapticsEnabled = hapticsEnabled,
-                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_PAGE_UP, 0) },
-                        onUp = {}
+                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_ESC, 0) }
                     )
                     KeyButton(
                         modifier = Modifier.weight(1f),
-                        label = "Next Slide ►",
-                        minHeight = 80.dp,
-                        fontSize = 16.sp,
-                        isAccent = true,
+                        label = "Black (B)",
                         hapticsEnabled = hapticsEnabled,
-                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_PAGE_DOWN, 0) },
-                        onUp = {}
-                    )
-                }
-
-                // Screen Blanking keys
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    KeyButton(
-                        modifier = Modifier.weight(1f),
-                        label = "Black Screen (B)",
-                        hapticsEnabled = hapticsEnabled,
-                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_B, 0) },
-                        onUp = {}
-                    )
-                    KeyButton(
-                        modifier = Modifier.weight(1f),
-                        label = "White Screen (W)",
-                        hapticsEnabled = hapticsEnabled,
-                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_W, 0) },
-                        onUp = {}
+                        onDown = { coordinator.sendKeyStroke(HidConstants.KEY_B, 0) }
                     )
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun MediaCircleButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .size(54.dp)
-                .clip(CircleShape)
-                .background(DarkSurfaceVariant)
-                .border(1.dp, DarkBorder, CircleShape)
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = TextPrimary,
-                modifier = Modifier.size(24.dp)
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(text = label, color = TextSecondary, fontSize = 11.sp)
     }
 }

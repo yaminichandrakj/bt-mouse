@@ -85,7 +85,9 @@ fun MouseButton(
             text = label,
             color = if (isPressed) TextPrimary else TextSecondary,
             fontWeight = if (isPressed) FontWeight.Bold else FontWeight.SemiBold,
-            fontSize = 15.sp
+            fontSize = 14.sp,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }

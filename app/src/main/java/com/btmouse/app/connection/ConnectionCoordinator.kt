@@ -102,6 +102,49 @@ class ConnectionCoordinator(
         currentInputConnection.sendPenEvent(action, xRatio, yRatio, pressure, isEraser)
     }
 
+    override val mediaStatus: StateFlow<com.btmouse.app.data.MediaStatus>
+        get() = wifiClientManager.mediaStatus
+
+    override fun queryMedia() {
+        currentInputConnection.queryMedia()
+    }
+
+    override fun sendMediaSeek(position: Float) {
+        currentInputConnection.sendMediaSeek(position)
+    }
+
+    override fun sendMediaToggle() {
+        if (settings.connectionMode.value == ConnectionMode.WIFI) {
+            wifiClientManager.sendMediaToggle()
+        } else {
+            sendMediaKey(com.btmouse.app.data.HidConstants.CONSUMER_PLAY_PAUSE)
+        }
+    }
+
+    override fun sendMediaNext() {
+        if (settings.connectionMode.value == ConnectionMode.WIFI) {
+            wifiClientManager.sendMediaNext()
+        } else {
+            sendMediaKey(com.btmouse.app.data.HidConstants.CONSUMER_SCAN_NEXT)
+        }
+    }
+
+    override fun sendMediaPrev() {
+        if (settings.connectionMode.value == ConnectionMode.WIFI) {
+            wifiClientManager.sendMediaPrev()
+        } else {
+            sendMediaKey(com.btmouse.app.data.HidConstants.CONSUMER_SCAN_PREV)
+        }
+    }
+
+    override fun setVolume(volume: Float) {
+        currentInputConnection.setVolume(volume)
+    }
+
+    override fun setMute(mute: Boolean) {
+        currentInputConnection.setMute(mute)
+    }
+
     fun cleanup() {
         bluetoothHidManager.cleanup()
         wifiClientManager.cleanup()

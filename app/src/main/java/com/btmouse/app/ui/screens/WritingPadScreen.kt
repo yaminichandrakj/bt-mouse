@@ -174,7 +174,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isAbsoluteMapping,
                 onClick = { isAbsoluteMapping = true },
-                label = { Text("1:1 Monitor", fontSize = 11.sp) },
+                label = { Text("1:1 Touchscreen", fontSize = 11.sp, softWrap = false) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -186,7 +186,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = !isAbsoluteMapping,
                 onClick = { isAbsoluteMapping = false },
-                label = { Text("Relative", fontSize = 11.sp) },
+                label = { Text("Relative Pad", fontSize = 11.sp, softWrap = false) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -197,11 +197,38 @@ fun WritingPadScreen(
 
             Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
 
-            // Stylus Only (Palm Rejection) & Eraser Toggles
+            // Tool: Pen vs Eraser
+            FilterChip(
+                selected = !isEraser,
+                onClick = { isEraser = false },
+                label = { Text("✍️ Pen", fontSize = 11.sp, softWrap = false) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            FilterChip(
+                selected = isEraser,
+                onClick = { isEraser = true },
+                label = { Text("🧹 Eraser", fontSize = 11.sp, softWrap = false) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AccentRose.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentRose,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
+
+            // Palm Rejection Toggle
             FilterChip(
                 selected = isStylusOnly,
                 onClick = { isStylusOnly = !isStylusOnly },
-                label = { Text("Palm Reject", fontSize = 11.sp) },
+                label = { Text("Palm Reject", fontSize = 11.sp, softWrap = false) },
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Default.PanTool,
@@ -217,47 +244,6 @@ fun WritingPadScreen(
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
-
-            FilterChip(
-                selected = isEraser,
-                onClick = { isEraser = !isEraser },
-                label = { Text(if (isEraser) "Eraser" else "Pen", fontSize = 11.sp) },
-                leadingIcon = {
-                    Icon(
-                        imageVector = if (isEraser) Icons.Default.AutoFixHigh else Icons.Default.Draw,
-                        contentDescription = null,
-                        modifier = Modifier.size(13.dp),
-                        tint = if (isEraser) AccentRose else AccentCyan
-                    )
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = if (isEraser) AccentRose.copy(alpha = 0.35f) else PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = if (isEraser) AccentRose else AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-
-            Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
-
-            // Color Swatches
-            colors.forEach { c ->
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .clip(CircleShape)
-                        .background(c)
-                        .border(
-                            width = if (selectedColor == c && !isEraser) 2.dp else 0.dp,
-                            color = if (selectedColor == c && !isEraser) TextPrimary else Color.Transparent,
-                            shape = CircleShape
-                        )
-                        .clickable {
-                            selectedColor = c
-                            isEraser = false
-                        }
-                )
-            }
 
             Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
 
@@ -297,7 +283,7 @@ fun WritingPadScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            currentColor = selectedColor,
+            currentColor = if (isEraser) Color.Transparent else AccentCyan,
             currentStrokeWidth = strokeThickness,
             isStylusOnly = isStylusOnly,
             isAbsoluteMapping = isAbsoluteMapping,
@@ -315,7 +301,7 @@ fun WritingPadScreen(
 
         // Bottom Help Card
         Text(
-            text = "💡 Tip: Open Paint, OneNote, Whiteboard, or Photoshop on your PC. Tablet movements & stylus pressure draw directly onto your screen!",
+            text = "💡 Direct touch screen & digitizer for your PC! Draw in OneNote, Paint, or Whiteboard. Toggle 'Eraser' to erase strokes on PC, or tap Undo (Ctrl+Z).",
             color = TextMuted,
             fontSize = 11.sp,
             lineHeight = 15.sp

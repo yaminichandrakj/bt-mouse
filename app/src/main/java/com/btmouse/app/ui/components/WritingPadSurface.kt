@@ -57,11 +57,18 @@ fun WritingPadSurface(
     var lastX by remember { mutableFloatStateOf(0f) }
     var lastY by remember { mutableFloatStateOf(0f) }
 
+    var surfaceWidth by remember { mutableFloatStateOf(1f) }
+    var surfaceHeight by remember { mutableFloatStateOf(1f) }
+
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
             .background(TrackpadBackground)
             .border(1.5.dp, DarkBorder, RoundedCornerShape(16.dp))
+            .androidx.compose.ui.layout.onSizeChanged { size ->
+                surfaceWidth = size.width.toFloat().coerceAtLeast(1f)
+                surfaceHeight = size.height.toFloat().coerceAtLeast(1f)
+            }
             .pointerInteropFilter { motionEvent ->
                 val toolType = motionEvent.getToolType(0)
                 val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
@@ -73,11 +80,9 @@ fun WritingPadSurface(
 
                 val x = motionEvent.x
                 val y = motionEvent.y
-                val width = view.width.toFloat().coerceAtLeast(1f)
-                val height = view.height.toFloat().coerceAtLeast(1f)
 
-                val xRatio = (x / width).coerceIn(0f, 1f)
-                val yRatio = (y / height).coerceIn(0f, 1f)
+                val xRatio = (x / surfaceWidth).coerceIn(0f, 1f)
+                val yRatio = (y / surfaceHeight).coerceIn(0f, 1f)
                 val pressure = motionEvent.pressure.coerceIn(0.1f, 1.0f)
 
                 when (motionEvent.actionMasked) {

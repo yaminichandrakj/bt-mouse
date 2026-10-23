@@ -59,6 +59,9 @@ fun TouchpadSurface(
     var lastTwoFingerY by remember { mutableFloatStateOf(0f) }
     var lastTwoFingerX by remember { mutableFloatStateOf(0f) }
 
+    var accumulatedDx by remember { mutableFloatStateOf(0f) }
+    var accumulatedDy by remember { mutableFloatStateOf(0f) }
+
     var downTime by remember { mutableLongStateOf(0L) }
     var lastTapTime by remember { mutableLongStateOf(0L) }
     var totalMovedDistance by remember { mutableFloatStateOf(0f) }
@@ -93,6 +96,8 @@ fun TouchpadSurface(
                     MotionEvent.ACTION_DOWN -> {
                         downTime = System.currentTimeMillis()
                         totalMovedDistance = 0f
+                        accumulatedDx = 0f
+                        accumulatedDy = 0f
                         maxPointerCount = 1
                         lastX = motionEvent.x
                         lastY = motionEvent.y
@@ -121,13 +126,18 @@ fun TouchpadSurface(
                             val rawDy = currentY - lastY
                             totalMovedDistance += abs(rawDx) + abs(rawDy)
 
-                            // Apply sensitivity
-                            val dx = (rawDx * pointerSpeed).roundToInt()
-                            val dy = (rawDy * pointerSpeed).roundToInt()
+                            // Sub-pixel movement accumulator to prevent rounding micro-jitter
+                            accumulatedDx += rawDx * pointerSpeed
+                            accumulatedDy += rawDy * pointerSpeed
+
+                            val intDx = accumulatedDx.toInt()
+                            val intDy = accumulatedDy.toInt()
 
                             val currentButton = if (isDraggingSelection) HidConstants.MOUSE_BUTTON_LEFT else HidConstants.MOUSE_BUTTON_NONE
-                            if (dx != 0 || dy != 0) {
-                                onMouseMove(dx, dy, currentButton, 0, 0)
+                            if (intDx != 0 || intDy != 0) {
+                                accumulatedDx -= intDx
+                                accumulatedDy -= intDy
+                                onMouseMove(intDx, intDy, currentButton, 0, 0)
                             }
 
                             lastX = currentX

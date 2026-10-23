@@ -7,12 +7,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
@@ -30,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,6 +64,7 @@ sealed class NavigationTab(val title: String, val icon: ImageVector) {
     object WritingPad : NavigationTab("Pen", Icons.Default.Draw)
     object Media : NavigationTab("Media", Icons.Default.PlayCircle)
     object Connect : NavigationTab("Connect", Icons.Default.Wifi)
+    object Settings : NavigationTab("Settings", Icons.Default.Settings)
 }
 
 @Composable
@@ -77,11 +78,11 @@ fun MainScreen(
         NavigationTab.Keyboard,
         NavigationTab.WritingPad,
         NavigationTab.Media,
-        NavigationTab.Connect
+        NavigationTab.Connect,
+        NavigationTab.Settings
     )
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    var isSettingsOpen by remember { mutableStateOf(false) }
     val isConnected by coordinator.isConnected.collectAsState()
 
     Scaffold(
@@ -90,6 +91,7 @@ fun MainScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(DarkSurface)
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -103,39 +105,58 @@ fun MainScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isSettingsOpen) "SETTINGS & UPDATES" else "BT MOUSE & KEYBOARD",
+                        text = when (selectedTabIndex) {
+                            0 -> "BT MOUSE & TRACKPAD"
+                            1 -> "KEYBOARD & SHORTCUTS"
+                            2 -> "PEN & TOUCHSCREEN"
+                            3 -> "MEDIA & VOLUME REMOTE"
+                            4 -> "CONNECTION & QR"
+                            5 -> "SETTINGS & UPDATES"
+                            else -> "BT MOUSE"
+                        },
                         color = TextPrimary,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
                 IconButton(
-                    onClick = { isSettingsOpen = !isSettingsOpen },
+                    onClick = { selectedTabIndex = 5 },
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
-                        imageVector = if (isSettingsOpen) Icons.Default.Close else Icons.Default.Settings,
+                        imageVector = Icons.Default.Settings,
                         contentDescription = "Settings",
-                        tint = if (isSettingsOpen) AccentCyan else TextMuted
+                        tint = if (selectedTabIndex == 5) AccentCyan else TextMuted
                     )
                 }
             }
         },
         bottomBar = {
             NavigationBar(
+                modifier = Modifier.navigationBarsPadding(),
                 containerColor = DarkSurface,
                 tonalElevation = 8.dp
             ) {
                 tabs.forEachIndexed { index, tab ->
                     NavigationBarItem(
-                        selected = !isSettingsOpen && selectedTabIndex == index,
-                        onClick = {
-                            isSettingsOpen = false
-                            selectedTabIndex = index
+                        selected = selectedTabIndex == index,
+                        onClick = { selectedTabIndex = index },
+                        icon = {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.title,
+                                modifier = Modifier.size(20.dp)
+                            )
                         },
-                        icon = { Icon(imageVector = tab.icon, contentDescription = tab.title) },
-                        label = { Text(text = tab.title, fontSize = 11.sp, maxLines = 1, softWrap = false) },
+                        label = {
+                            Text(
+                                text = tab.title,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AccentCyan,
                             selectedTextColor = AccentCyan,
@@ -154,16 +175,13 @@ fun MainScreen(
                 .background(DarkBackground)
                 .padding(innerPadding)
         ) {
-            if (isSettingsOpen) {
-                SettingsScreen(settings, airMouseManager, onClose = { isSettingsOpen = false })
-            } else {
-                when (selectedTabIndex) {
-                    0 -> TouchpadScreen(coordinator, airMouseManager, settings)
-                    1 -> KeyboardScreen(coordinator, settings)
-                    2 -> WritingPadScreen(coordinator, settings)
-                    3 -> MediaRemoteScreen(coordinator, settings)
-                    4 -> ConnectionScreen(coordinator, settings)
-                }
+            when (selectedTabIndex) {
+                0 -> TouchpadScreen(coordinator, airMouseManager, settings)
+                1 -> KeyboardScreen(coordinator, settings)
+                2 -> WritingPadScreen(coordinator, settings)
+                3 -> MediaRemoteScreen(coordinator, settings)
+                4 -> ConnectionScreen(coordinator, settings)
+                5 -> SettingsScreen(settings, airMouseManager, onClose = { selectedTabIndex = 0 })
             }
         }
     }
