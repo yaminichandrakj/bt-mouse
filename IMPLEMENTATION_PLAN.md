@@ -301,8 +301,10 @@ This section supersedes the earlier “Next release plan” where schedules conf
 - A Windows system-visible camera can be implemented through Media Foundation virtual-camera APIs, with Windows build and registration constraints. [MFCreateVirtualCamera](https://learn.microsoft.com/en-us/windows/win32/api/mfvirtualcamera/nf-mfvirtualcamera-mfcreatevirtualcamera)
 - A system-wide Windows virtual microphone is a driver-level feature, not just network audio playback. Microsoft's SYSVAD reference is a WDK audio driver sample that requires a driver signing/deployment strategy. [SYSVAD virtual audio driver sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/sysvad-virtual-audio-device-driver-sample/)
 
-### v1.3.6 scope/status
+### v1.3.6 release status
 
-- **In this release candidate:** WebSocket event-loop isolation and tolerant keepalive; safer APK download finalization and Android install-source permission handoff.
+- **Published:** WebSocket event-loop isolation and tolerant keepalive; safer APK download finalization and Android install-source permission handoff.
+- **GitHub Actions:** run `40008805865` passed the companion regression checks, Android release APK build, Windows companion build, and release publication.
+- **Release assets:** `BT-Mouse-v1.3.6.apk` and `BT-Mouse-Companion.exe` are attached to [GitHub Release v1.3.6](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.6).
 - **Planned after v1.3.6:** latency measurement/query scheduling, full-quality snapshot transfer, recordings library/video, live two-way audio and virtual microphone feasibility, phone camera virtual camera, and multi-transport supervision/startup recovery.
-- Do not claim the later features are implemented until their acceptance criteria and device checks pass.
+- Do not claim the later features are implemented until their acceptance criteria and device checks pass. Real-device hardware validation remains pending.
