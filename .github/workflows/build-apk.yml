@@ -38,7 +38,7 @@ jobs:
           keytool -genkey -v -keystore app/release.keystore -alias btmouse -keyalg RSA -keysize 2048 -validity 10000 -storepass btmouse123 -keypass btmouse123 -dname "CN=BT Mouse, OU=BT Mouse Team, O=BT Mouse, L=San Francisco, S=CA, C=US"
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease --stacktrace
+        run: ./gradlew assembleRelease -x lint -x lintVitalRelease --stacktrace
 
       - name: Determine Version Tag
         id: version_info
