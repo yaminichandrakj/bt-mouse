@@ -74,15 +74,39 @@ import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 
+import android.content.Context
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import com.btmouse.app.ui.theme.AccentRose
+
 @Composable
 fun KeyboardScreen(
     coordinator: ConnectionCoordinator,
     settings: SettingsRepository
 ) {
+    val context = LocalContext.current
     val hapticsEnabled by settings.hapticFeedback.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var isLiveTypingEnabled by remember { mutableStateOf(true) }
-    var isNumpadMode by remember { mutableStateOf(false) }
+    var activeSubTab by remember { mutableStateOf("keys") } // "keys", "apps", "power", "numpad"
 
     // Modifier toggles
     var isCtrlActive by remember { mutableStateOf(false) }
@@ -114,11 +138,9 @@ fun KeyboardScreen(
         val oldText = inputText
         if (newText.length > oldText.length) {
             if (newText.startsWith(oldText)) {
-                // Characters added at the end
                 val added = newText.substring(oldText.length)
                 coordinator.sendText(added)
             } else {
-                // Full replacement (e.g. paste or autocorrect suggestion)
                 repeat(oldText.length) {
                     coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0)
                 }
@@ -126,13 +148,11 @@ fun KeyboardScreen(
             }
         } else if (newText.length < oldText.length) {
             if (oldText.startsWith(newText)) {
-                // Backspaced characters
                 val deletedCount = oldText.length - newText.length
                 repeat(deletedCount) {
                     coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0)
                 }
             } else {
-                // Modified replacement
                 repeat(oldText.length) {
                     coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0)
                 }
@@ -143,6 +163,7 @@ fun KeyboardScreen(
     }
 
     val scrollState = rememberScrollState()
+    val tabScrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
@@ -154,37 +175,58 @@ fun KeyboardScreen(
     ) {
         // Typing Mode & Sub-tab Selector
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(tabScrollState),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(
-                    selected = !isNumpadMode,
-                    onClick = { isNumpadMode = false },
-                    label = { Text("⌨️ Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                FilterChip(
-                    selected = isNumpadMode,
-                    onClick = { isNumpadMode = true },
-                    label = { Text("🔢 Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-            }
+            FilterChip(
+                selected = activeSubTab == "keys",
+                onClick = { activeSubTab = "keys" },
+                label = { Text("⌨️ Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+            FilterChip(
+                selected = activeSubTab == "apps",
+                onClick = { activeSubTab = "apps" },
+                label = { Text("🚀 Quick Apps", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+            FilterChip(
+                selected = activeSubTab == "power",
+                onClick = { activeSubTab = "power" },
+                label = { Text("🔒 Power & Unlock", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+            FilterChip(
+                selected = activeSubTab == "numpad",
+                onClick = { activeSubTab = "numpad" },
+                label = { Text("🔢 Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
 
-            if (!isNumpadMode) {
+            if (activeSubTab == "keys") {
                 FilterChip(
                     selected = isLiveTypingEnabled,
                     onClick = { isLiveTypingEnabled = !isLiveTypingEnabled },
@@ -199,9 +241,11 @@ fun KeyboardScreen(
             }
         }
 
-        if (isNumpadMode) {
-            NumpadScreen(coordinator, settings)
-        } else {
+        when (activeSubTab) {
+            "numpad" -> NumpadScreen(coordinator, settings)
+            "apps" -> QuickAppsSection(coordinator, hapticsEnabled)
+            "power" -> PowerAndUnlockSection(coordinator, context)
+            else -> {
 
         // Live Text Input Box
         Row(
@@ -519,5 +563,317 @@ fun KeyboardScreen(
 
         }
         Spacer(modifier = Modifier.height(20.dp))
+    }
+}
+
+@Composable
+fun QuickAppsSection(
+    coordinator: ConnectionCoordinator,
+    hapticsEnabled: Boolean
+) {
+    var customCommand by remember { mutableStateOf("") }
+
+    val apps = listOf(
+        Triple("OneNote", "onenote", Icons.Default.Edit),
+        Triple("Spotify", "spotify", Icons.Default.MusicNote),
+        Triple("Chrome", "chrome", Icons.Default.Language),
+        Triple("Terminal", "terminal", Icons.Default.Terminal),
+        Triple("Task Manager", "taskmgr", Icons.Default.Speed),
+        Triple("Calculator", "calc", Icons.Default.Bolt),
+        Triple("Explorer", "explorer", Icons.Default.Folder),
+        Triple("Settings", "settings", Icons.Default.Settings),
+        Triple("Notepad", "notepad", Icons.Default.Description),
+        Triple("VS Code", "vscode", Icons.Default.Code),
+        Triple("Edge", "edge", Icons.Default.Language)
+    )
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Quick Launch Apps", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Text("Launch programs on your PC instantly with a single tap.", color = TextSecondary, fontSize = 12.sp)
+
+        // Custom command runner
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = customCommand,
+                onValueChange = { customCommand = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Run custom app, path or URL...", fontSize = 12.sp, color = TextMuted) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AccentCyan,
+                    unfocusedBorderColor = DarkBorder,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedContainerColor = DarkSurfaceVariant,
+                    unfocusedContainerColor = DarkSurfaceVariant
+                ),
+                shape = RoundedCornerShape(12.dp),
+                singleLine = true
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    if (customCommand.isNotBlank()) {
+                        coordinator.launchApp(customCommand.trim())
+                        customCommand = ""
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Run", color = DarkBackground, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // Grid of Apps
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val chunked = apps.chunked(2)
+            chunked.forEach { rowApps ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowApps.forEach { (name, appId, icon) ->
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { coordinator.launchApp(appId) },
+                            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                            shape = RoundedCornerShape(12.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(PrimaryIndigo.copy(alpha = 0.25f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(imageVector = icon, contentDescription = name, tint = AccentCyan, modifier = Modifier.size(20.dp))
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Open on PC", color = TextSecondary, fontSize = 10.sp)
+                                }
+                            }
+                        }
+                    }
+                    if (rowApps.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PowerAndUnlockSection(
+    coordinator: ConnectionCoordinator,
+    context: Context
+) {
+    var showUnlockDialog by remember { mutableStateOf(false) }
+    var showRestartDialog by remember { mutableStateOf(false) }
+    var passwordInput by remember { mutableStateOf("") }
+    var rememberPassword by remember { mutableStateOf(true) }
+
+    val prefs = remember { context.getSharedPreferences("bt_unlock_prefs", Context.MODE_PRIVATE) }
+    var savedPassword by remember { mutableStateOf(prefs.getString("saved_unlock_pw", "") ?: "") }
+
+    if (showUnlockDialog) {
+        AlertDialog(
+            onDismissRequest = { showUnlockDialog = false },
+            title = { Text("Unlock Windows PC", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Enter your Windows password or PIN. The PC companion will automatically wake the screen, enter the credentials, and log you in.",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text("Windows Password / PIN") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentEmerald,
+                            unfocusedBorderColor = DarkBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = rememberPassword,
+                            onCheckedChange = { rememberPassword = it },
+                            colors = CheckboxDefaults.colors(checkedColor = AccentEmerald)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Remember password on device", color = TextPrimary, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (passwordInput.isNotEmpty()) {
+                            if (rememberPassword) {
+                                prefs.edit().putString("saved_unlock_pw", passwordInput).apply()
+                                savedPassword = passwordInput
+                            }
+                            coordinator.unlockWorkstation(passwordInput)
+                            showUnlockDialog = false
+                            passwordInput = ""
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald)
+                ) {
+                    Text("Unlock Now", color = DarkBackground, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnlockDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
+    if (showRestartDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestartDialog = false },
+            title = { Text("Restart PC?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to restart your PC? Unsaved work will be lost.", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coordinator.systemPower("restart")
+                        showRestartDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                ) {
+                    Text("Restart", color = TextPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Text("Desktop Security & Power", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+        // Lock & Unlock Cards
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Lock, contentDescription = null, tint = AccentCyan)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Lock & Unlock Workstation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { coordinator.systemPower("lock") },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose.copy(alpha = 0.85f)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Lock PC", fontWeight = FontWeight.Bold)
+                    }
+
+                    Button(
+                        onClick = {
+                            if (savedPassword.isNotEmpty()) {
+                                coordinator.unlockWorkstation(savedPassword)
+                            } else {
+                                showUnlockDialog = true
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.LockOpen, contentDescription = null, tint = DarkBackground, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (savedPassword.isNotEmpty()) "Unlock (1-Tap)" else "Unlock PC", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (savedPassword.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("PIN/Password saved for 1-tap unlock", color = AccentEmerald, fontSize = 11.sp)
+                        TextButton(onClick = {
+                            passwordInput = savedPassword
+                            showUnlockDialog = true
+                        }) {
+                            Text("Change PIN", fontSize = 11.sp, color = AccentCyan)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sleep & Restart Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = AccentCyan)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Power State Management", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = { coordinator.systemPower("sleep") },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Sleep PC")
+                    }
+
+                    OutlinedButton(
+                        onClick = { showRestartDialog = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Restart PC")
+                    }
+                }
+            }
+        }
     }
 }

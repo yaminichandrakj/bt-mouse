@@ -24,4 +24,8 @@ interface InputConnection {
     fun sendMediaPrev() {}
     fun setVolume(volume: Float) {}
     fun setMute(mute: Boolean) {}
+
+    fun launchApp(appId: String) {}
+    fun systemPower(action: String) {}
+    fun unlockWorkstation(password: String) {}
 }

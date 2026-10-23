@@ -99,8 +99,7 @@ fun ConnectionScreen(
     val statusMessage by coordinator.statusMessage.collectAsState()
     val connectedDevice by coordinator.connectedDeviceName.collectAsState()
 
-    val pairedDevices by coordinator.bluetoothHidManager.pairedDevices.collectAsState()
-    val isBtRegistered by coordinator.bluetoothHidManager.isAppRegistered.collectAsState()
+    val pairedDevices by coordinator.bluetoothRfcommManager.pairedDevices.collectAsState()
 
     val wifiHost by settings.wifiHost.collectAsState()
     val wifiPort by settings.wifiPort.collectAsState()
@@ -286,6 +285,7 @@ fun ConnectionScreen(
                     OutlinedButton(
                         onClick = {
                             if (activeMode == ConnectionMode.BLUETOOTH) {
+                                coordinator.bluetoothRfcommManager.disconnect()
                                 coordinator.bluetoothHidManager.disconnect()
                             } else {
                                 coordinator.wifiClientManager.disconnect()
@@ -311,7 +311,10 @@ fun ConnectionScreen(
             ) {
                 Text("Paired Devices", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Row {
-                    IconButton(onClick = { coordinator.bluetoothHidManager.refreshPairedDevices() }) {
+                    IconButton(onClick = {
+                        coordinator.bluetoothRfcommManager.refreshPairedDevices()
+                        coordinator.bluetoothHidManager.refreshPairedDevices()
+                    }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AccentCyan)
                     }
                     IconButton(onClick = {
@@ -340,7 +343,7 @@ fun ConnectionScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Pair your PC with this phone in Windows Bluetooth Settings. It will detect this phone as a Bluetooth Mouse and Keyboard!",
+                            text = "Pair your PC with this phone in Windows Bluetooth Settings. It will connect via Bluetooth RFCOMM or HID!",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )
@@ -366,7 +369,10 @@ fun ConnectionScreen(
                         DeviceItem(
                             device = device,
                             isCurrentlyConnected = isConnected && connectedDevice?.contains(device.name ?: "") == true,
-                            onConnect = { coordinator.bluetoothHidManager.connectToDevice(device) }
+                            onConnect = {
+                                coordinator.bluetoothRfcommManager.connectToDevice(device)
+                                coordinator.bluetoothHidManager.connectToDevice(device)
+                            }
                         )
                     }
                 }

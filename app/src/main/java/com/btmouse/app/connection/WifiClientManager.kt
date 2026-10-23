@@ -351,6 +351,33 @@ class WifiClientManager(
         )
     }
 
+    override fun launchApp(appId: String) {
+        sendPacket(
+            mapOf(
+                "type" to "launch_app",
+                "app" to appId
+            )
+        )
+    }
+
+    override fun systemPower(action: String) {
+        sendPacket(
+            mapOf(
+                "type" to "system_power",
+                "action" to action
+            )
+        )
+    }
+
+    override fun unlockWorkstation(password: String) {
+        sendPacket(
+            mapOf(
+                "type" to "unlock",
+                "password" to password
+            )
+        )
+    }
+
     fun cleanup() {
         heartbeatJob?.cancel()
         discoveryJob?.cancel()

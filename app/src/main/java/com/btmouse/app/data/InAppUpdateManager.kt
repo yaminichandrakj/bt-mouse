@@ -50,9 +50,9 @@ class InAppUpdateManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 context.packageManager.getPackageInfo(context.packageName, 0)
             }
-            pInfo.versionName?.removeSuffix("-debug") ?: "1.1.3"
+            pInfo.versionName?.removeSuffix("-debug") ?: "1.2.0"
         } catch (e: Exception) {
-            "1.1.3"
+            "1.2.0"
         }
 
     fun openDownloadInBrowser(url: String) {

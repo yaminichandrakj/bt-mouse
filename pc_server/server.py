@@ -293,6 +293,122 @@ class MediaController:
         return True
 
 
+class BluetoothRfcommServer:
+    """Windows native Bluetooth RFCOMM (Serial Port Profile) Service.
+    Allows any paired mobile phone to communicate seamlessly with the PC companion
+    using standard Bluetooth serial without requiring OEM HID emulation permissions.
+    """
+    def __init__(self, command_handler, on_client_callback=None):
+        self.command_handler = command_handler
+        self.on_client_callback = on_client_callback
+        self.running = False
+        self.thread = None
+        self.loop = None
+        self.provider = None
+        self.listener = None
+
+    def start(self):
+        if not IS_WINDOWS:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_thread, daemon=True)
+        self.thread.start()
+
+    def _run_thread(self):
+        try:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            self.loop.run_until_complete(self._async_serve())
+        except Exception as e:
+            print(f"[-] Bluetooth RFCOMM thread note: {e}")
+
+    async def _async_serve(self):
+        try:
+            import winrt.windows.devices.bluetooth.rfcomm as rfcomm
+            import winrt.windows.networking.sockets as sockets
+            import uuid
+
+            srv_uuid = uuid.UUID("00001101-0000-1000-8000-00805F9B34FB")  # SerialPortServiceClass_UUID
+            rfcomm_id = rfcomm.RfcommServiceId.from_uuid(srv_uuid)
+            self.provider = await rfcomm.RfcommServiceProvider.create_async(rfcomm_id)
+            self.listener = sockets.StreamSocketListener()
+
+            def _on_connection(sender, args):
+                sock = args.socket
+                if self.loop and self.loop.is_running():
+                    asyncio.run_coroutine_threadsafe(self._handle_client(sock), self.loop)
+
+            self.listener.add_connection_received(_on_connection)
+            await self.listener.bind_service_name_async(self.provider.service_id.as_string())
+            self.provider.start_advertising(self.listener)
+            print("[*] Bluetooth RFCOMM Service (SPP) Advertising on Windows!")
+            while self.running:
+                await asyncio.sleep(1.0)
+        except Exception as e:
+            print(f"[-] Bluetooth RFCOMM service unavailable: {e}")
+
+    async def _handle_client(self, socket):
+        import winrt.windows.storage.streams as streams
+        remote_name = "Phone"
+        try:
+            remote_name = str(socket.information.remote_host_name.display_name)
+        except Exception:
+            pass
+        print(f"[+] Bluetooth Client connected: {remote_name}")
+        if self.on_client_callback:
+            self.on_client_callback(f"Bluetooth: {remote_name}", True)
+
+        reader = streams.DataReader(socket.input_stream)
+        reader.input_stream_options = streams.InputStreamOptions.PARTIAL
+        writer = streams.DataWriter(socket.output_stream)
+        buffer = ""
+
+        try:
+            while self.running:
+                count = await reader.load_async(2048)
+                if count == 0:
+                    break
+                text = reader.read_string(count)
+                buffer += text
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            def _respond(resp_dict):
+                                try:
+                                    payload = json.dumps(resp_dict) + "\n"
+                                    writer.write_string(payload)
+                                    if self.loop and self.loop.is_running():
+                                        asyncio.run_coroutine_threadsafe(writer.store_async(), self.loop)
+                                except Exception:
+                                    pass
+                            self.command_handler(data, addr=("Bluetooth", 0), responder=_respond)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        finally:
+            print(f"[-] Bluetooth Client disconnected: {remote_name}")
+            if self.on_client_callback:
+                self.on_client_callback(f"Bluetooth: {remote_name}", False)
+            try:
+                socket.close()
+            except Exception:
+                pass
+
+    def stop(self):
+        self.running = False
+        try:
+            if self.provider:
+                self.provider.stop_advertising()
+            if self.listener:
+                self.listener.close()
+        except Exception:
+            pass
+
+
 class Server:
     def __init__(self, port=53530, discovery_port=53535):
         ensure_interactive_desktop()
@@ -321,10 +437,22 @@ class Server:
         self.connected_client = None
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
+        # Bluetooth RFCOMM Server for mobile companion
+        self.bt_server = BluetoothRfcommServer(self.handle_packet, on_client_callback=self._on_bt_client)
+
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
         self.on_client_callback = None
         self.on_status_callback = None
+
+    def _on_bt_client(self, client_name, is_connected):
+        if is_connected:
+            self.connected_client = client_name
+        else:
+            if self.connected_client == client_name:
+                self.connected_client = None
+        if self.on_client_callback:
+            self.on_client_callback(self.connected_client, is_connected)
 
     def get_local_ip(self):
         try:
@@ -397,7 +525,7 @@ class Server:
         thread = threading.Thread(target=listen_discovery, daemon=True)
         thread.start()
 
-    def handle_packet(self, data, addr=None):
+    def handle_packet(self, data, addr=None, responder=None):
         cmd_type = data.get("type")
 
         if self.on_packet_callback:
@@ -495,10 +623,12 @@ class Server:
 
         elif cmd_type == "media_query":
             # Mobile app querying live media status, track title, progression, and volume
-            if addr and self.sock:
-                state = self.media_controller.get_media_state()
-                response = {"type": "media_status"}
-                response.update(state)
+            state = self.media_controller.get_media_state()
+            response = {"type": "media_status"}
+            response.update(state)
+            if responder:
+                responder(response)
+            elif addr and self.sock:
                 try:
                     payload = json.dumps(response).encode("utf-8")
                     self.sock.sendto(payload, addr)
@@ -525,6 +655,18 @@ class Server:
         elif cmd_type == "set_mute":
             muted = bool(data.get("mute", False))
             self.media_controller.set_mute(muted)
+
+        elif cmd_type == "launch_app":
+            app_id = str(data.get("app", "")).lower().strip()
+            self._launch_application(app_id)
+
+        elif cmd_type == "system_power":
+            action = str(data.get("action", "")).lower().strip()
+            self._handle_system_power(action)
+
+        elif cmd_type == "unlock":
+            password = str(data.get("password", ""))
+            self._unlock_workstation(password)
 
         elif cmd_type == "text":
             text = data.get("text", "")
@@ -562,6 +704,68 @@ class Server:
             if self.on_client_callback:
                 self.on_client_callback(self.connected_client, False)
             self.connected_client = None
+
+    def _launch_application(self, app_id):
+        import subprocess
+        apps = {
+            "onenote": "start onenote:",
+            "spotify": "start spotify:",
+            "chrome": "start chrome",
+            "terminal": "start wt || start powershell",
+            "taskmgr": "start taskmgr",
+            "calc": "start calc:",
+            "explorer": "explorer",
+            "settings": "start ms-settings:",
+            "notepad": "start notepad",
+            "vscode": "start code",
+            "edge": "start msedge",
+        }
+        cmd = apps.get(app_id, f"start {app_id}" if app_id else "")
+        if cmd:
+            try:
+                subprocess.Popen(cmd, shell=True)
+                print(f"[+] Launched application: {app_id} ({cmd})")
+            except Exception as e:
+                print(f"[-] Failed to launch application {app_id}: {e}")
+
+    def _handle_system_power(self, action):
+        import subprocess
+        try:
+            if action == "lock":
+                if IS_WINDOWS:
+                    u32.LockWorkStation()
+                    print("[+] Workstation locked")
+            elif action == "sleep":
+                if IS_WINDOWS:
+                    ctypes.windll.PowrProf.SetSuspendState(0, 1, 0)
+                    print("[+] System sleep initiated")
+            elif action == "restart":
+                if IS_WINDOWS:
+                    subprocess.Popen(["shutdown", "/r", "/t", "0"])
+                    print("[+] System restart initiated")
+            elif action == "shutdown":
+                if IS_WINDOWS:
+                    subprocess.Popen(["shutdown", "/s", "/t", "0"])
+                    print("[+] System shutdown initiated")
+        except Exception as e:
+            print(f"[-] Power action error ({action}): {e}")
+
+    def _unlock_workstation(self, password):
+        if not password:
+            return
+        def _do_unlock():
+            try:
+                if self.keyboard:
+                    from pynput.keyboard import Key
+                    self.keyboard.tap(Key.enter)
+                    time.sleep(0.7)
+                    self.keyboard.type(password)
+                    time.sleep(0.15)
+                    self.keyboard.tap(Key.enter)
+                    print("[+] Unlock keystrokes dispatched")
+            except Exception as e:
+                print(f"[-] Unlock error: {e}")
+        threading.Thread(target=_do_unlock, daemon=True).start()
 
     def _resolve_key(self, code):
         if not HAS_PYNPUT:
@@ -628,6 +832,11 @@ class Server:
 
     def stop(self):
         self.running = False
+        if hasattr(self, "bt_server") and self.bt_server:
+            try:
+                self.bt_server.stop()
+            except Exception:
+                pass
         if self.sock:
             try:
                 self.sock.close()
@@ -653,18 +862,24 @@ class Server:
         print(f"[*] Local PC IP Address : {local_ip}")
         print(f"[*] Input UDP Port      : {self.port}")
         print(f"[*] Auto-Discovery Port : {self.discovery_port}")
+        print(f"[*] Bluetooth RFCOMM    : Active (SPP)")
         print(f"[*] Input Backend       : {'Native Windows user32 + pynput' if IS_WINDOWS else 'pynput'}")
         print(f"[*] Status              : READY & LISTENING")
         print("=" * 60)
         print("Tips:")
-        print("1. In the Android App -> Go to 'Connect' tab -> Select 'Wi-Fi Network'")
-        print("2. Tap 'Auto-Discover PC Server' or enter the IP above.")
+        print("1. In Android App: Connect via Wi-Fi or Bluetooth (SPP)!")
+        print("2. Tap 'Auto-Discover PC Server' or select your PC in Bluetooth tab.")
         print("3. Press Ctrl+C to stop.\n")
 
         if self.on_status_callback:
             self.on_status_callback(True)
 
         self.start_discovery_responder()
+        if hasattr(self, "bt_server") and self.bt_server:
+            try:
+                self.bt_server.start()
+            except Exception as e:
+                print(f"[!] Bluetooth RFCOMM server start note: {e}")
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
