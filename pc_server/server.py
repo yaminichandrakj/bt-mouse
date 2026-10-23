@@ -895,7 +895,18 @@ class RemoteWebSocketServer:
     async def _listen(self):
         try:
             import websockets
-            async with websockets.serve(self._handle_client, "0.0.0.0", self.port):
+            # WAN latency and large media/process responses can vary. Keep
+            # protocol pings active with a more tolerant timeout, and bound
+            # messages so a client cannot enqueue unbounded frames.
+            async with websockets.serve(
+                self._handle_client,
+                "0.0.0.0",
+                self.port,
+                ping_interval=20,
+                ping_timeout=60,
+                close_timeout=10,
+                max_size=2 * 1024 * 1024,
+            ):
                 print(f"[*] Remote WAN WebSocket Server listening on ws://0.0.0.0:{self.port}")
                 while self.running:
                     await asyncio.sleep(1)
@@ -949,7 +960,16 @@ class RemoteWebSocketServer:
                             print(f"[-] Could not serialize WebSocket response: {e}")
 
                 if self.command_handler:
-                    self.command_handler(data, addr=("WebSocket", 0), responder=_respond)
+                    # Media queries use asyncio/WinRT and process, camera, and
+                    # audio commands may block. Never run them on the socket's
+                    # event loop: that loop must keep servicing WebSocket
+                    # ping/pong frames while a command is working.
+                    await asyncio.to_thread(
+                        self.command_handler,
+                        data,
+                        addr=("WebSocket", 0),
+                        responder=_respond,
+                    )
         except Exception:
             pass
         finally:
@@ -1180,7 +1200,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.5"
+                    "version": "1.3.6"
                 }
             else:
                 self._record_auth_failure(addr)

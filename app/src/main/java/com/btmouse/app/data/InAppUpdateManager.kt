@@ -142,6 +142,7 @@ class InAppUpdateManager(private val context: Context) {
         try {
             val updatesDir = File(context.cacheDir, "updates").apply { mkdirs() }
             val apkFile = File(updatesDir, "BT-Mouse-${release.tagName}.apk")
+            val partialFile = File(updatesDir, "BT-Mouse-${release.tagName}.apk.part")
 
             val url = URL(release.downloadUrl)
             val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -150,34 +151,49 @@ class InAppUpdateManager(private val context: Context) {
                 instanceFollowRedirects = true
             }
 
-            val totalBytes = if (connection.contentLengthLong > 0) connection.contentLengthLong else release.apkSize
-            val input = connection.inputStream
-            val output = FileOutputStream(apkFile)
-
-            val buffer = ByteArray(8192)
-            var bytesRead: Int
-            var downloadedBytes = 0L
-
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-                output.write(buffer, 0, bytesRead)
-                downloadedBytes += bytesRead
-
-                if (totalBytes > 0) {
-                    val progress = downloadedBytes.toFloat() / totalBytes
-                    val downloadedMb = downloadedBytes / (1024f * 1024f)
-                    val totalMb = totalBytes / (1024f * 1024f)
-                    _updateState.value = UpdateState.Downloading(progress, downloadedMb, totalMb)
+            try {
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    throw IllegalStateException("APK download failed (HTTP $responseCode)")
                 }
-            }
+                val totalBytes = if (connection.contentLengthLong > 0) connection.contentLengthLong else release.apkSize
+                var downloadedBytes = 0L
+                connection.inputStream.use { input ->
+                    FileOutputStream(partialFile).use { output ->
+                        val buffer = ByteArray(32 * 1024)
+                        while (true) {
+                            val bytesRead = input.read(buffer)
+                            if (bytesRead < 0) break
+                            output.write(buffer, 0, bytesRead)
+                            downloadedBytes += bytesRead
 
-            output.flush()
-            output.close()
-            input.close()
+                            if (totalBytes > 0) {
+                                val progress = downloadedBytes.toFloat() / totalBytes
+                                val downloadedMb = downloadedBytes / (1024f * 1024f)
+                                val totalMb = totalBytes / (1024f * 1024f)
+                                _updateState.value = UpdateState.Downloading(progress.coerceIn(0f, 1f), downloadedMb, totalMb)
+                            }
+                        }
+                        output.fd.sync()
+                    }
+                }
+                if (downloadedBytes == 0L || (totalBytes > 0 && downloadedBytes != totalBytes)) {
+                    throw IllegalStateException("The APK download was incomplete. Please retry.")
+                }
+                if (apkFile.exists() && !apkFile.delete()) {
+                    throw IllegalStateException("Could not replace the previous downloaded update.")
+                }
+                if (!partialFile.renameTo(apkFile)) {
+                    throw IllegalStateException("Could not finalize the downloaded update file.")
+                }
 
-            _updateState.value = UpdateState.ReadyToInstall(apkFile)
+                _updateState.value = UpdateState.ReadyToInstall(apkFile)
 
-            withContext(Dispatchers.Main) {
-                launchApkInstaller(apkFile)
+                withContext(Dispatchers.Main) {
+                    launchApkInstaller(apkFile)
+                }
+            } finally {
+                connection.disconnect()
             }
         } catch (e: Exception) {
             Log.e(tag, "Download failed", e)
@@ -187,13 +203,31 @@ class InAppUpdateManager(private val context: Context) {
 
     fun launchApkInstaller(apkFile: File) {
         try {
+            if (!apkFile.isFile || apkFile.length() == 0L) {
+                _updateState.value = UpdateState.Error("The downloaded APK is missing or incomplete. Download it again.")
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !context.packageManager.canRequestPackageInstalls()) {
+                val permissionIntent = Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+                context.startActivity(permissionIntent)
+                // Keep the downloaded APK ready so the user can tap Install
+                // again after granting this source permission in Settings.
+                _updateState.value = UpdateState.ReadyToInstall(apkFile)
+                return
+            }
+
             val apkUri: Uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
                 apkFile
             )
 
-            val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            @Suppress("DEPRECATION")
+            val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
             }

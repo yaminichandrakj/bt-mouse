@@ -402,7 +402,7 @@ fun SettingsScreen(
 
                     is UpdateState.ReadyToInstall -> {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Download complete! Launching installer...", color = AccentEmerald, fontSize = 13.sp)
+                            Text("Download complete. If Android asks, allow BT Mouse to install updates, then return here and tap Install APK Now.", color = AccentEmerald, fontSize = 12.sp)
                             Button(
                                 onClick = { updateManager.launchApkInstaller(state.apkFile) },
                                 colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald),

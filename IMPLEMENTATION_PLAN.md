@@ -1,6 +1,6 @@
 # BT Mouse & PC Companion — Implementation Plan
 
-**Plan version:** 2.6
+**Plan version:** 2.7
 **Repository:** `BT Mouse`
 **Status:** Active implementation
 **Updated:** 2026-10-24
@@ -210,3 +210,99 @@ The UI and protocol must communicate these capability differences. A disconnecte
 
 - Windows media sessions can expose playback state and thumbnail artwork but do not provide a general live capture of another app's protected video surface: [GlobalSystemMediaTransportControlsSession](https://learn.microsoft.com/en-us/uwp/api/windows.media.control.globalsystemmediatransportcontrolssession?view=winrt-26100), [media thumbnail property](https://learn.microsoft.com/nl-be/uwp/api/windows.media.control.globalsystemmediatransportcontrolssessionmediaproperties.thumbnail?view=winrt-22000).
 - Windows passkeys support companion-device flows in the native sign-in experience; FIDO2 Windows logon depends on eligible Entra device/account policy: [Windows passkeys](https://learn.microsoft.com/windows/security/identity-protection/passkeys/), [FIDO2 security-key sign-in](https://learn.microsoft.com/en-us/azure/active-directory/authentication/howto-authentication-passwordless-security-key-windows).
+
+## Plan update — v1.3.6 reliability fixes and media roadmap
+
+**Plan version:** 2.7
+**Updated:** 2026-10-24
+**Ownership:** Codex owns implementation, integration, CI, and release. No external agent is assigned.
+
+This section supersedes the earlier “Next release plan” where schedules conflict. The goal is to keep the currently responsive input path intact while making companion queries/media asynchronous, bounded, measurable, and recoverable. High quality stills and low-latency live preview are separate products with separate capture/transfer settings.
+
+### Immediate slice — v1.3.6
+
+- Keep WebSocket protocol ping/pong alive while synchronous PC commands run by moving command dispatch off the asyncio event loop. Use a configurable, tolerant ping timeout and a bounded message size; log disconnect reason and command duration so future tuning is based on evidence.
+- Make APK installation a complete user-approved Android flow: download to a temporary file, verify HTTP result and byte count, atomically finalize, check Android's per-source install permission, open the relevant Settings page when it is missing, and then launch the package installer with a FileProvider content URI. Android still requires the user to confirm installation; silent self-install is not available to an ordinary app.
+- Keep release version identity synchronized across Android, companion handshake, and Actions fallback tag.
+
+**Acceptance:** a slow command does not starve WebSocket ping/pong; a disconnected client is reported and can reconnect; a complete APK reaches Android's installer after the source permission is granted; partial/failed downloads cannot be offered as installable.
+
+### Phase 1 — latency and reliability baseline
+
+1. Add request IDs and timestamps to stats, process/task, media, camera, and audio requests/responses across RFCOMM, UDP, and WebSocket. Record round-trip time and server-side capture/query/encode/send durations without logging PINs, tokens, media, or personal process arguments.
+2. Gather a repeatable matrix for each transport: idle, normal use, poor signal, PC busy, and WAN high latency. Record p50/p95 response time, timeouts, reconnects, frame age, and dropped/coalesced work. Do not infer that the transport itself is the cause until measurements separate network delay from PC work and phone UI/rendering.
+3. Move expensive work out of receive/UI loops. Cache process lists and system statistics on a bounded sampler; avoid scanning every process for every poll; coalesce repeated requests while one sample is in progress. Keep input packets independent from slow query/media work.
+4. Replace repeated background polling with explicit refresh rates per screen/feature. Keep a lightweight transport heartbeat; query media only when its screen or controls need it and refresh system/process data less often than input state. Cancel stale requests on transport changes and ignore out-of-order responses using request IDs.
+5. Add bounded per-client queues and backpressure. For live frames retain the newest pending frame instead of accumulating old ones. Keep query responses ordered and ensure one slow client cannot block another.
+
+**Acceptance:** latency is visible per transport and feature; stale results do not overwrite new state; query load is bounded; mouse/keyboard input latency remains independent of media capture and process scans; measured improvement is documented before and after.
+
+### Phase 2 — camera quality, snapshots, and recordings
+
+1. Split snapshot capture from live-stream capture. A snapshot uses the camera's best available still resolution and JPEG quality, independent of preview bitrate, UDP limits, or live-stream resizing. Do not resize a snapshot to the preview frame size.
+2. Transfer snapshots over an authenticated reliable path using bounded chunks, sequence number, total length, and integrity verification. UDP's datagram ceiling must not silently lower image quality: use chunked/reassembled datagrams with strict size/time limits and integrity checks where UDP is the only path, or return a clear “use reliable transport” result. Never base64 a whole recording into one JSON response.
+3. Live preview may adapt resolution, frame rate, and compression using observed RTT, bandwidth, device heat, and queue age. The user can toggle preview; stop capture and transmission when it is hidden. Separate stream quality controls from still-image quality.
+4. Create a local media catalog for PC snapshots, mic recordings, and camera videos. Use generated IDs, timestamps, duration, format, size, optional thumbnail, bounded storage, retention/deletion controls, and recovery/cleanup for interrupted temporary files.
+5. Add laptop camera video recording and an authenticated library API for list, metadata, preview/download, and delete. Add an Android library with transfer progress, cancellation, local cache controls, and playback. WAN media remains TLS protected.
+
+**Acceptance:** still images retain the selected/full camera still resolution and are not altered by preview settings; snapshots and recordings transfer correctly over supported links; slow links do not build unbounded queues; the phone can browse and play authorized saved media; storage limits and delete behavior are clear.
+
+### Phase 3 — call-like audio and PC microphone input
+
+1. First implement PC-to-phone live listening as an explicit call-like session with start/stop, source selection, visible active indicator, muted/ended state, low-latency encoding, packet sequence/timestamps, jitter buffer, bounded queue, and reconnect behavior. Distinguish microphone monitoring from Windows output capture.
+2. PC output capture can use Windows WASAPI loopback in shared mode. Protected/DRM audio may be unavailable, and capture must not bypass the source application's policy. User selects whether to hear PC output, microphone, or an available supported source.
+3. Implement phone-to-PC voice as a separate authenticated live-audio direction. Begin as playback through the companion app/selected output. Measure echo, feedback, audio focus, and latency before adding full-duplex mode.
+4. If the phone mic must appear as a system-wide Windows microphone selectable in Zoom/Teams/etc., treat that as a later native-driver project. Windows virtual audio endpoints require a signed/installed driver package and lifecycle/security work; a normal Python companion cannot register a robust system microphone by itself. Evaluate Microsoft's SYSVAD sample and WDK signing/deployment requirements before committing to production scope.
+5. Android background microphone capture requires explicit permission and a correctly declared foreground service/notification. Start capture while the app is visible and user initiated; expose a persistent stop control and honor Android's background-start/while-in-use restrictions.
+
+**Acceptance:** live audio has bounded latency and clear capture/route state; start, stop, mute, reconnect, and permission denial are handled; no recording or microphone capture starts silently; protected audio and unsupported system-wide endpoint cases report a concrete limitation.
+
+### Phase 4 — phone camera as a laptop camera
+
+1. Build an explicit user-started camera session in Android using CameraX, with front/back switch, supported resolution selection, preview, status, and authenticated low-latency video transport. Keep snapshots on the separate high-quality still path from Phase 2.
+2. Keep capture visibly active with Android's camera foreground-service requirements and persistent notification. Camera/mic access cannot be promised while the app is closed, before user consent, or started from boot/background on modern Android. A locked-screen session may work only when Android allows the already-started foreground service and vendor power policy permits it; test by device/OS and document the result.
+3. On Windows, expose the incoming stream as a Media Foundation virtual camera where supported (Windows 11 build 22000+). Implement native source/format conversion, install/registration/unregistration, user-level lifecycle, and app compatibility checks. Treat “view phone camera in companion” as an interim feature if a system camera endpoint is not ready.
+4. Handle privacy indicator, source selection, front/back switch, pause, disconnect, phone lock, thermal throttling, and session cleanup. Do not keep the camera running after an explicit stop.
+
+**Acceptance:** Windows camera applications can select the phone feed as a camera on supported Windows builds; switching cameras takes effect in the active session; unsupported Windows/app/Android combinations are detected; no hidden capture occurs.
+
+### Phase 5 — transport supervisor, startup, and repair
+
+1. Extend the existing transport coordinator with independent authenticated health probes, capabilities, measured RTT/reliability, and last-good timestamps for Bluetooth RFCOMM, Wi-Fi, and remote WSS. Keep direct Bluetooth HID distinct because it is an input-only route.
+2. Select one route for each command session using health ranking plus hysteresis. Do not send the same input event across multiple links. Define route ownership and outstanding-command cancellation before enabling automatic failover.
+3. Add bounded exponential retry, network/Bluetooth change detection, PC sleep/resume recovery, stale-session cleanup, manual disconnect cancellation, and visible repair state. Require fresh authentication after expiry and do not weaken PIN/TLS checks for convenience.
+4. Add opt-in Windows launch-at-login and Android connected-device foreground operation with notification. On Android, explain boot/background limits and request only appropriate service types. Camera and microphone recovery require their own user-started, visible capture sessions and are not implied by transport reconnection.
+5. Make startup state and active path visible on both devices. Provide pause/disable controls, retry limits, and a last failure explanation. Never promise guaranteed reachability when the PC is asleep, powered off, offline, or blocked by firewall/router policy.
+
+**Acceptance:** the phone chooses the fastest healthy authenticated path without duplicate actions; sleep/resume and transient network loss recover; user disconnect stops retries; startup/background behavior is opt-in and accurately described.
+
+### Phase 6 — Android update handoff and release maintenance
+
+- Keep updates in-app: validate release metadata and APK size/hash when available, download to a temporary file, finalize only when complete, check per-source install permission, and invoke Android's system installer. If Settings permission was needed, re-check on return and launch installation or show one clear action; Android's final install confirmation remains user controlled.
+- Add release asset/signature/hash metadata and rollback-safe companion updates. Keep the PyInstaller EXE updater self-contained so users do not need to download from GitHub after every companion release. Do not remove the current updater until replacement/rollback is validated.
+- Long-term native Windows UI/runtime replacement is a separate project; the current EXE embeds Python but does not require a separately installed Python runtime. Improve text rendering with DPI-aware/vector UI work independently of packaging language.
+
+**Acceptance:** app downloads the correct signed release artifact, reports permission/verification errors plainly, opens the OS installer reliably, and existing installations upgrade in place; companion updates stage, verify, apply after process exit, relaunch, and can recover from a failed update.
+
+### Phase 7 — staged validation and publishing
+
+1. Validate protocol/security and bounded-resource behavior in GitHub Actions on every source push. Keep test changes focused on the affected work and never treat CI as physical-device verification.
+2. Build Android APK and Windows companion from one version identity. Do not tag until both release jobs pass.
+3. For each release tag, publish both artifacts, verify their names/checksums and release page, and record the Actions run.
+4. Maintain a device matrix: Android OS/vendor and lock state; Windows version/build; Bluetooth adapter; LAN/WAN route; sleep/resume; normal and saturated load. Mark every real-device result as verified or pending.
+
+## Research and platform constraints
+
+- WebSocket protocol keepalive uses ping/pong and configurable intervals/timeouts. If application work blocks the event loop, it can delay control frames; moving synchronous work off the loop and measuring disconnects addresses this failure mode. [WebSocket keepalive guidance](https://websockets.readthedocs.io/en/13.0.1/topics/keepalive.html)
+- Android requires the `REQUEST_INSTALL_PACKAGES` declaration and user-granted per-source permission for external APK installation; the package installer still presents a confirmation UI. [PackageManager install permission](https://developer.android.com/reference/android/content/pm/PackageManager?authuser=4), [install package intent](https://developer.android.com/reference/android/content/Intent?authuser=8)
+- Android camera/microphone foreground services are constrained by while-in-use permissions and background-start rules. A service cannot provide an unconditional “app closed/locked/after reboot” camera or mic guarantee. [Foreground service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [background-start restrictions](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)
+- Android playback capture is permission/policy gated and source apps can disallow capture. [Android media projection and audio capture](https://developer.android.com/media/platform/av-capture)
+- Windows shared-mode WASAPI loopback captures rendered output, with protected-content limitations. [WASAPI loopback recording](https://learn.microsoft.com/windows/win32/coreaudio/loopback-recording)
+- A Windows system-visible camera can be implemented through Media Foundation virtual-camera APIs, with Windows build and registration constraints. [MFCreateVirtualCamera](https://learn.microsoft.com/en-us/windows/win32/api/mfvirtualcamera/nf-mfvirtualcamera-mfcreatevirtualcamera)
+- A system-wide Windows virtual microphone is a driver-level feature, not just network audio playback. Microsoft's SYSVAD reference is a WDK audio driver sample that requires a driver signing/deployment strategy. [SYSVAD virtual audio driver sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/sysvad-virtual-audio-device-driver-sample/)
+
+### v1.3.6 scope/status
+
+- **In this release candidate:** WebSocket event-loop isolation and tolerant keepalive; safer APK download finalization and Android install-source permission handoff.
+- **Planned after v1.3.6:** latency measurement/query scheduling, full-quality snapshot transfer, recordings library/video, live two-way audio and virtual microphone feasibility, phone camera virtual camera, and multi-transport supervision/startup recovery.
+- Do not claim the later features are implemented until their acceptance criteria and device checks pass.
