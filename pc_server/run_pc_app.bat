@@ -1,11 +1,17 @@
 @echo off
-title BT Mouse & Keyboard Companion
+title Starting BT Mouse Companion...
 cd /d "%~dp0"
-echo Starting BT Mouse & Keyboard PC Companion...
-python app_gui.py
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo [!] GUI launch failed, falling back to console server...
-    python server.py
-    pause
+
+:: 1. Launch standalone windowless .exe if present
+if exist "%~dp0dist\BT-Mouse-Companion.exe" (
+    start "" "%~dp0dist\BT-Mouse-Companion.exe"
+    exit /b 0
 )
+if exist "%~dp0..\BT-Mouse-Companion.exe" (
+    start "" "%~dp0..\BT-Mouse-Companion.exe"
+    exit /b 0
+)
+
+:: 2. Launch via pythonw (GUI windowless Python runner)
+start pythonw app_gui.py
+exit /b 0
