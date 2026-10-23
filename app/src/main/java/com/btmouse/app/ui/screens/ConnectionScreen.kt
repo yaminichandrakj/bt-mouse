@@ -4,6 +4,10 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.content.Intent
 import android.provider.Settings
+import android.widget.Toast
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -153,6 +157,40 @@ fun ConnectionScreen(
             false
         } catch (e: Exception) {
             false
+        }
+    }
+
+    fun launchQrScanner() {
+        try {
+            val options = GmsBarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .enableAutoZoom()
+                .build()
+            val scanner = GmsBarcodeScanning.getClient(context, options)
+
+            scanner.startScan()
+                .addOnSuccessListener { barcode ->
+                    val rawValue = barcode.rawValue ?: barcode.displayValue ?: ""
+                    if (rawValue.isNotEmpty()) {
+                        val success = parseAndConnectQr(rawValue)
+                        if (success) {
+                            Toast.makeText(context, "Connected to PC Server!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Unrecognized QR format: $rawValue", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+                .addOnCanceledListener {
+                    // User dismissed the camera viewfinder
+                }
+                .addOnFailureListener { e ->
+                    // Camera scanner unavailable, fall back to manual entry dialog
+                    qrError = "Camera scanner unavailable: ${e.message ?: "Please enter IP manually"}"
+                    showQrDialog = true
+                }
+        } catch (e: Exception) {
+            qrError = "Scanner error: ${e.message}"
+            showQrDialog = true
         }
     }
 
@@ -336,7 +374,7 @@ fun ConnectionScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { showQrDialog = true },
+                        onClick = { launchQrScanner() },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
                         shape = RoundedCornerShape(12.dp)
@@ -435,7 +473,7 @@ fun ConnectionScreen(
         }
     }
 
-    // QR Code Connect Modal Dialog
+    // Manual / QR Fallback Connect Modal Dialog
     if (showQrDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -445,15 +483,15 @@ fun ConnectionScreen(
             containerColor = DarkSurface,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = AccentCyan)
+                    Icon(Icons.Default.Computer, contentDescription = null, tint = AccentCyan)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Connect via QR Code", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text("Manual PC Connection", color = TextPrimary, fontWeight = FontWeight.Bold)
                 }
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "On your PC, open the PC Companion App (run_pc_app.bat) to view your Wi-Fi QR Code.",
+                        "Enter your PC's IP address (shown on the PC Companion app screen):",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
@@ -464,8 +502,8 @@ fun ConnectionScreen(
                             qrInputText = it
                             qrError = null
                         },
-                        label = { Text("QR Code Payload or IP:Port") },
-                        placeholder = { Text("e.g. {\"ip\":\"172.25.100.123\",\"port\":53530}") },
+                        label = { Text("PC IP Address (e.g. 172.25.100.123)") },
+                        placeholder = { Text("172.25.100.123") },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AccentCyan,
@@ -473,8 +511,7 @@ fun ConnectionScreen(
                             focusedTextColor = TextPrimary,
                             unfocusedTextColor = TextPrimary
                         ),
-                        singleLine = false,
-                        maxLines = 3
+                        singleLine = true
                     )
 
                     Row(
@@ -491,7 +528,7 @@ fun ConnectionScreen(
                         ) {
                             Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentCyan)
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Paste Clipboard", color = AccentCyan, fontSize = 12.sp)
+                            Text("Paste from Clipboard", color = AccentCyan, fontSize = 12.sp)
                         }
                     }
 
@@ -508,12 +545,12 @@ fun ConnectionScreen(
                             showQrDialog = false
                             qrError = null
                         } else {
-                            qrError = "Invalid QR code payload format. Please scan or enter a valid IP:port."
+                            qrError = "Invalid IP format. Please check the IP shown on your PC screen."
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
                 ) {
-                    Text("Connect", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    Text("Connect to PC", color = DarkBackground, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

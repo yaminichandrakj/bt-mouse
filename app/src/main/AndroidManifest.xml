@@ -72,6 +72,11 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Google Play Services Code Scanner auto-download module -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
+
     </application>
 
 </manifest>

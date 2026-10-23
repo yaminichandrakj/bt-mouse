@@ -12,8 +12,8 @@ android {
         applicationId = "com.btmouse.app"
         minSdk = 28
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -72,6 +72,7 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.gson)
+    implementation(libs.play.services.code.scanner)
 
     debugImplementation(libs.androidx.ui.tooling)
 }
