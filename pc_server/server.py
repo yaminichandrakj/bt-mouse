@@ -12,6 +12,12 @@ import sys
 import os
 import traceback
 
+# Prevent crash when running as a windowed GUI application without a console attached
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 # Desktop attachment helper for Windows to ensure background / service tasks can interact with the active user desktop
 def ensure_interactive_desktop():
     if sys.platform == "win32":

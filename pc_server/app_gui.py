@@ -13,6 +13,22 @@ import os
 import sys
 import time
 
+# Prevent crash when running as a windowed GUI application without a console attached
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
+def get_asset_path(filename):
+    if hasattr(sys, '_MEIPASS'):
+        p = os.path.join(sys._MEIPASS, filename)
+        if os.path.exists(p):
+            return p
+    local_p = os.path.join(os.path.dirname(__file__), filename)
+    if os.path.exists(local_p):
+        return local_p
+    return filename
+
 try:
     import qrcode
     from PIL import Image, ImageTk
@@ -52,8 +68,8 @@ class CompanionApp(tk.Tk):
         self.configure(bg=BG_DARK)
 
         # Set window icon if available
-        self.icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
-        self.icon_png_path = os.path.join(os.path.dirname(__file__), "icon.png")
+        self.icon_path = get_asset_path("icon.ico")
+        self.icon_png_path = get_asset_path("icon.png")
         if os.path.exists(self.icon_path):
             try:
                 self.iconbitmap(self.icon_path)
