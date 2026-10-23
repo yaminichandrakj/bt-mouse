@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">BT Mouse</string>
+    <string name="touchpad">Touchpad</string>
+    <string name="keyboard">Keyboard</string>
+    <string name="numpad">Numpad</string>
+    <string name="media">Media Remote</string>
+    <string name="settings">Settings</string>
+    <string name="connection">Connection</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="connected">Connected</string>
+    <string name="bluetooth_mode">Bluetooth HID</string>
+    <string name="wifi_mode">Wi-Fi Network</string>
+    <string name="air_mouse">Air Mouse</string>
+</resources>
