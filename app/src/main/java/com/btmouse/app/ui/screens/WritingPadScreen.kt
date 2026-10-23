@@ -3,6 +3,8 @@ package com.btmouse.app.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -112,7 +114,10 @@ fun WritingPadScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Box(
                     modifier = Modifier
                         .size(10.dp)
@@ -120,150 +125,170 @@ fun WritingPadScreen(
                         .background(if (isConnected) AccentEmerald else AccentRose)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = if (isConnected) (connectedDevice ?: "Connected") else "Disconnected",
                         color = TextPrimary,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     Text(
                         text = if (isAbsoluteMapping) "1:1 Screen Mapping" else "Relative Tablet Pad",
                         color = TextMuted,
-                        fontSize = 10.sp
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }
 
-            // Stylus Only (Palm Rejection) & Eraser Toggles
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(
-                    selected = isStylusOnly,
-                    onClick = { isStylusOnly = !isStylusOnly },
-                    label = { Text("Palm Rejection", fontSize = 11.sp) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.PanTool,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = if (isStylusOnly) AccentCyan else TextMuted
-                        )
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                FilterChip(
-                    selected = isEraser,
-                    onClick = { isEraser = !isEraser },
-                    label = { Text(if (isEraser) "Eraser" else "Pen", fontSize = 11.sp) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = if (isEraser) Icons.Default.AutoFixHigh else Icons.Default.Draw,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = if (isEraser) AccentRose else AccentCyan
-                        )
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = if (isEraser) AccentRose.copy(alpha = 0.35f) else PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = if (isEraser) AccentRose else AccentCyan,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Quick Status Pill
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(PrimaryIndigo.copy(alpha = 0.2f))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = if (isStylusOnly) "Palm Reject ON" else "Touch + Stylus",
+                    color = AccentCyan,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
 
-        // Toolbar: Controls & Tools
+        // Toolbar: Controls & Tools (Horizontally scrollable so nothing is ever clipped)
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Mapping mode toggle
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(
-                    selected = isAbsoluteMapping,
-                    onClick = { isAbsoluteMapping = true },
-                    label = { Text("1:1 Monitor", fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                FilterChip(
-                    selected = !isAbsoluteMapping,
-                    onClick = { isAbsoluteMapping = false },
-                    label = { Text("Relative", fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-            }
+            FilterChip(
+                selected = isAbsoluteMapping,
+                onClick = { isAbsoluteMapping = true },
+                label = { Text("1:1 Monitor", fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            FilterChip(
+                selected = !isAbsoluteMapping,
+                onClick = { isAbsoluteMapping = false },
+                label = { Text("Relative", fontSize = 11.sp) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
+
+            // Stylus Only (Palm Rejection) & Eraser Toggles
+            FilterChip(
+                selected = isStylusOnly,
+                onClick = { isStylusOnly = !isStylusOnly },
+                label = { Text("Palm Reject", fontSize = 11.sp) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.PanTool,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = if (isStylusOnly) AccentCyan else TextMuted
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            FilterChip(
+                selected = isEraser,
+                onClick = { isEraser = !isEraser },
+                label = { Text(if (isEraser) "Eraser" else "Pen", fontSize = 11.sp) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = if (isEraser) Icons.Default.AutoFixHigh else Icons.Default.Draw,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = if (isEraser) AccentRose else AccentCyan
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = if (isEraser) AccentRose.copy(alpha = 0.35f) else PrimaryIndigo.copy(alpha = 0.35f),
+                    selectedLabelColor = if (isEraser) AccentRose else AccentCyan,
+                    containerColor = DarkSurface
+                ),
+                shape = RoundedCornerShape(8.dp)
+            )
+
+            Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
 
             // Color Swatches
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                colors.forEach { c ->
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(c)
-                            .border(
-                                width = if (selectedColor == c && !isEraser) 2.dp else 0.dp,
-                                color = if (selectedColor == c && !isEraser) TextPrimary else Color.Transparent,
-                                shape = CircleShape
-                            )
-                            .clickable {
-                                selectedColor = c
-                                isEraser = false
-                            }
-                    )
-                }
+            colors.forEach { c ->
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(c)
+                        .border(
+                            width = if (selectedColor == c && !isEraser) 2.dp else 0.dp,
+                            color = if (selectedColor == c && !isEraser) TextPrimary else Color.Transparent,
+                            shape = CircleShape
+                        )
+                        .clickable {
+                            selectedColor = c
+                            isEraser = false
+                        }
+                )
             }
 
+            Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
+
             // Actions: Undo, Clear
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = {
-                        if (strokes.isNotEmpty()) {
-                            strokes.removeAt(strokes.lastIndex)
-                        }
-                        // Also trigger Ctrl+Z on PC
-                        coordinator.sendKeyStroke(HidConstants.KEY_Z, HidConstants.MODIFIER_LEFT_CTRL)
-                    },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Undo,
-                        contentDescription = "Undo",
-                        tint = AccentCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                IconButton(
-                    onClick = { strokes.clear() },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Clear Pad",
-                        tint = AccentRose,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+            IconButton(
+                onClick = {
+                    if (strokes.isNotEmpty()) {
+                        strokes.removeAt(strokes.lastIndex)
+                    }
+                    coordinator.sendKeyStroke(HidConstants.KEY_Z, HidConstants.MODIFIER_LEFT_CTRL)
+                },
+                modifier = Modifier.size(34.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Undo,
+                    contentDescription = "Undo",
+                    tint = AccentCyan,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            IconButton(
+                onClick = { strokes.clear() },
+                modifier = Modifier.size(34.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Clear",
+                    tint = AccentRose,
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
 

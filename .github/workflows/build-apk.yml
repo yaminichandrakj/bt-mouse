@@ -33,8 +33,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Generate Release Keystore
+        run: |
+          keytool -genkey -v -keystore app/release.keystore -alias btmouse -keyalg RSA -keysize 2048 -validity 10000 -storepass btmouse123 -keypass btmouse123 -dname "CN=BT Mouse, OU=BT Mouse Team, O=BT Mouse, L=San Francisco, S=CA, C=US"
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Determine Version Tag
         id: version_info
@@ -42,19 +46,19 @@ jobs:
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
-            TAG="v1.1.1"
+            TAG="v1.1.2"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Prepare APK for Release
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/debug/*.apk "release-output/BT-Mouse-${{ steps.version_info.outputs.tag }}.apk"
+          cp app/build/outputs/apk/release/*.apk "release-output/BT-Mouse-${{ steps.version_info.outputs.tag }}.apk"
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BT-Mouse-Debug-APK
+          name: BT-Mouse-Release-APK
           path: release-output/*.apk
           retention-days: 30
 

@@ -47,9 +47,9 @@ fun KeyButton(
     modifier: Modifier = Modifier,
     label: String = "",
     icon: ImageVector? = null,
-    iconSize: Dp = 15.dp,
-    fontSize: TextUnit = 12.sp,
-    minHeight: Dp = 44.dp,
+    iconSize: Dp = 13.dp,
+    fontSize: TextUnit = 11.sp,
+    minHeight: Dp = 42.dp,
     isActive: Boolean = false,
     isAccent: Boolean = false,
     hapticsEnabled: Boolean = true,
@@ -101,7 +101,7 @@ fun KeyButton(
                 }
                 true
             }
-            .padding(horizontal = 4.dp, vertical = 6.dp),
+            .padding(horizontal = 2.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -116,7 +116,7 @@ fun KeyButton(
                     tint = contentColor
                 )
                 if (label.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
                 }
             }
             if (label.isNotEmpty()) {
@@ -126,7 +126,8 @@ fun KeyButton(
                     fontSize = fontSize,
                     fontWeight = if (isActive || isPressed || isAccent) FontWeight.Bold else FontWeight.Medium,
                     textAlign = TextAlign.Center,
-                    maxLines = 1
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
         }

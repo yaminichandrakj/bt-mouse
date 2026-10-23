@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Refresh
@@ -68,7 +70,8 @@ import java.util.Locale
 @Composable
 fun SettingsScreen(
     settings: SettingsRepository,
-    airMouseManager: AirMouseManager
+    airMouseManager: AirMouseManager,
+    onClose: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -93,6 +96,20 @@ fun SettingsScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        if (onClose != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onClose() }
+                    .padding(vertical = 4.dp)
+            ) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = AccentCyan)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Back to Controls", color = AccentCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        }
+
         Text("Preferences & Tuning", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
 
         // Mouse & Touchpad Card
@@ -255,7 +272,7 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Software Updates", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     }
-                    Text("v1.1.0", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("v${updateManager.currentVersion}", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
 
                 Text(
@@ -299,7 +316,7 @@ fun SettingsScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.CheckCircle, contentDescription = null, tint = AccentEmerald, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("You are using the latest version (v1.1.0)", color = AccentEmerald, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("You are using the latest version (v${updateManager.currentVersion})", color = AccentEmerald, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                         OutlinedButton(
                             onClick = {
@@ -319,7 +336,7 @@ fun SettingsScreen(
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(DarkSurfaceVariant)
                                 .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
@@ -348,6 +365,16 @@ fun SettingsScreen(
                                 Icon(Icons.Default.CloudDownload, contentDescription = null, tint = DarkBackground, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Download & Install Update", color = DarkBackground, fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    updateManager.openDownloadInBrowser(state.release.downloadUrl)
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Download APK in Browser", color = TextPrimary, fontSize = 12.sp)
                             }
                         }
                     }

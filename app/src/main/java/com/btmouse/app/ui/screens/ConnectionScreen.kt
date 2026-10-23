@@ -247,34 +247,42 @@ fun ConnectionScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier
-                            .size(12.dp)
+                            .size(10.dp)
                             .clip(CircleShape)
                             .background(if (isConnected) AccentEmerald else AccentRose)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = if (isConnected) (connectedDevice ?: "Connected") else "Not Connected",
                             color = TextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                         Text(
                             text = statusMessage,
                             color = TextSecondary,
-                            fontSize = 12.sp
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                     }
                 }
 
                 if (isConnected) {
+                    Spacer(modifier = Modifier.width(8.dp))
                     OutlinedButton(
                         onClick = {
                             if (activeMode == ConnectionMode.BLUETOOTH) {
@@ -284,9 +292,10 @@ fun ConnectionScreen(
                             }
                         },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Text("Disconnect", fontSize = 12.sp)
+                        Text("Disconnect", fontSize = 12.sp, maxLines = 1, softWrap = false)
                     }
                 }
             }

@@ -82,6 +82,7 @@ fun KeyboardScreen(
     val hapticsEnabled by settings.hapticFeedback.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var isLiveTypingEnabled by remember { mutableStateOf(true) }
+    var isNumpadMode by remember { mutableStateOf(false) }
 
     // Modifier toggles
     var isCtrlActive by remember { mutableStateOf(false) }
@@ -151,7 +152,7 @@ fun KeyboardScreen(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Typing Mode Header Bar
+        // Typing Mode & Sub-tab Selector
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -159,55 +160,48 @@ fun KeyboardScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(
-                    selected = isLiveTypingEnabled,
-                    onClick = { isLiveTypingEnabled = true },
-                    label = { Text("⚡ Live Typing", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                    selected = !isNumpadMode,
+                    onClick = { isNumpadMode = false },
+                    label = { Text("⌨️ Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                         selectedLabelColor = AccentCyan,
                         containerColor = DarkSurface
                     ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = isLiveTypingEnabled,
-                        borderColor = DarkBorder,
-                        selectedBorderColor = AccentCyan
-                    ),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = RoundedCornerShape(8.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 FilterChip(
-                    selected = !isLiveTypingEnabled,
-                    onClick = { isLiveTypingEnabled = false },
-                    label = { Text("📝 Batch Send", fontSize = 12.sp) },
+                    selected = isNumpadMode,
+                    onClick = { isNumpadMode = true },
+                    label = { Text("🔢 Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = TextPrimary,
+                        selectedLabelColor = AccentCyan,
                         containerColor = DarkSurface
                     ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = !isLiveTypingEnabled,
-                        borderColor = DarkBorder,
-                        selectedBorderColor = PrimaryIndigo
-                    ),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = RoundedCornerShape(8.dp)
                 )
             }
 
-            AnimatedVisibility(visible = isLiveTypingEnabled, enter = fadeIn(), exit = fadeOut()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(AccentEmerald)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Streaming Live", color = AccentEmerald, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                }
+            if (!isNumpadMode) {
+                FilterChip(
+                    selected = isLiveTypingEnabled,
+                    onClick = { isLiveTypingEnabled = !isLiveTypingEnabled },
+                    label = { Text(if (isLiveTypingEnabled) "⚡ Live" else "📝 Batch", fontSize = 11.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
+                        selectedLabelColor = if (isLiveTypingEnabled) AccentCyan else TextPrimary,
+                        containerColor = DarkSurface
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
             }
         }
+
+        if (isNumpadMode) {
+            NumpadScreen(coordinator, settings)
+        } else {
 
         // Live Text Input Box
         Row(
@@ -269,8 +263,10 @@ fun KeyboardScreen(
             }
         }
 
-        // Quick PC Shortcuts with Icons - Row 1
+        // Quick PC Shortcuts with Icons - 4-Column Responsive Layout
         Text("Quick Shortcuts", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+        // Row 1: Edit & History
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -307,6 +303,13 @@ fun KeyboardScreen(
                 hapticsEnabled = hapticsEnabled,
                 onDown = { coordinator.sendKeyStroke(HidConstants.KEY_Z, HidConstants.MODIFIER_LEFT_CTRL) }
             )
+        }
+
+        // Row 2: Windows Navigation
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             KeyButton(
                 modifier = Modifier.weight(1f),
                 label = "All",
@@ -315,13 +318,6 @@ fun KeyboardScreen(
                 hapticsEnabled = hapticsEnabled,
                 onDown = { coordinator.sendKeyStroke(HidConstants.KEY_A, HidConstants.MODIFIER_LEFT_CTRL) }
             )
-        }
-
-        // Quick PC Shortcuts with Icons - Row 2
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
             KeyButton(
                 modifier = Modifier.weight(1f),
                 label = "Switch",
@@ -331,7 +327,7 @@ fun KeyboardScreen(
                 onDown = { coordinator.sendKeyStroke(HidConstants.KEY_TAB, HidConstants.MODIFIER_LEFT_ALT) }
             )
             KeyButton(
-                modifier = Modifier.weight(1.1f),
+                modifier = Modifier.weight(1f),
                 label = "Desktop",
                 icon = Icons.Default.DesktopWindows,
                 isAccent = true,
@@ -339,7 +335,33 @@ fun KeyboardScreen(
                 onDown = { coordinator.sendKeyStroke(HidConstants.KEY_D, HidConstants.MODIFIER_LEFT_GUI) }
             )
             KeyButton(
-                modifier = Modifier.weight(1.1f),
+                modifier = Modifier.weight(1f),
+                label = "Lock",
+                icon = Icons.Default.Lock,
+                isAccent = true,
+                hapticsEnabled = hapticsEnabled,
+                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_L, HidConstants.MODIFIER_LEFT_GUI) }
+            )
+        }
+
+        // Row 3: Tools & Utilities
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            KeyButton(
+                modifier = Modifier.weight(1f),
+                label = "Task Mgr",
+                icon = Icons.Default.Speed,
+                isAccent = true,
+                hapticsEnabled = hapticsEnabled,
+                onDown = {
+                    val mod = (HidConstants.MODIFIER_LEFT_CTRL.toInt() or HidConstants.MODIFIER_LEFT_SHIFT.toInt()).toByte()
+                    coordinator.sendKeyStroke(HidConstants.KEY_ESC, mod)
+                }
+            )
+            KeyButton(
+                modifier = Modifier.weight(1f),
                 label = "Files",
                 icon = Icons.Default.Folder,
                 isAccent = true,
@@ -356,37 +378,18 @@ fun KeyboardScreen(
             )
             KeyButton(
                 modifier = Modifier.weight(1f),
-                label = "Lock",
-                icon = Icons.Default.Lock,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_L, HidConstants.MODIFIER_LEFT_GUI) }
-            )
-        }
-
-        // Quick PC Shortcuts with Icons - Row 3 (Task Mgr, etc.)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(
-                modifier = Modifier.weight(1.3f),
-                label = "Task Mgr",
-                icon = Icons.Default.Speed,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = {
-                    val mod = (HidConstants.MODIFIER_LEFT_CTRL.toInt() or HidConstants.MODIFIER_LEFT_SHIFT.toInt()).toByte()
-                    coordinator.sendKeyStroke(HidConstants.KEY_ESC, mod)
-                }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
                 label = "Esc",
                 icon = Icons.Default.Close,
                 hapticsEnabled = hapticsEnabled,
                 onDown = { triggerKey(HidConstants.KEY_ESC) }
             )
+        }
+
+        // Row 4: Controls & Navigation
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             KeyButton(
                 modifier = Modifier.weight(1f),
                 label = "Tab",
@@ -395,18 +398,26 @@ fun KeyboardScreen(
                 onDown = { triggerKey(HidConstants.KEY_TAB) }
             )
             KeyButton(
-                modifier = Modifier.weight(1.1f),
+                modifier = Modifier.weight(1f),
                 label = "Bksp",
                 icon = Icons.Default.Backspace,
                 hapticsEnabled = hapticsEnabled,
                 onDown = { triggerKey(HidConstants.KEY_BACKSPACE) }
             )
             KeyButton(
-                modifier = Modifier.weight(1.1f),
+                modifier = Modifier.weight(1f),
                 label = "Del",
                 icon = Icons.Default.Delete,
                 hapticsEnabled = hapticsEnabled,
                 onDown = { triggerKey(HidConstants.KEY_DELETE) }
+            )
+            KeyButton(
+                modifier = Modifier.weight(1f),
+                label = "Enter",
+                icon = Icons.Default.KeyboardReturn,
+                isAccent = true,
+                hapticsEnabled = hapticsEnabled,
+                onDown = { triggerKey(HidConstants.KEY_ENTER) }
             )
         }
 
@@ -506,6 +517,7 @@ fun KeyboardScreen(
             )
         }
 
+        }
         Spacer(modifier = Modifier.height(20.dp))
     }
 }

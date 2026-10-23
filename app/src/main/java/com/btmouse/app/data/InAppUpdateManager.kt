@@ -41,8 +41,29 @@ class InAppUpdateManager(private val context: Context) {
 
     private val tag = "InAppUpdateManager"
     private val repoOwner = "yaminichandrakj"
-    private val repoName = "bt-mouse"
-    private val currentVersion = "1.1.0"
+    val currentVersion: String
+        get() = try {
+            val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            }
+            pInfo.versionName?.removeSuffix("-debug") ?: "1.1.2"
+        } catch (e: Exception) {
+            "1.1.2"
+        }
+
+    fun openDownloadInBrowser(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to open browser", e)
+        }
+    }
 
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
@@ -165,17 +186,6 @@ class InAppUpdateManager(private val context: Context) {
 
     fun launchApkInstaller(apkFile: File) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!context.packageManager.canRequestPackageInstalls()) {
-                    val permissionIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    context.startActivity(permissionIntent)
-                    return
-                }
-            }
-
             val apkUri: Uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -190,7 +200,7 @@ class InAppUpdateManager(private val context: Context) {
             context.startActivity(installIntent)
         } catch (e: Exception) {
             Log.e(tag, "Install launch error", e)
-            _updateState.value = UpdateState.Error("Installer launch error: ${e.message}")
+            _updateState.value = UpdateState.Error("Please install downloaded APK from Downloads or Browser: ${e.message}")
         }
     }
 
