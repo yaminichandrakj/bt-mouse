@@ -41,6 +41,7 @@ class InAppUpdateManager(private val context: Context) {
 
     private val tag = "InAppUpdateManager"
     private val repoOwner = "yaminichandrakj"
+    private val repoName = "bt-mouse"
     val currentVersion: String
         get() = try {
             val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
