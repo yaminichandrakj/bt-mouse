@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -65,7 +66,7 @@ fun WritingPadSurface(
             .clip(RoundedCornerShape(16.dp))
             .background(TrackpadBackground)
             .border(1.5.dp, DarkBorder, RoundedCornerShape(16.dp))
-            .androidx.compose.ui.layout.onSizeChanged { size ->
+            .onSizeChanged { size ->
                 surfaceWidth = size.width.toFloat().coerceAtLeast(1f)
                 surfaceHeight = size.height.toFloat().coerceAtLeast(1f)
             }
