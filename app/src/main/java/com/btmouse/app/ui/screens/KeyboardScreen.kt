@@ -84,6 +84,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -559,8 +560,7 @@ fun KeyboardScreen(
                 hapticsEnabled = hapticsEnabled,
                 onDown = { triggerKey(HidConstants.KEY_ENTER) }
             )
-        }
-
+            }
         }
         Spacer(modifier = Modifier.height(20.dp))
     }
