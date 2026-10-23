@@ -55,6 +55,12 @@ class SettingsRepository(context: Context) {
     private val _customAppsJson = MutableStateFlow(prefs.getString(KEY_CUSTOM_APPS, "[]") ?: "[]")
     val customAppsJson: StateFlow<String> = _customAppsJson.asStateFlow()
 
+    private val _presentationVolumeNavigation = MutableStateFlow(prefs.getBoolean(KEY_PRESENTATION_VOLUME_NAVIGATION, false))
+    val presentationVolumeNavigation: StateFlow<Boolean> = _presentationVolumeNavigation.asStateFlow()
+
+    private val _mediaRemoteVisible = MutableStateFlow(false)
+    val mediaRemoteVisible: StateFlow<Boolean> = _mediaRemoteVisible.asStateFlow()
+
     private val _connectionMode = MutableStateFlow(
         try {
             ConnectionMode.valueOf(prefs.getString(KEY_CONNECTION_MODE, ConnectionMode.BLUETOOTH.name) ?: ConnectionMode.BLUETOOTH.name)
@@ -129,6 +135,15 @@ class SettingsRepository(context: Context) {
         prefs.edit().putString(KEY_CUSTOM_APPS, value).apply()
     }
 
+    fun setPresentationVolumeNavigation(enabled: Boolean) {
+        _presentationVolumeNavigation.value = enabled
+        prefs.edit().putBoolean(KEY_PRESENTATION_VOLUME_NAVIGATION, enabled).apply()
+    }
+
+    fun setMediaRemoteVisible(visible: Boolean) {
+        _mediaRemoteVisible.value = visible
+    }
+
     fun setConnectionMode(mode: ConnectionMode) {
         _connectionMode.value = mode
         prefs.edit().putString(KEY_CONNECTION_MODE, mode.name).apply()
@@ -148,6 +163,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_WAN_TOKEN = "wan_token"
         private const val KEY_LAPTOP_PIN = "laptop_pin"
         private const val KEY_CUSTOM_APPS = "custom_apps"
+        private const val KEY_PRESENTATION_VOLUME_NAVIGATION = "presentation_volume_navigation"
         private const val KEY_CONNECTION_MODE = "connection_mode"
     }
 }

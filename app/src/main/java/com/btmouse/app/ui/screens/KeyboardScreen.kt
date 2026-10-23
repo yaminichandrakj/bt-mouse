@@ -251,7 +251,7 @@ fun KeyboardScreen(
             FilterChip(
                 selected = activeSubTab == "power",
                 onClick = { activeSubTab = "power" },
-                label = { Text("🔒 Power & Unlock", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("🔒 Power & Lock", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -636,20 +636,9 @@ fun QuickAppsSection(
     }
 
     val installedApps by coordinator.installedApps.collectAsState()
+    val quickApps = installedApps.filter { it.isQuick }
 
-    val presetApps = listOf(
-        Triple("OneNote", "onenote", Icons.Default.Edit),
-        Triple("Spotify", "spotify", Icons.Default.MusicNote),
-        Triple("Chrome", "chrome", Icons.Default.Language),
-        Triple("Terminal", "terminal", Icons.Default.Terminal),
-        Triple("Task Manager", "taskmgr", Icons.Default.Speed),
-        Triple("Calculator", "calc", Icons.Default.Bolt),
-        Triple("Explorer", "explorer", Icons.Default.Folder),
-        Triple("Settings", "settings", Icons.Default.Settings),
-        Triple("Notepad", "notepad", Icons.Default.Description),
-        Triple("VS Code", "vscode", Icons.Default.Code),
-        Triple("Edge", "edge", Icons.Default.Language)
-    )
+    LaunchedEffect(Unit) { coordinator.queryInstalledApps() }
 
     // Browse PC Installed Apps Modal
     if (showBrowseDialog) {
@@ -959,20 +948,22 @@ fun QuickAppsSection(
             }
         }
 
-        // Preset Grid of Apps
-        Text("Standard Windows Apps", color = TextSecondary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val chunked = presetApps.chunked(2)
-            chunked.forEach { rowApps ->
+        Text("Quick Apps from PC Companion", color = AccentEmerald, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+        if (quickApps.isEmpty()) {
+            Text("Add installed apps to Quick Apps in the PC companion. Only apps present on this PC are shown here.",
+                color = TextMuted, fontSize = 11.sp)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                quickApps.chunked(2).forEach { rowApps ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    rowApps.forEach { (name, appId, icon) ->
+                    rowApps.forEach { app ->
                         Card(
                             modifier = Modifier
                                 .weight(1f)
-                                .clickable { coordinator.launchApp(appId) },
+                                .clickable { coordinator.launchApp(app.path) },
                             colors = CardDefaults.cardColors(containerColor = DarkSurface),
                             shape = RoundedCornerShape(12.dp),
                             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
@@ -988,11 +979,11 @@ fun QuickAppsSection(
                                         .background(PrimaryIndigo.copy(alpha = 0.25f)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(imageVector = icon, contentDescription = name, tint = AccentCyan, modifier = Modifier.size(20.dp))
+                                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = app.name, tint = AccentCyan, modifier = Modifier.size(20.dp))
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text(name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text(app.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
                                     Text("Open on PC", color = TextSecondary, fontSize = 10.sp)
                                 }
                             }
@@ -1003,6 +994,7 @@ fun QuickAppsSection(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -1019,9 +1011,15 @@ fun TasksAndHardwareSection(
     LaunchedEffect(Unit) {
         coordinator.querySystemStats()
         coordinator.queryRunningProcesses()
+        var processRefreshElapsed = 0
         while (true) {
             delay(2500)
             coordinator.querySystemStats()
+            processRefreshElapsed += 2500
+            if (processRefreshElapsed >= 10_000) {
+                coordinator.queryRunningProcesses()
+                processRefreshElapsed = 0
+            }
         }
     }
 
@@ -1227,6 +1225,7 @@ fun CameraAndRecorderSection(
     val rawBytes by coordinator.latestCameraFrame.collectAsState()
     val isStreaming by coordinator.isCameraStreaming.collectAsState()
     val isRecording by coordinator.isAudioRecording.collectAsState()
+    val connectionStatus by coordinator.statusMessage.collectAsState()
 
     val imageBitmap = remember(rawBytes) {
         rawBytes?.let { bytes ->
@@ -1240,6 +1239,10 @@ fun CameraAndRecorderSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Camera & Microphone Control", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        if (connectionStatus.startsWith("Microphone")) {
+            Text(connectionStatus, color = if (connectionStatus.contains("error", ignoreCase = true)) AccentRose else AccentEmerald,
+                fontSize = 11.sp)
+        }
 
         // Webcam Card
         Card(
@@ -1466,6 +1469,8 @@ fun PowerAndUnlockSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Desktop Security & Power", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Text("Windows requires sign-in at the PC to unlock its secure desktop. Remote unlock is unavailable.",
+            color = TextMuted, fontSize = 11.sp)
 
         // Lock the workstation. Unlocking a Windows secure desktop by injected credentials
         // is not supported safely by this companion.

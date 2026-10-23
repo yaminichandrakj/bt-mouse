@@ -43,8 +43,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -91,7 +93,13 @@ fun MediaRemoteScreen(
     val hapticsEnabled by settings.hapticFeedback.collectAsState()
     val mediaStatus by coordinator.mediaStatus.collectAsState()
     val isConnected by coordinator.isConnected.collectAsState()
+    val volumeNavigation by settings.presentationVolumeNavigation.collectAsState()
     val view = LocalView.current
+
+    DisposableEffect(Unit) {
+        settings.setMediaRemoteVisible(true)
+        onDispose { settings.setMediaRemoteVisible(false) }
+    }
 
     // Periodically poll PC media state while on this screen
     LaunchedEffect(isConnected) {
@@ -476,6 +484,21 @@ fun MediaRemoteScreen(
                         color = TextPrimary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Use volume buttons for slides", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Volume up: next · volume down: previous", color = TextMuted, fontSize = 10.sp)
+                    }
+                    Switch(
+                        checked = volumeNavigation,
+                        onCheckedChange = settings::setPresentationVolumeNavigation
                     )
                 }
 

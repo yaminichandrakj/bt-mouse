@@ -1,12 +1,27 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('icon.ico', '.'), ('icon.png', '.')]
+binaries = []
+hiddenimports = []
+for package in (
+    'sounddevice', 'cv2', 'numpy', 'pycaw', 'comtypes',
+    'winrt.windows.media.control', 'winrt.windows.foundation',
+    'winrt.windows.devices.bluetooth.rfcomm', 'winrt.windows.networking.sockets',
+    'winrt.windows.storage.streams',
+):
+    package_datas, package_binaries, package_hiddenimports = collect_all(package)
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_hiddenimports
 
 a = Analysis(
     ['app_gui.py'],
     pathex=[],
-    binaries=[],
-    datas=[('icon.ico', '.'), ('icon.png', '.')],
-    hiddenimports=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

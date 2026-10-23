@@ -9,6 +9,7 @@ from tkinter import ttk, messagebox
 import threading
 import socket
 import json
+import base64
 import os
 import sys
 import time
@@ -50,11 +51,26 @@ try:
 except ImportError:
     HAS_TRAY = False
 
-from server import Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin, save_pairing_pin
+from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin,
+                    save_pairing_pin, load_quick_apps, save_quick_apps)
 
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
+
+
+def set_windows_dpi_awareness():
+    if not IS_WINDOWS:
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            pass
 
 # Color Theme
 BG_DARK = "#0E1118"
@@ -122,6 +138,8 @@ class CompanionApp(tk.Tk):
     def _init_server(self):
         """Initializes a clean Server instance with bound callbacks"""
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
+        self.available_apps = self.server._get_installed_apps()
+        self.quick_apps = load_quick_apps(self.available_apps)
         self.adapters = self.server.get_all_ips()
         self.current_ip = self.server.get_local_ip()
 
@@ -309,10 +327,22 @@ class CompanionApp(tk.Tk):
                                      bg=CARD_BG, fg=TEXT_PRIMARY)
         self.lbl_port_val.pack(anchor="w")
 
+        lbl_pin_head = tk.Label(info_card, text="Wi-Fi Pairing PIN (enter this on your phone):",
+                                font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_pin_head.pack(anchor="w", pady=(12, 2))
+        self.lbl_wifi_pin = tk.Label(info_card, text=self.auth_token, font=("Segoe UI", 18, "bold"),
+                                     bg=BUTTON_BG, fg=ACCENT_GREEN, padx=10, pady=5)
+        self.lbl_wifi_pin.pack(anchor="w", fill="x")
+
         btn_copy = tk.Button(info_card, text="📋 Copy IP Address", font=("Segoe UI", 9, "bold"),
                              bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
                              relief="flat", padx=10, pady=8, command=self.copy_ip, cursor="hand2")
-        btn_copy.pack(fill="x", pady=(16, 6))
+        btn_copy.pack(fill="x", pady=(10, 6))
+
+        btn_copy_pin = tk.Button(info_card, text="📋 Copy Pairing PIN", font=("Segoe UI", 9, "bold"),
+                                 bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+                                 relief="flat", padx=10, pady=8, command=self.copy_pairing_pin, cursor="hand2")
+        btn_copy_pin.pack(fill="x", pady=(0, 6))
 
         btn_refresh = tk.Button(info_card, text="🔄 Refresh QR Code", font=("Segoe UI", 9),
                                 bg=CARD_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
@@ -496,23 +526,36 @@ class CompanionApp(tk.Tk):
                            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
         lbl_sub.pack(anchor="w", pady=(0, 14))
 
-        # Action buttons grid
-        btn_grid = tk.Frame(card, bg=CARD_BG)
-        btn_grid.pack(anchor="w", fill="x", pady=4)
+        quick_box = tk.LabelFrame(card, text=" Quick Apps on this PC ", font=("Segoe UI", 10, "bold"),
+                                  bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=8)
+        quick_box.pack(fill="x", pady=(4, 8))
+        add_row = tk.Frame(quick_box, bg=CARD_BG)
+        add_row.pack(fill="x", pady=(0, 6))
+        self.combo_available_apps = ttk.Combobox(add_row, state="readonly", font=("Segoe UI", 10))
+        self.combo_available_apps.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Button(add_row, text="Add selected app", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
+                  fg=ACCENT_GREEN, relief="flat", padx=8, pady=5, command=self.add_quick_app).pack(side="right")
 
-        apps_to_test = [
-            ("🌐 Chrome", "chrome"),
-            ("📝 OneNote", "onenote"),
-            ("🎵 Spotify", "spotify"),
-            ("💻 Terminal", "terminal"),
-            ("📊 Task Manager", "taskmgr"),
-            ("🧮 Calculator", "calc")
-        ]
-        for idx, (label, app_id) in enumerate(apps_to_test):
-            b = tk.Button(btn_grid, text=label, font=("Segoe UI", 9), bg=BUTTON_BG, fg=TEXT_PRIMARY,
-                          relief="flat", padx=10, pady=6, cursor="hand2",
-                          command=lambda a=app_id: self.server._launch_application(a) if self.server else None)
-            b.grid(row=idx // 3, column=idx % 3, padx=4, pady=4, sticky="ew")
+        self.list_quick_apps = tk.Listbox(quick_box, height=5, font=("Segoe UI", 10), bg=BUTTON_BG,
+                                          fg=TEXT_PRIMARY, selectbackground=ACCENT_INDIGO,
+                                          borderwidth=0, highlightthickness=0, activestyle="none")
+        self.list_quick_apps.pack(fill="x", pady=(0, 6))
+        self.list_quick_apps.bind("<<ListboxSelect>>", self.on_quick_app_selected)
+        edit_row = tk.Frame(quick_box, bg=CARD_BG)
+        edit_row.pack(fill="x")
+        self.ent_quick_app_name = tk.Entry(edit_row, font=("Segoe UI", 10), bg=BUTTON_BG, fg=TEXT_PRIMARY,
+                                           insertbackground=TEXT_PRIMARY, relief="flat")
+        self.ent_quick_app_name.pack(side="left", fill="x", expand=True, padx=(0, 6), ipady=5)
+        tk.Button(edit_row, text="Save name", font=("Segoe UI", 9), bg=BUTTON_BG, fg=ACCENT_CYAN,
+                  relief="flat", padx=8, pady=5, command=self.rename_quick_app).pack(side="left", padx=(0, 5))
+        tk.Button(edit_row, text="Remove", font=("Segoe UI", 9), bg=BUTTON_BG, fg=ACCENT_RED,
+                  relief="flat", padx=8, pady=5, command=self.remove_quick_app).pack(side="left")
+        tk.Button(edit_row, text="Refresh installed apps", font=("Segoe UI", 9), bg=BUTTON_BG,
+                  fg=TEXT_PRIMARY, relief="flat", padx=8, pady=5, command=self.refresh_quick_apps).pack(side="left", padx=(5, 0))
+        self.lbl_quick_apps_status = tk.Label(quick_box, text="Quick apps are saved on this PC and shared with the phone app.",
+                                              font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w")
+        self.lbl_quick_apps_status.pack(fill="x", pady=(5, 0))
+        self.refresh_quick_apps()
 
         # Power Controls
         pwr_frame = tk.Frame(card, bg=CARD_BG)
@@ -769,6 +812,66 @@ class CompanionApp(tk.Tk):
         self.clipboard_append(self.current_ip)
         messagebox.showinfo("Copied", f"IP address '{self.current_ip}' copied to clipboard!")
 
+    def copy_pairing_pin(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.auth_token)
+        messagebox.showinfo("Copied", "The Wi-Fi pairing PIN was copied to the clipboard.")
+
+    def refresh_quick_apps(self):
+        if not self.server:
+            return
+        self.available_apps = self.server._get_installed_apps()
+        self.quick_apps = load_quick_apps(self.available_apps)
+        quick_paths = {item["path"].lower() for item in self.quick_apps}
+        self.combo_available_apps["values"] = [
+            item["name"] for item in self.available_apps if item["path"].lower() not in quick_paths
+        ]
+        self.list_quick_apps.delete(0, tk.END)
+        for item in self.quick_apps:
+            self.list_quick_apps.insert(tk.END, f"{item['name']}  —  {os.path.basename(item['path'])}")
+        if not self.quick_apps:
+            self.lbl_quick_apps_status.config(text="No quick apps saved yet. Select an installed app above to add one.", fg=TEXT_MUTED)
+        else:
+            self.lbl_quick_apps_status.config(text=f"{len(self.quick_apps)} quick app(s). Select one to rename or remove it.", fg=TEXT_MUTED)
+
+    def add_quick_app(self):
+        name = self.combo_available_apps.get().strip()
+        match = next((app for app in self.available_apps if app["name"] == name), None)
+        if not match:
+            self.lbl_quick_apps_status.config(text="Choose an installed app from the list first.", fg=ACCENT_RED)
+            return
+        self.quick_apps = save_quick_apps(self.quick_apps + [{"name": match["name"], "path": match["path"]}])
+        self.refresh_quick_apps()
+        self.lbl_quick_apps_status.config(text=f"Added {match['name']}.", fg=ACCENT_GREEN)
+
+    def on_quick_app_selected(self, _event=None):
+        selected = self.list_quick_apps.curselection()
+        if selected:
+            app = self.quick_apps[selected[0]]
+            self.ent_quick_app_name.delete(0, tk.END)
+            self.ent_quick_app_name.insert(0, app["name"])
+
+    def rename_quick_app(self):
+        selected = self.list_quick_apps.curselection()
+        new_name = self.ent_quick_app_name.get().strip()
+        if not selected or not new_name:
+            self.lbl_quick_apps_status.config(text="Select an app and enter its new display name.", fg=ACCENT_RED)
+            return
+        self.quick_apps[selected[0]]["name"] = new_name[:60]
+        self.quick_apps = save_quick_apps(self.quick_apps)
+        self.refresh_quick_apps()
+        self.lbl_quick_apps_status.config(text="Quick app name saved.", fg=ACCENT_GREEN)
+
+    def remove_quick_app(self):
+        selected = self.list_quick_apps.curselection()
+        if not selected:
+            self.lbl_quick_apps_status.config(text="Select a quick app to remove it.", fg=ACCENT_RED)
+            return
+        name = self.quick_apps[selected[0]]["name"]
+        self.quick_apps = save_quick_apps([app for i, app in enumerate(self.quick_apps) if i != selected[0]])
+        self.refresh_quick_apps()
+        self.lbl_quick_apps_status.config(text=f"Removed {name} from Quick Apps.", fg=ACCENT_GREEN)
+
     def open_windows_bt_settings(self):
         try:
             os.system("start ms-settings:bluetooth")
@@ -839,6 +942,8 @@ class CompanionApp(tk.Tk):
                 messagebox.showerror("PIN Not Saved", f"Could not save the pairing PIN: {e}")
                 return
             self.auth_token = new_token
+            if hasattr(self, "lbl_wifi_pin"):
+                self.lbl_wifi_pin.config(text=new_token)
             if self.server:
                 self.server.auth_token = new_token
                 if hasattr(self.server, "ws_server") and self.server.ws_server:
@@ -908,6 +1013,10 @@ class CompanionApp(tk.Tk):
         self.lbl_media_status.config(text="Recording microphone for 3 seconds...", fg=ACCENT_CYAN)
         def _rec():
             rec_file = self.server.audio_manager.start_recording()
+            if not rec_file:
+                reason = self.server.audio_manager.last_error or "No microphone input is available."
+                self.after(0, lambda: self.lbl_media_status.config(text=f"✕ {reason}", fg=ACCENT_RED))
+                return
             time.sleep(3.0)
             final_file = self.server.audio_manager.stop_recording()
             if final_file and os.path.exists(final_file):
@@ -915,7 +1024,8 @@ class CompanionApp(tk.Tk):
                 self.after(0, lambda: self.lbl_media_status.config(
                     text=f"✓ Recorded {os.path.basename(final_file)} ({sz} bytes)", fg=ACCENT_GREEN))
             else:
-                self.after(0, lambda: self.lbl_media_status.config(text="✕ Mic recording failed.", fg=ACCENT_RED))
+                reason = self.server.audio_manager.last_error or "Microphone recording stopped without a file."
+                self.after(0, lambda: self.lbl_media_status.config(text=f"✕ {reason}", fg=ACCENT_RED))
         threading.Thread(target=_rec, daemon=True).start()
 
     def restart_server(self):
@@ -945,5 +1055,6 @@ class CompanionApp(tk.Tk):
         sys.exit(0)
 
 if __name__ == "__main__":
+    set_windows_dpi_awareness()
     app = CompanionApp()
     app.mainloop()

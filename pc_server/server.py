@@ -29,6 +29,58 @@ def _pairing_pin_config_path():
 
 
 PAIRING_PIN_PATH = _pairing_pin_config_path()
+QUICK_APPS_PATH = PAIRING_PIN_PATH.with_name("quick_apps.json")
+
+
+def save_quick_apps(apps):
+    """Persist curated Start Menu shortcuts; arbitrary commands are never accepted."""
+    roots = [
+        os.path.realpath(os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs")),
+        os.path.realpath(os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs")),
+    ]
+    clean_apps = []
+    seen = set()
+    for app in apps:
+        name = str(app.get("name", "")).strip()[:60]
+        path = os.path.realpath(str(app.get("path", "")).strip())
+        if not name or not path.lower().endswith(".lnk") or path.lower() in seen:
+            continue
+        try:
+            if not any(os.path.commonpath((path, root)).lower() == root.lower() for root in roots):
+                continue
+        except (OSError, ValueError):
+            continue
+        if not os.path.isfile(path):
+            continue
+        clean_apps.append({"name": name, "path": path})
+        seen.add(path.lower())
+    QUICK_APPS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = QUICK_APPS_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(clean_apps, ensure_ascii=False, indent=2), encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(temp_path, 0o600)
+    os.replace(temp_path, QUICK_APPS_PATH)
+    return clean_apps
+
+
+def load_quick_apps(available_apps=None):
+    """Load saved quick apps, seeding only defaults actually present on this PC."""
+    try:
+        saved = json.loads(QUICK_APPS_PATH.read_text(encoding="utf-8"))
+        return save_quick_apps(saved if isinstance(saved, list) else [])
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError):
+        pass
+
+    available_apps = available_apps or []
+    preferred_names = ("chrome", "onenote", "spotify", "terminal", "task manager", "calculator")
+    seeded = []
+    for preferred in preferred_names:
+        match = next((app for app in available_apps if app.get("name", "").strip().lower() == preferred), None)
+        if match:
+            seeded.append({"name": match["name"], "path": match["path"]})
+    return save_quick_apps(seeded)
 
 
 def save_pairing_pin(pin):
@@ -284,8 +336,10 @@ class MediaController:
                     self.last_state.update(res)
                     return self.last_state
                 else:
-                    self.last_state["has_media"] = False
-                    self.last_state["status"] = "NoMedia"
+                    self.last_state.update({
+                        "has_media": False, "title": "", "artist": "", "album": "",
+                        "status": "NoMedia", "position": 0.0, "duration": 0.0
+                    })
             except Exception:
                 pass
         return self.last_state
@@ -328,8 +382,7 @@ class MediaController:
                         if sessions:
                             session = sessions[0]
                     if session:
-                        await session.try_toggle_play_pause_async()
-                        return True
+                        return bool(await session.try_toggle_play_pause_async())
                     return False
 
                 if asyncio.run(_toggle()):
@@ -343,9 +396,11 @@ class MediaController:
                 u32.keybd_event(0xB3, 0, 0, 0)
                 time.sleep(0.01)
                 u32.keybd_event(0xB3, 0, 2, 0)
+                handled = True
             elif self.fallback_media_func:
                 self.fallback_media_func(0xCD)
-        return True
+                handled = True
+        return handled
 
     def next_track(self):
         handled = False
@@ -361,8 +416,7 @@ class MediaController:
                         if sessions:
                             session = sessions[0]
                     if session:
-                        await session.try_skip_next_async()
-                        return True
+                        return bool(await session.try_skip_next_async())
                     return False
 
                 if asyncio.run(_next()):
@@ -376,9 +430,11 @@ class MediaController:
                 u32.keybd_event(0xB0, 0, 0, 0)
                 time.sleep(0.01)
                 u32.keybd_event(0xB0, 0, 2, 0)
+                handled = True
             elif self.fallback_media_func:
                 self.fallback_media_func(0xB5)
-        return True
+                handled = True
+        return handled
 
     def prev_track(self):
         handled = False
@@ -394,8 +450,7 @@ class MediaController:
                         if sessions:
                             session = sessions[0]
                     if session:
-                        await session.try_skip_previous_async()
-                        return True
+                        return bool(await session.try_skip_previous_async())
                     return False
 
                 if asyncio.run(_prev()):
@@ -409,8 +464,11 @@ class MediaController:
                 u32.keybd_event(0xB1, 0, 0, 0)
                 time.sleep(0.01)
                 u32.keybd_event(0xB1, 0, 2, 0)
+                handled = True
             elif self.fallback_media_func:
                 self.fallback_media_func(0xB6)
+                handled = True
+        return handled
         return True
 
 
@@ -593,7 +651,7 @@ class CameraManager:
             print(f"[-] Camera snapshot error: {e}")
         return None
 
-    def start_stream(self, on_frame_callback):
+    def start_stream(self, on_frame_callback, max_width=640, quality=65, max_frame_bytes=None, fps=15):
         if not self.has_cv2:
             return False
         try:
@@ -605,8 +663,8 @@ class CameraManager:
             if not cap.isOpened():
                 cap.release()
                 return False
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, max_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, max(90, int(max_width * 3 / 4)))
         except Exception as e:
             print(f"[-] Camera open error: {e}")
             return False
@@ -621,11 +679,18 @@ class CameraManager:
                 while self.streaming:
                     ret, frame = cap.read()
                     if ret and frame is not None:
-                        ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-                        if ret:
+                        height, width = frame.shape[:2]
+                        if width > max_width:
+                            frame = cv2.resize(frame, (max_width, int(height * max_width / width)))
+                        ret, buf = False, None
+                        for frame_quality in (quality, max(20, quality - 10), max(15, quality - 20)):
+                            ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), frame_quality])
+                            if ret and (max_frame_bytes is None or buf.nbytes <= max_frame_bytes):
+                                break
+                        if ret and (max_frame_bytes is None or buf.nbytes <= max_frame_bytes):
                             b64 = base64.b64encode(buf).decode('utf-8')
                             on_frame_callback(b64)
-                    time.sleep(0.066) # ~15 FPS
+                    time.sleep(1.0 / max(1, fps))
                 cap.release()
             except Exception as e:
                 print(f"[-] Camera stream error: {e}")
@@ -646,9 +711,11 @@ class AudioManager:
     def __init__(self):
         self.recording = False
         self.record_thread = None
-        self.recordings_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+        user_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        self.recordings_dir = os.path.join(user_data, "BTMouse", "Recordings")
         os.makedirs(self.recordings_dir, exist_ok=True)
         self.current_filename = None
+        self.last_error = None
         self.has_audio = False
         try:
             import sounddevice as sd
@@ -659,33 +726,50 @@ class AudioManager:
 
     def start_recording(self):
         if not self.has_audio:
+            self.last_error = "Microphone support is unavailable. Install the companion audio dependencies."
             return None
         if self.recording:
             return self.current_filename
-        self.recording = True
+        self.last_error = None
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.current_filename = os.path.join(self.recordings_dir, f"audio_{ts}.wav")
+        ready = threading.Event()
+        startup = {"error": None}
 
         def _loop():
             try:
                 import sounddevice as sd
                 import wave
-                fs = 16000
+                device = sd.query_devices(kind='input')
+                fs = int(device.get('default_samplerate') or 16000)
+                channels = 1
                 with wave.open(self.current_filename, 'wb') as wf:
-                    wf.setnchannels(1)
+                    wf.setnchannels(channels)
                     wf.setsampwidth(2)
                     wf.setframerate(fs)
-                    with sd.InputStream(samplerate=fs, channels=1, dtype='int16') as stream:
+                    with sd.InputStream(samplerate=fs, channels=channels, dtype='int16') as stream:
+                        self.recording = True
+                        ready.set()
                         while self.recording:
                             data, _ = stream.read(1024)
                             wf.writeframes(data.tobytes())
             except Exception as e:
+                startup["error"] = str(e)
+                self.last_error = str(e)
                 print(f"[-] Audio recording error: {e}")
             finally:
                 self.recording = False
+                ready.set()
 
         self.record_thread = threading.Thread(target=_loop, daemon=True)
         self.record_thread.start()
+        if not ready.wait(timeout=5.0) or not self.recording:
+            self.recording = False
+            self.record_thread.join(timeout=1.0)
+            self.current_filename = None
+            if not self.last_error:
+                self.last_error = startup["error"] or "Microphone did not become ready."
+            return None
         print(f"[+] Started microphone recording to {self.current_filename}")
         return self.current_filename
 
@@ -693,7 +777,8 @@ class AudioManager:
         self.recording = False
         if self.record_thread and self.record_thread.is_alive():
             self.record_thread.join(timeout=1.0)
-        print(f"[+] Stopped microphone recording: {self.current_filename}")
+        if self.current_filename and os.path.exists(self.current_filename):
+            print(f"[+] Stopped microphone recording: {self.current_filename}")
         return self.current_filename
 
 
@@ -840,6 +925,7 @@ class Server:
         self.last_log_time = 0
         self.connected_client = None
         self.auth_failures = {}
+        self._process_cpu_samples = {}
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
         # Bluetooth RFCOMM Server for mobile companion
@@ -990,6 +1076,13 @@ class Server:
             elif addr and self.sock:
                 self._send_udp_json(payload, addr)
 
+        def respond_media_state(action_success=None):
+            response = {"type": "media_status"}
+            response.update(self.media_controller.get_media_state())
+            if action_success is not None:
+                response["action_success"] = bool(action_success)
+            respond(response)
+
         if cmd_type in ("connect", "client_connect"):
             if not self._auth_attempt_allowed(addr):
                 return
@@ -1004,7 +1097,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.3"
+                    "version": "1.3.4"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -1187,24 +1280,24 @@ class Server:
 
         elif cmd_type == "media_seek":
             pos = float(data.get("position", 0.0))
-            self.media_controller.seek(pos)
+            respond_media_state(self.media_controller.seek(pos))
 
         elif cmd_type == "media_toggle":
-            self.media_controller.toggle_play_pause()
+            respond_media_state(self.media_controller.toggle_play_pause())
 
         elif cmd_type == "media_next":
-            self.media_controller.next_track()
+            respond_media_state(self.media_controller.next_track())
 
         elif cmd_type == "media_prev":
-            self.media_controller.prev_track()
+            respond_media_state(self.media_controller.prev_track())
 
         elif cmd_type == "set_volume":
             vol = float(data.get("volume", 0.5))
-            self.media_controller.set_volume(vol)
+            respond_media_state(self.media_controller.set_volume(vol))
 
         elif cmd_type == "set_mute":
             muted = bool(data.get("mute", False))
-            self.media_controller.set_mute(muted)
+            respond_media_state(self.media_controller.set_mute(muted))
 
         elif cmd_type == "launch_app":
             app_id = str(data.get("app", "")).strip()
@@ -1267,19 +1360,17 @@ class Server:
                 self._send_udp_json(resp, addr)
 
         elif cmd_type in ("camera_stream_start", "start_camera_stream"):
-            if responder is None:
-                respond({
-                    "type": "error",
-                    "message": "Live camera streaming is not supported over UDP. Use Bluetooth RFCOMM or Remote mode."
-                })
-                return
             def _on_frame(b64):
                 frame_data = {"type": "camera_frame_response", "frame": b64, "is_streaming": True}
-                if responder:
-                    responder(frame_data)
-                elif addr and self.sock:
-                    self._send_udp_json(frame_data, addr)
-            started = self.camera_manager.start_stream(_on_frame)
+                respond(frame_data)
+            max_bytes = 16 * 1024 if responder is None else None
+            started = self.camera_manager.start_stream(
+                _on_frame,
+                max_width=160 if max_bytes else 640,
+                quality=35 if max_bytes else 65,
+                max_frame_bytes=max_bytes,
+                fps=8 if max_bytes else 15
+            )
             resp = {"type": "camera_stream_status", "streaming": bool(started)}
             if responder:
                 responder(resp)
@@ -1296,7 +1387,12 @@ class Server:
 
         elif cmd_type in ("audio_record_start", "start_audio_record"):
             rec_file = self.audio_manager.start_recording()
-            resp = {"type": "audio_status_response", "recording": bool(rec_file), "file": os.path.basename(rec_file) if rec_file else ""}
+            resp = {
+                "type": "audio_status_response",
+                "recording": bool(rec_file),
+                "file": os.path.basename(rec_file) if rec_file else "",
+                "message": self.audio_manager.last_error or ""
+            }
             if responder:
                 responder(resp)
             elif addr and self.sock:
@@ -1387,6 +1483,9 @@ class Server:
     def _get_installed_apps(self):
         apps = []
         seen = set()
+        quick_paths = set()
+        if QUICK_APPS_PATH.exists():
+            quick_paths = {os.path.realpath(app["path"]).lower() for app in load_quick_apps()}
         start_paths = [
             os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
             os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs")
@@ -1403,7 +1502,8 @@ class Server:
                             continue
                         if clean_name not in seen:
                             seen.add(clean_name)
-                            apps.append({"name": name, "path": os.path.join(root, f)})
+                            path = os.path.realpath(os.path.join(root, f))
+                            apps.append({"name": name, "path": path, "is_quick": path.lower() in quick_paths})
         apps.sort(key=lambda x: x["name"].lower())
         return apps[:150]
 
@@ -1411,19 +1511,35 @@ class Server:
         procs = []
         try:
             import psutil
-            for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+            now = time.monotonic()
+            logical_cpus = max(1, psutil.cpu_count() or 1)
+            live_pids = set()
+            for p in psutil.process_iter(['pid', 'name']):
                 try:
                     info = p.info
-                    mem = info.get('memory_percent') or 0.0
-                    if mem >= 0.3:
+                    pid = info.get('pid')
+                    if not pid:
+                        continue
+                    live_pids.add(pid)
+                    cpu_times = p.cpu_times()
+                    cpu_total = cpu_times.user + cpu_times.system
+                    previous = self._process_cpu_samples.get(pid)
+                    cpu_percent = 0.0
+                    if previous:
+                        elapsed = max(0.001, now - previous[1])
+                        cpu_percent = max(0.0, (cpu_total - previous[0]) * 100.0 / elapsed / logical_cpus)
+                    self._process_cpu_samples[pid] = (cpu_total, now)
+                    memory_mb = p.memory_info().rss / (1024.0 * 1024.0)
+                    if memory_mb >= 1.0:
                         procs.append({
-                            'pid': info['pid'],
-                            'name': info['name'],
-                            'cpu': round(info.get('cpu_percent') or 0, 1),
-                            'ram': round(mem, 1)
+                            'pid': pid,
+                            'name': info.get('name') or "Unknown process",
+                            'cpu': round(cpu_percent, 1),
+                            'ram': round(memory_mb, 1)
                         })
                 except Exception:
                     pass
+            self._process_cpu_samples = {pid: sample for pid, sample in self._process_cpu_samples.items() if pid in live_pids}
             procs.sort(key=lambda x: x['ram'], reverse=True)
         except Exception as e:
             print(f"[-] Error querying processes: {e}")
@@ -1433,16 +1549,20 @@ class Server:
         stats = {"cpu": 0.0, "ram": 0.0, "battery": -1, "power_plugged": True, "disk": 0.0}
         try:
             import psutil
-            stats["cpu"] = round(psutil.cpu_percent(interval=None), 1)
+            stats["cpu"] = round(psutil.cpu_percent(interval=0.1), 1)
             stats["ram"] = round(psutil.virtual_memory().percent, 1)
-            battery = psutil.sensors_battery()
-            if battery:
-                stats["battery"] = round(battery.percent, 1)
-                stats["power_plugged"] = battery.power_plugged
             disk = psutil.disk_usage(os.path.abspath(os.sep))
             stats["disk"] = round(disk.percent, 1)
         except Exception as e:
             print(f"[-] Error querying system stats: {e}")
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            if battery:
+                stats["battery"] = round(battery.percent, 1)
+                stats["power_plugged"] = bool(battery.power_plugged)
+        except Exception:
+            pass
         return stats
 
     def _kill_process(self, pid):

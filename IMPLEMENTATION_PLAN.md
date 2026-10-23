@@ -1,6 +1,6 @@
 # BT Mouse & PC Companion — Implementation Plan
 
-**Plan version:** 2.4
+**Plan version:** 2.5
 **Repository:** `BT Mouse`
 **Status:** Active implementation
 **Updated:** 2026-10-23
@@ -32,14 +32,14 @@ The UI and protocol must communicate these capability differences. A disconnecte
 | High | Wi-Fi protocol | Align command names and use an acknowledged, PIN-authenticated connect flow with timeout/cancel behavior; save the visible PIN before auto-discovery connects. | Implemented; device verification pending |
 | High | First-run network setup | Explain that QR parsing is not a connection, document Windows Firewall UDP ports, and distinguish local WS URLs from public WSS endpoints. | Status copy and connection guidance updated; device/network verification pending |
 | High | RFCOMM response path | Await WinRT `store_async()` on its owning event loop; report and handle failed writes. | Implemented with a bounded response queue; Windows device verification pending |
-| High | Wi-Fi camera stream | Deliver frames/status to the UDP peer or explicitly disable the feature on UDP; do not claim success without a working stream. | UDP streaming now returns an explicit unsupported response; snapshots are size-bounded |
+| High | Wi-Fi camera stream | Deliver bounded frames/status to the UDP peer; use higher quality on reliable transports. | Implemented with low-resolution, byte-bounded UDP frames and higher-resolution Bluetooth/WebSocket frames |
 | High | Numpad | Map every keypad HID usage in the PC companion, including operators and decimal. | Implemented in `server.py`; device verification pending |
-| Medium | Media state | Normalize mute field parsing and isolate state by selected transport; handle non-current WinRT sessions and failed operations. | Core normalization/routing implemented; Windows media-session verification pending |
+| Medium | Media state | Normalize mute field parsing and isolate state by selected transport; refresh state after actions and surface operation status. | Actions return current state; WinRT results are checked with Windows media-key fallback; hardware verification pending |
 | Medium | Connection state | Only show connected after handshake; clear connection on timeout, socket failure, mode change, and disconnect. | Implemented for Wi-Fi/WAN; app permits local `ws://` while the WAN client rejects public non-TLS `ws://` endpoints |
 | Medium | Writing pad | Use selected color; describe mouse-based mapping accurately; clamp and validate coordinates; do not claim pressure support the PC cannot consume. | Color and capability labels implemented; pressure remains phone-preview-only |
 | Medium | Navigation | Remove redundant Settings bottom tab and provide a clear return path from Settings. | Implemented; Android release build passes in Actions |
-| Medium | Dynamic apps | Query installed Start Menu entries, make launch identifiers safe, support search/pinning, and handle missing apps. | Safe server launch and app query implemented; Android flow verification pending |
-| Low | Quality | Add isolated protocol/security regression tests and run available compile/build checks. | Seven local and Actions regression tests pass; both release builds pass |
+| Medium | Dynamic apps | Query installed Start Menu entries, make launch identifiers safe, support editable quick apps and missing-app handling. | Companion can add, rename, and remove saved Start Menu shortcuts; Android shows the same set |
+| Low | Quality | Keep companion UI sharp at Windows display scaling and make microphone diagnostics reflect actual device readiness. | Per-monitor DPI awareness and microphone startup/error reporting implemented |
 
 ## Architecture and protocol contract
 
@@ -48,7 +48,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - Reject unauthenticated UDP commands before any input, query, recording, camera, or system action. Keep discovery and a rate-limited failed-auth response as the only pre-auth operations. Bluetooth RFCOMM relies on OS-level pairing and the RFCOMM session; WebSocket relies on the authenticated WebSocket session.
 - Avoid `shell=True`. Launch only validated registered app identifiers, approved system utilities, or canonical Start Menu shortcut paths. Never treat arbitrary client text as a command line.
 - `connect_ack`, error, media, stats, apps, process, camera, audio, and kill responses use the same response types on all supported transports. UDP responses go to the requesting endpoint; RFCOMM responses are newline-delimited JSON; WebSocket responses remain JSON messages.
-- UDP camera streaming returns an explicit unsupported/error response because ordinary large UDP video datagrams are unreliable. Snapshots are encoded with a bounded UDP payload; use Bluetooth RFCOMM or authenticated WebSocket for live video. Do not broadcast camera frames to unrelated clients.
+- UDP camera streaming sends small, low-resolution frames with a strict encoded-size limit to the requesting peer. Bluetooth RFCOMM and authenticated WebSocket can carry larger frames. Do not broadcast camera frames to unrelated clients.
 - Direct Bluetooth HID has no PC-side response channel. PC-only controls should be visibly unavailable in HID-only mode, while basic HID mouse/keyboard/media input remains enabled.
 
 ## Work phases and ownership
@@ -109,7 +109,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 4. Publish a new version tag only after Actions builds pass. The tag workflow creates the GitHub Release and attaches both binaries.
 5. Verify the release page, attached asset names, and successful Actions run. Document hardware checks that cannot be performed in this environment.
 
-**Release identity:** `v1.3.3` (`versionCode = 10`) is published. It includes stable pairing PIN persistence, shared Wi-Fi/WAN credentials, local WebSocket cleartext compatibility, and an in-app Windows companion updater. GitHub Actions passed both release builds and published the APK and Windows executable. Users upgrading from v1.3.2 must install v1.3.3 once; subsequent Windows companion updates can be checked and applied from the companion itself. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
+**Release identity:** `v1.3.3` (`versionCode = 10`) is the latest published release. The current source targets `v1.3.4` (`versionCode = 11`) with media state acknowledgements, volume-button slide navigation, editable shared Quick Apps, Wi-Fi camera streaming, diagnostics, and UI scaling fixes. Preserve the established Android application id and signing identity so existing installations can upgrade. CI currently reads the repository's historical release keystore; migrating it to protected Actions secrets and removing the checked-in key is a separate security migration because it must preserve the exact signing key.
 
 **Acceptance:** deterministic regression tests pass; GitHub Actions Android and Windows build jobs pass; the current release contains both the APK and EXE; Android compile/lint is checked by Actions; device-specific reliability is reported as pending until tested on real Android/Windows hardware.
 
@@ -117,7 +117,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 
 1. Phase 1 security gates and safe launch behavior are implemented; keep them unchanged unless a review finds a concrete defect.
 2. Handshake and transport parity are implemented; run protocol regression tests and device checks before claiming hardware reliability.
-3. Media, app, writing surface, and mode-aware UI fixes are implemented; verify behavior on Android and Windows.
+3. v1.3.4 implements media state acknowledgements, presentation volume-key mode, editable Quick Apps shared between PC and phone, Wi-Fi camera streaming, live process refresh, truthful audio readiness, visible Wi-Fi PIN, secure lock messaging, and DPI awareness. Verify behavior on Android and Windows.
 4. Codex adds and runs deterministic Python regression tests and adds them to the GitHub Actions workflow.
 5. Bump the app/server version for each release, preserve signing identity, push source changes, and let Actions build both release binaries.
 6. After both builds pass, push the matching version tag, let Actions publish the GitHub Release, and verify both assets.
@@ -130,7 +130,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] RFCOMM writes are serialized on the WinRT event loop with bounded queueing and surfaced write errors.
 - [x] Button-only packets are handled; held mouse, pen, and keyboard inputs are released on disconnect and after 30 seconds without input.
 - [x] Wi-Fi and RFCOMM command names align; keypad map includes keypad usages.
-- [x] UDP camera streaming is explicitly unsupported; UDP snapshots have a size bound; camera/audio status is based on manager outcomes.
+- [x] UDP camera frames are low-resolution and size-bounded; audio recording status follows actual microphone readiness.
 - [x] Mute parsing accepts both field names; Bluetooth mode reads RFCOMM state instead of Wi-Fi state.
 - [x] Writing pad color selection works; UI labels describe mouse emulation rather than a digitizer.
 - [x] WAN setup omits the PIN from QR/discovery, avoids a fabricated default token, and requires `wss://` for non-local hosts.
@@ -141,5 +141,7 @@ The UI and protocol must communicate these capability differences. A disconnecte
 - [x] GitHub Release `v1.3.2` is published with APK and EXE assets.
 - [x] Packaged Windows companion checks GitHub Releases, validates and stages the EXE update, replaces itself after exit, and relaunches (`v1.3.3`).
 - [x] GitHub Release `v1.3.3` is published with APK and Windows companion assets; obsolete root-level APK/EXE downloads were removed.
+- [ ] GitHub Release `v1.3.4` is built and published with Android APK and Windows companion assets.
+- [x] Python source is bundled into a single-file executable by PyInstaller; that EXE embeds its Python runtime. The in-app updater updates this bundle. Native Windows UI/runtime migration remains a separate multi-phase project and must retain network/security and updater parity before replacing the current app.
 - [ ] Hardware verification is completed on Android/Windows devices (not available in this environment).
 - [x] Existing user edits are preserved; prior `v1.3.0` tag remains untouched.

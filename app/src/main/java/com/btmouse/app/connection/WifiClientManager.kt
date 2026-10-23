@@ -203,7 +203,8 @@ class WifiClientManager(
                             AppInfo(
                                 name = obj.get("name")?.asString ?: "",
                                 path = obj.get("path")?.asString ?: "",
-                                cmd = obj.get("cmd")?.asString ?: ""
+                                cmd = obj.get("cmd")?.asString ?: "",
+                                isQuick = obj.get("is_quick")?.asBoolean ?: false
                             )
                         )
                     }
@@ -225,6 +226,12 @@ class WifiClientManager(
                 "audio_status_response" -> {
                     val recording = json.get("recording")?.asBoolean ?: false
                     _isAudioRecording.value = recording
+                    val message = json.get("message")?.asString.orEmpty()
+                    if (recording) {
+                        _statusMessage.value = "Microphone recording started on PC"
+                    } else if (message.isNotBlank()) {
+                        _statusMessage.value = "Microphone error: $message"
+                    }
                 }
             }
         } catch (e: Exception) {

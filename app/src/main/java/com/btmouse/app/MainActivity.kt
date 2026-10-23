@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.SettingsRepository
+import com.btmouse.app.data.HidConstants
 import com.btmouse.app.sensors.AirMouseManager
 import com.btmouse.app.ui.MainScreen
 import com.btmouse.app.ui.theme.BtMouseTheme
@@ -22,6 +24,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var connectionCoordinator: ConnectionCoordinator
     private lateinit var airMouseManager: AirMouseManager
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val volumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (::settingsRepository.isInitialized && ::connectionCoordinator.isInitialized && volumeKey &&
+            settingsRepository.mediaRemoteVisible.value && settingsRepository.presentationVolumeNavigation.value) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                val key = if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) HidConstants.KEY_PAGE_DOWN else HidConstants.KEY_PAGE_UP
+                connectionCoordinator.sendKeyStroke(key, HidConstants.MODIFIER_NONE)
+            }
+            if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()

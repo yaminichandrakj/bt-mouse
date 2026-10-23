@@ -20,7 +20,8 @@ data class ProcessInfo(
 data class AppInfo(
     val name: String = "",
     val path: String = "",
-    val cmd: String = ""
+    val cmd: String = "",
+    val isQuick: Boolean = false
 )
 
 data class CustomAppEntry(
