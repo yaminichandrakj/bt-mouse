@@ -54,7 +54,6 @@ interface InputConnection {
 
     fun launchApp(appId: String) {}
     fun systemPower(action: String) {}
-    fun unlockWorkstation(password: String) {}
 
     // Rich Desktop, Process & Hardware queries
     val systemStats: StateFlow<SystemStats?>? get() = null

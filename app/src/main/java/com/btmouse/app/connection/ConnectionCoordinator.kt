@@ -89,6 +89,19 @@ class ConnectionCoordinator(
     }
 
     fun setMode(mode: ConnectionMode) {
+        val previousMode = settings.connectionMode.value
+        if (mode == previousMode) return
+
+        // A pending socket can otherwise complete after the UI has switched
+        // transports, leaving a hidden connection active in the background.
+        when (previousMode) {
+            ConnectionMode.BLUETOOTH -> {
+                bluetoothRfcommManager.disconnect()
+                bluetoothHidManager.disconnect()
+            }
+            ConnectionMode.WIFI -> wifiClientManager.disconnect()
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.disconnect()
+        }
         settings.setConnectionMode(mode)
     }
 
@@ -127,7 +140,9 @@ class ConnectionCoordinator(
     override val mediaStatus: StateFlow<MediaStatus>
         get() = when (settings.connectionMode.value) {
             ConnectionMode.REMOTE_WAN -> remoteWanManager.mediaStatus
-            ConnectionMode.BLUETOOTH -> if (bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager.mediaStatus else wifiClientManager.mediaStatus
+            // Direct HID has no return channel for PC media metadata. Keep its idle state
+            // isolated instead of displaying data from a previously used Wi-Fi connection.
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.mediaStatus
             ConnectionMode.WIFI -> wifiClientManager.mediaStatus
         }
 
@@ -183,10 +198,6 @@ class ConnectionCoordinator(
 
     override fun systemPower(action: String) {
         currentInputConnection.systemPower(action)
-    }
-
-    override fun unlockWorkstation(password: String) {
-        currentInputConnection.unlockWorkstation(password)
     }
 
     // Rich Desktop, Hardware & Process queries

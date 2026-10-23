@@ -9,6 +9,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -66,6 +68,15 @@ class WifiClientManager(
     private var discoveryJob: Job? = null
     private var receiverJob: Job? = null
     private var senderJob: Job? = null
+    private var connectJob: Job? = null
+    @Volatile private var pendingConnect: PendingConnect? = null
+    @Volatile private var lastPongAtMs: Long = 0L
+
+    private data class PendingConnect(
+        val address: InetAddress,
+        val port: Int,
+        val acknowledgement: CompletableDeferred<JsonObject>
+    )
 
     // High-performance, zero-jitter non-blocking send queue
     private val sendQueue = Channel<DatagramPacket>(capacity = 1000, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -103,7 +114,7 @@ class WifiClientManager(
                     val packet = DatagramPacket(buffer, buffer.size)
                     socket.receive(packet)
                     val jsonStr = String(packet.data, 0, packet.length).trim()
-                    handleIncomingPacket(jsonStr)
+                    handleIncomingPacket(jsonStr, packet.address, packet.port)
                 } catch (e: SocketTimeoutException) {
                     continue
                 } catch (e: Exception) {
@@ -114,11 +125,28 @@ class WifiClientManager(
         }
     }
 
-    private fun handleIncomingPacket(jsonStr: String) {
+    private fun handleIncomingPacket(jsonStr: String, sourceAddress: InetAddress, sourcePort: Int) {
         try {
             val json = gson.fromJson(jsonStr, JsonObject::class.java)
             val type = json.get("type")?.asString ?: ""
             when (type) {
+                "pong" -> lastPongAtMs = android.os.SystemClock.elapsedRealtime()
+                "connect_ack" -> {
+                    val pending = pendingConnect
+                    if (pending != null && pending.address == sourceAddress && pending.port == sourcePort) {
+                        pending.acknowledgement.complete(json)
+                    }
+                }
+                "auth_error" -> {
+                    _isConnected.value = false
+                    _connectedDeviceName.value = null
+                    clearSessionState()
+                    heartbeatJob?.cancel()
+                    _statusMessage.value = json.get("message")?.asString ?: "Pairing PIN rejected"
+                }
+                "error" -> {
+                    _statusMessage.value = json.get("message")?.asString ?: "PC server could not complete the request"
+                }
                 "media_status" -> {
                     val hasMedia = json.get("has_media")?.asBoolean ?: false
                     val title = json.get("title")?.asString ?: ""
@@ -128,7 +156,7 @@ class WifiClientManager(
                     val position = json.get("position")?.asFloat ?: 0f
                     val duration = json.get("duration")?.asFloat ?: 0f
                     val volume = json.get("volume")?.asFloat ?: 0.5f
-                    val muted = json.get("muted")?.asBoolean ?: false
+                    val muted = (json.get("is_muted") ?: json.get("muted"))?.asBoolean ?: false
 
                     _mediaStatus.value = MediaStatus(
                         hasMedia = hasMedia,
@@ -206,9 +234,17 @@ class WifiClientManager(
 
     fun startHeartbeat() {
         heartbeatJob?.cancel()
+        lastPongAtMs = android.os.SystemClock.elapsedRealtime()
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 if (_isConnected.value) {
+                    if (android.os.SystemClock.elapsedRealtime() - lastPongAtMs > 8_000L) {
+                        _isConnected.value = false
+                        _connectedDeviceName.value = null
+                        clearSessionState()
+                        _statusMessage.value = "PC server stopped responding"
+                        break
+                    }
                     sendPacket(mapOf("type" to "ping"))
                     // Periodically poll PC media state
                     queryMedia()
@@ -264,14 +300,56 @@ class WifiClientManager(
     }
 
     fun connectManual(host: String, port: Int, serverName: String = "PC Server") {
-        scope.launch(Dispatchers.IO) {
+        connectJob?.cancel()
+        pendingConnect = null
+        heartbeatJob?.cancel()
+        _isConnected.value = false
+        _connectedDeviceName.value = null
+        val pin = settings.serverPin.value.trim()
+        if (host.isBlank() || port !in 1..65535) {
+            _statusMessage.value = "Enter a valid PC address and port"
+            return
+        }
+        if (pin.isBlank()) {
+            _statusMessage.value = "Enter the pairing PIN shown by the PC companion"
+            return
+        }
+
+        connectJob = scope.launch(Dispatchers.IO) {
             try {
                 _statusMessage.value = "Connecting to $host:$port..."
-                val connectPacket = mapOf("type" to "connect", "client" to "Android BT Mouse")
-                sendPacket(connectPacket, host, port)
+                val address = InetAddress.getByName(host)
+                val acknowledgement = CompletableDeferred<JsonObject>()
+                pendingConnect = PendingConnect(address, port, acknowledgement)
+                val connectPacket = mapOf("type" to "connect", "client" to "Android BT Mouse", "token" to pin)
+                var accepted = false
+                var confirmedServerName = serverName
+                for (attempt in 0 until 3) {
+                    sendPacket(connectPacket, host, port, allowDisconnected = true)
+                    val reply = withTimeoutOrNull(1200) { acknowledgement.await() }
+                    if (reply != null) {
+                        accepted = reply.get("success")?.asBoolean == true
+                        confirmedServerName = reply.get("server_name")?.asString ?: serverName
+                        if (!accepted) {
+                            _statusMessage.value = reply.get("error")?.asString ?: "Pairing PIN rejected"
+                        }
+                        break
+                    }
+                }
+                pendingConnect = null
+                if (!accepted) {
+                    _isConnected.value = false
+                    if (_statusMessage.value.startsWith("Connecting")) {
+                        _statusMessage.value = "PC server did not respond. Check the address, PIN, and firewall."
+                    }
+                    return@launch
+                }
+
+                settings.setWifiHost(host)
+                settings.setWifiPort(port)
                 _isConnected.value = true
-                _connectedDeviceName.value = "$serverName ($host)"
-                _statusMessage.value = "Connected to $serverName"
+                _connectedDeviceName.value = "$confirmedServerName ($host)"
+                _statusMessage.value = "Connected to $confirmedServerName"
                 startHeartbeat()
                 queryMedia()
             } catch (e: Exception) {
@@ -283,27 +361,47 @@ class WifiClientManager(
     }
 
     fun disconnect() {
+        connectJob?.cancel()
+        pendingConnect = null
         scope.launch(Dispatchers.IO) {
-            sendPacket(mapOf("type" to "disconnect"))
+            if (_isConnected.value) sendPacket(mapOf("type" to "disconnect"))
             _isConnected.value = false
             _connectedDeviceName.value = null
             _statusMessage.value = "Disconnected"
-            _mediaStatus.value = MediaStatus()
+            clearSessionState()
             heartbeatJob?.cancel()
         }
     }
 
-    private fun sendPacket(data: Map<String, Any>, hostOverride: String? = null, portOverride: Int? = null) {
+    private fun clearSessionState() {
+        _mediaStatus.value = MediaStatus()
+        _systemStats.value = null
+        _runningProcesses.value = emptyList()
+        _installedApps.value = emptyList()
+        _latestCameraFrame.value = null
+        _isCameraStreaming.value = false
+        _isAudioRecording.value = false
+    }
+
+    private fun sendPacket(
+        data: Map<String, Any?>,
+        hostOverride: String? = null,
+        portOverride: Int? = null,
+        allowDisconnected: Boolean = false
+    ) {
+        if (!_isConnected.value && !allowDisconnected && data["type"] != "connect") return
         val targetHost = hostOverride ?: settings.wifiHost.value
         val targetPort = portOverride ?: settings.wifiPort.value
         if (targetHost.isEmpty() || targetPort <= 0) return
 
         try {
-            val json = gson.toJson(data)
+            val authenticatedData = data + ("token" to settings.serverPin.value.trim())
+            val json = gson.toJson(authenticatedData)
             val bytes = json.toByteArray()
             val address = InetAddress.getByName(targetHost)
             val packet = DatagramPacket(bytes, bytes.size, address, targetPort)
-            sendQueue.trySend(packet)
+            val result = sendQueue.trySend(packet)
+            if (result.isFailure) Log.w(tag, "Dropped UDP packet because the send queue is full")
         } catch (e: Exception) {
             Log.e(tag, "Error enqueuing UDP packet", e)
         }
@@ -447,15 +545,6 @@ class WifiClientManager(
         )
     }
 
-    override fun unlockWorkstation(password: String) {
-        sendPacket(
-            mapOf(
-                "type" to "unlock",
-                "password" to password
-            )
-        )
-    }
-
     override fun querySystemStats() {
         sendPacket(mapOf("type" to "query_system_stats"))
     }
@@ -469,7 +558,7 @@ class WifiClientManager(
     }
 
     override fun queryInstalledApps() {
-        sendPacket(mapOf("type" to "query_installed_apps"))
+        sendPacket(mapOf("type" to "query_apps"))
     }
 
     override fun requestCameraSnapshot() {
@@ -477,23 +566,24 @@ class WifiClientManager(
     }
 
     override fun startCameraStream() {
-        sendPacket(mapOf("type" to "start_camera_stream"))
+        sendPacket(mapOf("type" to "camera_stream_start"))
     }
 
     override fun stopCameraStream() {
-        sendPacket(mapOf("type" to "stop_camera_stream"))
+        sendPacket(mapOf("type" to "camera_stream_stop"))
     }
 
     override fun startAudioRecord() {
-        sendPacket(mapOf("type" to "start_audio_record"))
+        sendPacket(mapOf("type" to "audio_record_start"))
     }
 
     override fun stopAudioRecord() {
-        sendPacket(mapOf("type" to "stop_audio_record"))
+        sendPacket(mapOf("type" to "audio_record_stop"))
     }
 
     fun cleanup() {
         heartbeatJob?.cancel()
+        connectJob?.cancel()
         discoveryJob?.cancel()
         receiverJob?.cancel()
         senderJob?.cancel()

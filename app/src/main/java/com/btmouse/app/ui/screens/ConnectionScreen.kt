@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
@@ -67,6 +68,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
@@ -103,9 +105,11 @@ fun ConnectionScreen(
 
     val wifiHost by settings.wifiHost.collectAsState()
     val wifiPort by settings.wifiPort.collectAsState()
+    val savedServerPin by settings.serverPin.collectAsState()
 
     var manualHost by remember(wifiHost) { mutableStateOf(wifiHost) }
     var manualPort by remember(wifiPort) { mutableStateOf(wifiPort.toString()) }
+    var wifiPin by remember(savedServerPin) { mutableStateOf(savedServerPin) }
 
     var showQrDialog by remember { mutableStateOf(false) }
     var qrInputText by remember { mutableStateOf("") }
@@ -120,12 +124,16 @@ fun ConnectionScreen(
                 val type = obj.get("type")?.asString ?: ""
                 if (type == "btmouse_wan" || obj.has("url")) {
                     val url = obj.get("url")?.asString ?: ""
-                    val token = obj.get("token")?.asString ?: "123456"
+                    val token = obj.get("token")?.asString ?: settings.wanToken.value
                     if (url.isNotEmpty()) {
                         settings.setWanUrl(url)
-                        settings.setWanToken(token)
                         coordinator.setMode(ConnectionMode.REMOTE_WAN)
-                        coordinator.remoteWanManager.connect(url, token)
+                        if (token.isNotBlank()) {
+                            settings.setWanToken(token)
+                            coordinator.remoteWanManager.connect(url, token)
+                        } else {
+                            Toast.makeText(context, "Enter the pairing PIN, then connect", Toast.LENGTH_LONG).show()
+                        }
                         return true
                     }
                 }
@@ -136,6 +144,7 @@ fun ConnectionScreen(
                 if (ip.isNotEmpty()) {
                     manualHost = ip
                     manualPort = port.toString()
+                    settings.setServerPin(wifiPin)
                     settings.setWifiHost(ip)
                     settings.setWifiPort(port)
                     coordinator.wifiClientManager.connectManual(ip, port, name)
@@ -149,6 +158,7 @@ fun ConnectionScreen(
                 if (ip.isNotEmpty()) {
                     manualHost = ip
                     manualPort = port.toString()
+                    settings.setServerPin(wifiPin)
                     settings.setWifiHost(ip)
                     settings.setWifiPort(port)
                     coordinator.wifiClientManager.connectManual(ip, port, name)
@@ -160,6 +170,7 @@ fun ConnectionScreen(
                 val port = if (parts.size > 1) parts[1].toIntOrNull() ?: 53530 else 53530
                 manualHost = ip
                 manualPort = port.toString()
+                settings.setServerPin(wifiPin)
                 settings.setWifiHost(ip)
                 settings.setWifiPort(port)
                 coordinator.wifiClientManager.connectManual(ip, port, "PC Server")
@@ -185,7 +196,7 @@ fun ConnectionScreen(
                     if (rawValue.isNotEmpty()) {
                         val success = parseAndConnectQr(rawValue)
                         if (success) {
-                            Toast.makeText(context, "Connected to PC Server!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "PC details loaded; check connection status", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Unrecognized QR format: $rawValue", Toast.LENGTH_LONG).show()
                         }
@@ -491,9 +502,25 @@ fun ConnectionScreen(
                                 singleLine = true
                             )
 
+                            OutlinedTextField(
+                                value = wifiPin,
+                                onValueChange = { wifiPin = it.filter(Char::isDigit).take(12) },
+                                label = { Text("PC companion pairing PIN") },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = PrimaryIndigo,
+                                    unfocusedBorderColor = DarkBorder,
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary
+                                ),
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation()
+                            )
+
                             Button(
                                 onClick = {
                                     val portInt = manualPort.toIntOrNull() ?: 53530
+                                    settings.setServerPin(wifiPin)
                                     settings.setWifiHost(manualHost)
                                     settings.setWifiPort(portInt)
                                     coordinator.wifiClientManager.connectManual(manualHost, portInt)
@@ -559,8 +586,8 @@ fun ConnectionScreen(
                             OutlinedTextField(
                                 value = inputWanUrl,
                                 onValueChange = { inputWanUrl = it },
-                                label = { Text("WebSocket URL (ws://...:53531 or wss://...)") },
-                                placeholder = { Text("ws://your-ip-or-domain:53531") },
+                                label = { Text("WebSocket URL (use wss:// over the Internet)") },
+                                placeholder = { Text("wss://your-domain:53531 (Internet) or ws://PC-IP:53531 (LAN)") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = AccentCyan,
@@ -575,7 +602,7 @@ fun ConnectionScreen(
                                 value = inputWanToken,
                                 onValueChange = { inputWanToken = it },
                                 label = { Text("Security Access Key / PIN") },
-                                placeholder = { Text("123456") },
+                                placeholder = { Text("Enter the PIN shown by the PC companion") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = AccentCyan,
@@ -614,7 +641,7 @@ fun ConnectionScreen(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                "Connect to your laptop from outside your home network! Use your router's port forward (port 53531), Cloudflare Tunnel, ngrok, or Tailscale. Your connection is secured with the Security Access Key.",
+                                "For Internet access, use a TLS-terminated wss:// address from a trusted tunnel or reverse proxy. Never forward the companion's plain ws:// listener directly to the Internet.",
                                 color = TextSecondary,
                                 fontSize = 12.sp
                             )

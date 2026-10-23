@@ -118,6 +118,22 @@ fun TouchpadSurface(
                         }
                     }
 
+                    MotionEvent.ACTION_POINTER_UP -> {
+                        if (pointerCount == 2) {
+                            val remainingIndex = if (motionEvent.actionIndex == 0) 1 else 0
+                            lastX = motionEvent.getX(remainingIndex)
+                            lastY = motionEvent.getY(remainingIndex)
+                            accumulatedDx = 0f
+                            accumulatedDy = 0f
+                        } else if (pointerCount > 2) {
+                            val remainingIndices = (0 until pointerCount).filter { it != motionEvent.actionIndex }.take(2)
+                            if (remainingIndices.size == 2) {
+                                lastTwoFingerX = (motionEvent.getX(remainingIndices[0]) + motionEvent.getX(remainingIndices[1])) / 2f
+                                lastTwoFingerY = (motionEvent.getY(remainingIndices[0]) + motionEvent.getY(remainingIndices[1])) / 2f
+                            }
+                        }
+                    }
+
                     MotionEvent.ACTION_MOVE -> {
                         if (pointerCount == 1) {
                             val currentX = motionEvent.x

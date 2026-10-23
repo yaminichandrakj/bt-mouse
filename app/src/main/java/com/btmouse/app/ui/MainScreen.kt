@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
@@ -64,7 +65,6 @@ sealed class NavigationTab(val title: String, val icon: ImageVector) {
     object WritingPad : NavigationTab("Pen", Icons.Default.Draw)
     object Media : NavigationTab("Media", Icons.Default.PlayCircle)
     object Connect : NavigationTab("Connect", Icons.Default.Wifi)
-    object Settings : NavigationTab("Settings", Icons.Default.Settings)
 }
 
 @Composable
@@ -78,11 +78,11 @@ fun MainScreen(
         NavigationTab.Keyboard,
         NavigationTab.WritingPad,
         NavigationTab.Media,
-        NavigationTab.Connect,
-        NavigationTab.Settings
+        NavigationTab.Connect
     )
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
+    var showSettings by remember { mutableStateOf(false) }
     val isConnected by coordinator.isConnected.collectAsState()
 
     Scaffold(
@@ -105,13 +105,12 @@ fun MainScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = when (selectedTabIndex) {
+                        text = if (showSettings) "SETTINGS & UPDATES" else when (selectedTabIndex) {
                             0 -> "BT MOUSE & TRACKPAD"
                             1 -> "KEYBOARD & SHORTCUTS"
                             2 -> "PEN & TOUCHSCREEN"
                             3 -> "MEDIA & VOLUME REMOTE"
                             4 -> "CONNECTION & QR"
-                            5 -> "SETTINGS & UPDATES"
                             else -> "BT MOUSE"
                         },
                         color = TextPrimary,
@@ -121,13 +120,13 @@ fun MainScreen(
                 }
 
                 IconButton(
-                    onClick = { selectedTabIndex = 5 },
+                    onClick = { showSettings = !showSettings },
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = if (selectedTabIndex == 5) AccentCyan else TextMuted
+                        imageVector = if (showSettings) Icons.Default.ArrowBack else Icons.Default.Settings,
+                        contentDescription = if (showSettings) "Back" else "Settings",
+                        tint = if (showSettings) AccentCyan else TextMuted
                     )
                 }
             }
@@ -175,13 +174,14 @@ fun MainScreen(
                 .background(DarkBackground)
                 .padding(innerPadding)
         ) {
-            when (selectedTabIndex) {
+            if (showSettings) {
+                SettingsScreen(settings, airMouseManager, onClose = { showSettings = false })
+            } else when (selectedTabIndex) {
                 0 -> TouchpadScreen(coordinator, airMouseManager, settings)
                 1 -> KeyboardScreen(coordinator, settings)
                 2 -> WritingPadScreen(coordinator, settings)
                 3 -> MediaRemoteScreen(coordinator, settings)
                 4 -> ConnectionScreen(coordinator, settings)
-                5 -> SettingsScreen(settings, airMouseManager, onClose = { selectedTabIndex = 0 })
             }
         }
     }

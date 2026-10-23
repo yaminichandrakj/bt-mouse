@@ -413,14 +413,6 @@ class BluetoothRfcommManager(
         sendJson(obj)
     }
 
-    override fun unlockWorkstation(password: String) {
-        val obj = JsonObject().apply {
-            addProperty("type", "unlock")
-            addProperty("password", password)
-        }
-        sendJson(obj)
-    }
-
     override fun querySystemStats() {
         val obj = JsonObject().apply { addProperty("type", "query_stats") }
         sendJson(obj)

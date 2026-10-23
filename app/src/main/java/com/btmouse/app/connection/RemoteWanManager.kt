@@ -10,7 +10,6 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,8 +37,6 @@ class RemoteWanManager(
         .build()
 
     private var webSocket: WebSocket? = null
-    private val sendQueue = Channel<String>(capacity = 100)
-
     private val _isConnected = MutableStateFlow(false)
     override val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
@@ -71,26 +68,13 @@ class RemoteWanManager(
     override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
 
     private var heartbeatJob: Job? = null
-    private var sendJob: Job? = null
-
-    init {
-        startSender()
-    }
-
-    private fun startSender() {
-        sendJob = scope.launch(Dispatchers.IO) {
-            for (message in sendQueue) {
-                try {
-                    webSocket?.send(message)
-                } catch (e: Exception) {
-                    Log.e(tag, "Failed to send packet over WebSocket", e)
-                }
-            }
-        }
-    }
 
     fun connect(url: String, token: String) {
         disconnect()
+        if (token.isBlank()) {
+            _statusMessage.value = "Enter the pairing PIN shown by the PC companion"
+            return
+        }
         _statusMessage.value = "Connecting to $url..."
 
         val req = try {
@@ -99,9 +83,15 @@ class RemoteWanManager(
             _statusMessage.value = "Invalid URL: ${e.message}"
             return
         }
+        val host = req.url.host
+        if (req.url.scheme == "ws" && !isLocalHost(host)) {
+            _statusMessage.value = "Use wss:// for Internet connections. ws:// is allowed only on a local network."
+            return
+        }
 
         webSocket = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                if (webSocket !== ws) return
                 Log.d(tag, "WebSocket opened, sending authentication token")
                 _statusMessage.value = "Authenticating with server..."
                 // Send authentication handshake
@@ -113,18 +103,36 @@ class RemoteWanManager(
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                handleIncomingMessage(text)
+                if (webSocket !== ws) return
+                handleIncomingMessage(text, ws)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                if (webSocket !== ws) return
                 _isConnected.value = false
+                heartbeatJob?.cancel()
+                _connectedDeviceName.value = null
+                clearRemoteSession()
                 _statusMessage.value = "Server disconnected: $reason"
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                if (webSocket !== ws) return
                 Log.e(tag, "WebSocket failure: ${t.message}", t)
                 _isConnected.value = false
+                heartbeatJob?.cancel()
+                _connectedDeviceName.value = null
+                clearRemoteSession()
                 _statusMessage.value = "Connection failed: ${t.message}"
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                if (webSocket !== ws) return
+                _isConnected.value = false
+                heartbeatJob?.cancel()
+                _connectedDeviceName.value = null
+                clearRemoteSession()
+                _statusMessage.value = "Disconnected"
             }
         })
     }
@@ -139,9 +147,20 @@ class RemoteWanManager(
         _isConnected.value = false
         _statusMessage.value = "Disconnected"
         _connectedDeviceName.value = null
+        clearRemoteSession()
     }
 
-    private fun handleIncomingMessage(text: String) {
+    private fun clearRemoteSession() {
+        _mediaStatus.value = MediaStatus()
+        _isCameraStreaming.value = false
+        _isAudioRecording.value = false
+        _systemStats.value = null
+        _runningProcesses.value = emptyList()
+        _installedApps.value = emptyList()
+        _latestCameraFrame.value = null
+    }
+
+    private fun handleIncomingMessage(text: String, source: WebSocket) {
         try {
             val root = gson.fromJson(text, JsonObject::class.java) ?: return
             val type = root.get("type")?.asString ?: ""
@@ -159,7 +178,10 @@ class RemoteWanManager(
                         querySystemStats()
                     } else {
                         _isConnected.value = false
+                        _connectedDeviceName.value = null
+                        clearRemoteSession()
                         _statusMessage.value = "Authentication failed: $msg"
+                        source.close(1008, "Authentication failed")
                     }
                 }
                 "media_status" -> {
@@ -171,7 +193,7 @@ class RemoteWanManager(
                     val position = root.get("position")?.asFloat ?: 0f
                     val duration = root.get("duration")?.asFloat ?: 0f
                     val volume = root.get("volume")?.asFloat ?: 0.5f
-                    val isMuted = root.get("is_muted")?.asBoolean ?: false
+                    val isMuted = (root.get("is_muted") ?: root.get("muted"))?.asBoolean ?: false
 
                     _mediaStatus.value = MediaStatus(
                         hasMedia = hasMedia,
@@ -264,7 +286,25 @@ class RemoteWanManager(
     }
 
     private fun sendJson(obj: JsonObject) {
-        sendQueue.trySend(obj.toString())
+        if (!_isConnected.value) return
+        val socket = webSocket ?: return
+        if (!socket.send(obj.toString())) {
+            Log.w(tag, "WebSocket rejected an outgoing packet")
+        }
+    }
+
+    private fun isLocalHost(host: String): Boolean {
+        val normalized = host.lowercase()
+        if (normalized == "localhost" || normalized.endsWith(".local")) return true
+        val octets = normalized.split('.')
+        if (octets.size == 4) {
+            val ip = octets.map { it.toIntOrNull() ?: return false }
+            return ip[0] == 10 || ip[0] == 127 ||
+                (ip[0] == 172 && ip[1] in 16..31) ||
+                (ip[0] == 192 && ip[1] == 168) ||
+                (ip[0] == 169 && ip[1] == 254)
+        }
+        return normalized == "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:")
     }
 
     private fun sendPacket(data: Map<String, Any?>) {
@@ -410,14 +450,6 @@ class RemoteWanManager(
         val obj = JsonObject().apply {
             addProperty("type", "system_power")
             addProperty("action", action)
-        }
-        sendJson(obj)
-    }
-
-    override fun unlockWorkstation(password: String) {
-        val obj = JsonObject().apply {
-            addProperty("type", "unlock")
-            addProperty("password", password)
         }
         sendJson(obj)
     }

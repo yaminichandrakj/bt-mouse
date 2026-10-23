@@ -135,7 +135,7 @@ fun WritingPadScreen(
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (isAbsoluteMapping) "1:1 Screen Mapping" else "Relative Tablet Pad",
+                        text = if (isAbsoluteMapping) "Absolute mouse mapping (Windows)" else "Relative mouse pad",
                         color = TextMuted,
                         fontSize = 10.sp,
                         maxLines = 1,
@@ -174,7 +174,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isAbsoluteMapping,
                 onClick = { isAbsoluteMapping = true },
-                label = { Text("1:1 Touchscreen", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Absolute Mouse (Windows)", fontSize = 11.sp, softWrap = false) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -186,7 +186,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = !isAbsoluteMapping,
                 onClick = { isAbsoluteMapping = false },
-                label = { Text("Relative Pad", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Relative Mouse", fontSize = 11.sp, softWrap = false) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -213,7 +213,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isEraser,
                 onClick = { isEraser = true },
-                label = { Text("🧹 Eraser", fontSize = 11.sp, softWrap = false) },
+                label = { Text("🖱 Right Button", fontSize = 11.sp, softWrap = false) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AccentRose.copy(alpha = 0.35f),
                     selectedLabelColor = AccentRose,
@@ -221,6 +221,21 @@ fun WritingPadScreen(
                 ),
                 shape = RoundedCornerShape(8.dp)
             )
+
+            colors.forEach { color ->
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(color)
+                        .border(
+                            width = if (selectedColor == color) 2.dp else 1.dp,
+                            color = if (selectedColor == color) TextPrimary else DarkBorder,
+                            shape = CircleShape
+                        )
+                        .clickable { selectedColor = color }
+                )
+            }
 
             Box(modifier = Modifier.width(1.dp).height(24.dp).background(DarkBorder))
 
@@ -283,7 +298,7 @@ fun WritingPadScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            currentColor = if (isEraser) Color.Transparent else AccentCyan,
+            currentColor = if (isEraser) Color.Transparent else selectedColor,
             currentStrokeWidth = strokeThickness,
             isStylusOnly = isStylusOnly,
             isAbsoluteMapping = isAbsoluteMapping,
@@ -301,7 +316,7 @@ fun WritingPadScreen(
 
         // Bottom Help Card
         Text(
-            text = "💡 Direct touch screen & digitizer for your PC! Draw in OneNote, Paint, or Whiteboard. Toggle 'Eraser' to erase strokes on PC, or tap Undo (Ctrl+Z).",
+            text = "💡 This pad previews ink on your phone and sends mouse input to the PC. Absolute positioning is Windows mouse emulation; pressure-sensitive digitizer input is not supported. Right Button sends a right-click while drawing.",
             color = TextMuted,
             fontSize = 11.sp,
             lineHeight = 15.sp

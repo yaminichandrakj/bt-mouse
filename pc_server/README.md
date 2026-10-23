@@ -1,6 +1,6 @@
 # PC Companion Application & Server
 
-This companion app allows your Android phone or tablet to control this PC over your local Wi-Fi, hotspot, or USB tethering with near-zero latency (~1ms UDP packets), featuring interactive QR code pairing and graphics tablet / stylus writing pad support.
+This companion app lets your Android phone or tablet control a PC over local Wi-Fi, Bluetooth RFCOMM, or an authenticated WebSocket endpoint. Wi-Fi input uses low-latency UDP and local discovery. The server also provides supported media, app, process, stats, camera, and audio controls.
 
 > **Note:** If you are using **Bluetooth HID Mode**, you **DO NOT NEED THIS SERVER AT ALL**. The phone acts as a real hardware Bluetooth mouse & keyboard directly recognized by Windows/Mac/Linux out of the box!
 
@@ -25,16 +25,18 @@ python app_gui.py
 1. Make sure your PC and phone/tablet are connected to the same Wi-Fi network (or phone hotspot).
 2. Open the **BT Mouse** app on your phone.
 3. Switch to the **Connect** tab -> select **Wi-Fi Network**.
-4. Tap **"Scan QR Code"** and scan the QR code displayed on the PC Companion App window!
-   *(Or tap "Auto-Discover PC Server on Wi-Fi" / enter the IP manually)*
-5. Done! You now have instant mouse, live typing, PC shortcut control, and graphics tablet writing pad support.
+4. Enter the six-digit pairing PIN shown by the companion, then scan its Wi-Fi QR code or tap **Auto-Discover** / enter the IP manually.
+5. Wait for the PIN-validated connection acknowledgment before sending input.
 
 ---
 
 ## Features
 - **Instant QR Code Pairing**: No IP typing needed; point your phone at the PC screen.
 - **Hardware-Accelerated Native Windows Input**: Uses direct `user32.mouse_event` for butter-smooth pointer movement and scrolling.
-- **Tablet Writing Pad & Stylus Mode**: Turn any Android tablet or phone into a graphics slate with 1:1 screen mapping, pressure sensitivity, and palm rejection for MS Paint, OneNote, Whiteboard, and Photoshop.
+- **Writing Pad**: Phone ink preview with mouse input to the PC. Windows absolute positioning is mouse emulation; pressure-sensitive digitizer input and colored PC strokes are not supported.
+- **Camera**: Wi-Fi snapshots are size-limited. Live camera streaming uses RFCOMM or WebSocket because UDP video datagrams are unreliable.
+- **Pairing**: Six-digit PIN appears in the PC companion/terminal. It is not placed in discovery or QR payloads.
+- **Remote access**: Internet connections require a `wss://` TLS endpoint, such as a securely configured tunnel or reverse proxy. Never expose the built-in plain `ws://` listener directly to the Internet.
 - **Live Keystroke Streaming**: Characters appear on your PC in real-time as you type on your phone.
 - **In-App Updates**: One-tap GitHub release update checker and automatic APK installer.
 - **Bluetooth Assistant**: One-click shortcuts to reset and pair Windows Bluetooth if devices act up.

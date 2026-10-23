@@ -13,6 +13,8 @@ import os
 import traceback
 import base64
 import asyncio
+import hmac
+import secrets
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -93,7 +95,22 @@ if HAS_PYNPUT:
         0x52: Key.up,
         # Numpad
         0x53: Key.num_lock,
+        0x54: KeyCode.from_vk(0x6F),  # Keypad divide
+        0x55: KeyCode.from_vk(0x6A),  # Keypad multiply
+        0x56: KeyCode.from_vk(0x6D),  # Keypad subtract
+        0x57: KeyCode.from_vk(0x6B),  # Keypad add
         0x58: Key.enter,
+        0x59: KeyCode.from_vk(0x61),
+        0x5A: KeyCode.from_vk(0x62),
+        0x5B: KeyCode.from_vk(0x63),
+        0x5C: KeyCode.from_vk(0x64),
+        0x5D: KeyCode.from_vk(0x65),
+        0x5E: KeyCode.from_vk(0x66),
+        0x5F: KeyCode.from_vk(0x67),
+        0x60: KeyCode.from_vk(0x68),
+        0x61: KeyCode.from_vk(0x69),
+        0x62: KeyCode.from_vk(0x60),
+        0x63: KeyCode.from_vk(0x6E),
     }
 
 
@@ -171,6 +188,7 @@ class MediaController:
         vol, muted = self.get_volume()
         self.last_state["volume"] = round(vol, 2)
         self.last_state["muted"] = muted
+        self.last_state["is_muted"] = muted
 
         if self.has_winrt:
             try:
@@ -179,6 +197,23 @@ class MediaController:
                 async def _query():
                     mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
                     session = mgr.get_current_session()
+                    if not session:
+                        try:
+                            sessions = mgr.get_sessions()
+                            if sessions:
+                                for s in sessions:
+                                    try:
+                                        info = s.get_playback_info()
+                                        if info and int(info.playback_status) in (4, 5):
+                                            session = s
+                                            break
+                                    except Exception:
+                                        pass
+                                if not session and len(sessions) > 0:
+                                    session = sessions[0]
+                        except Exception:
+                            pass
+
                     if session:
                         props = await session.try_get_media_properties_async()
                         info = session.get_playback_info()
@@ -196,7 +231,8 @@ class MediaController:
                             "position": round(pos_sec, 1),
                             "duration": round(end_sec, 1),
                             "volume": round(vol, 2),
-                            "muted": muted
+                            "muted": muted,
+                            "is_muted": muted
                         }
                     return None
 
@@ -220,6 +256,10 @@ class MediaController:
                 async def _seek():
                     mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
                     session = mgr.get_current_session()
+                    if not session:
+                        sessions = mgr.get_sessions()
+                        if sessions:
+                            session = sessions[0]
                     if session:
                         delta = datetime.timedelta(seconds=float(seconds))
                         await session.try_change_playback_position_async(delta)
@@ -232,6 +272,7 @@ class MediaController:
         return False
 
     def toggle_play_pause(self):
+        handled = False
         if self.has_winrt:
             try:
                 import asyncio
@@ -239,20 +280,32 @@ class MediaController:
                 async def _toggle():
                     mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
                     session = mgr.get_current_session()
+                    if not session:
+                        sessions = mgr.get_sessions()
+                        if sessions:
+                            session = sessions[0]
                     if session:
                         await session.try_toggle_play_pause_async()
                         return True
                     return False
 
                 if asyncio.run(_toggle()):
-                    return True
+                    handled = True
             except Exception:
-                pass
-        if self.fallback_media_func:
-            self.fallback_media_func(0xCD)
+                handled = False
+
+        if not handled:
+            # Universal Windows virtual key fallback: VK_MEDIA_PLAY_PAUSE (0xB3)
+            if IS_WINDOWS:
+                u32.keybd_event(0xB3, 0, 0, 0)
+                time.sleep(0.01)
+                u32.keybd_event(0xB3, 0, 2, 0)
+            elif self.fallback_media_func:
+                self.fallback_media_func(0xCD)
         return True
 
     def next_track(self):
+        handled = False
         if self.has_winrt:
             try:
                 import asyncio
@@ -260,20 +313,32 @@ class MediaController:
                 async def _next():
                     mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
                     session = mgr.get_current_session()
+                    if not session:
+                        sessions = mgr.get_sessions()
+                        if sessions:
+                            session = sessions[0]
                     if session:
                         await session.try_skip_next_async()
                         return True
                     return False
 
                 if asyncio.run(_next()):
-                    return True
+                    handled = True
             except Exception:
-                pass
-        if self.fallback_media_func:
-            self.fallback_media_func(0xB5)
+                handled = False
+
+        if not handled:
+            # Universal Windows virtual key fallback: VK_MEDIA_NEXT_TRACK (0xB0)
+            if IS_WINDOWS:
+                u32.keybd_event(0xB0, 0, 0, 0)
+                time.sleep(0.01)
+                u32.keybd_event(0xB0, 0, 2, 0)
+            elif self.fallback_media_func:
+                self.fallback_media_func(0xB5)
         return True
 
     def prev_track(self):
+        handled = False
         if self.has_winrt:
             try:
                 import asyncio
@@ -281,17 +346,28 @@ class MediaController:
                 async def _prev():
                     mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
                     session = mgr.get_current_session()
+                    if not session:
+                        sessions = mgr.get_sessions()
+                        if sessions:
+                            session = sessions[0]
                     if session:
                         await session.try_skip_previous_async()
                         return True
                     return False
 
                 if asyncio.run(_prev()):
-                    return True
+                    handled = True
             except Exception:
-                pass
-        if self.fallback_media_func:
-            self.fallback_media_func(0xB6)
+                handled = False
+
+        if not handled:
+            # Universal Windows virtual key fallback: VK_MEDIA_PREV_TRACK (0xB1)
+            if IS_WINDOWS:
+                u32.keybd_event(0xB1, 0, 0, 0)
+                time.sleep(0.01)
+                u32.keybd_event(0xB1, 0, 2, 0)
+            elif self.fallback_media_func:
+                self.fallback_media_func(0xB6)
         return True
 
 
@@ -364,6 +440,15 @@ class BluetoothRfcommServer:
         reader.input_stream_options = streams.InputStreamOptions.PARTIAL
         writer = streams.DataWriter(socket.output_stream)
         buffer = ""
+        outbound = asyncio.Queue(maxsize=32)
+
+        async def _send_responses():
+            while True:
+                resp_dict = await outbound.get()
+                writer.write_string(json.dumps(resp_dict) + "\n")
+                await writer.store_async()
+
+        sender_task = asyncio.create_task(_send_responses())
 
         try:
             while self.running:
@@ -379,19 +464,34 @@ class BluetoothRfcommServer:
                         try:
                             data = json.loads(line)
                             def _respond(resp_dict):
-                                try:
-                                    payload = json.dumps(resp_dict) + "\n"
-                                    writer.write_string(payload)
-                                    if self.loop and self.loop.is_running():
-                                        asyncio.run_coroutine_threadsafe(writer.store_async(), self.loop)
-                                except Exception:
-                                    pass
+                                def _enqueue_on_loop():
+                                    try:
+                                        outbound.put_nowait(resp_dict)
+                                    except asyncio.QueueFull:
+                                        print("[-] Dropped RFCOMM response because its queue is full")
+                                if self.loop and self.loop.is_running():
+                                    self.loop.call_soon_threadsafe(_enqueue_on_loop)
+                                else:
+                                    print("[-] Dropped RFCOMM response because its event loop stopped")
                             self.command_handler(data, addr=("Bluetooth", 0), responder=_respond)
+                            if sender_task.done():
+                                sender_task.result()
                         except Exception:
                             pass
         except Exception:
             pass
         finally:
+            try:
+                self.command_handler({"type": "disconnect"}, addr=("Bluetooth", 0))
+            except Exception as e:
+                print(f"[-] Could not release Bluetooth input state: {e}")
+            sender_task.cancel()
+            try:
+                await sender_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                print(f"[-] RFCOMM response write failed: {e}")
             print(f"[-] Bluetooth Client disconnected: {remote_name}")
             if self.on_client_callback:
                 self.on_client_callback(f"Bluetooth: {remote_name}", False)
@@ -424,7 +524,7 @@ class CameraManager:
         except ImportError:
             pass
 
-    def get_snapshot(self):
+    def get_snapshot(self, max_width=800, quality=75, max_encoded_bytes=None):
         if not self.has_cv2:
             return None
         try:
@@ -439,10 +539,12 @@ class CameraManager:
             if not ret or frame is None:
                 return None
             h, w = frame.shape[:2]
-            if w > 800:
-                frame = cv2.resize(frame, (800, int(h * 800 / w)))
-            ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            if w > max_width:
+                frame = cv2.resize(frame, (max_width, int(h * max_width / w)))
+            ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
             if ret:
+                if max_encoded_bytes and buf.nbytes > max_encoded_bytes:
+                    return None
                 return base64.b64encode(buf).decode('utf-8')
         except Exception as e:
             print(f"[-] Camera snapshot error: {e}")
@@ -450,23 +552,29 @@ class CameraManager:
 
     def start_stream(self, on_frame_callback):
         if not self.has_cv2:
-            return
+            return False
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap.release()
+                cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                cap.release()
+                return False
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        except Exception as e:
+            print(f"[-] Camera open error: {e}")
+            return False
         with self.lock:
             if self.streaming:
-                return
+                cap.release()
+                return True
             self.streaming = True
 
         def _loop():
             try:
-                import cv2
-                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    cap = cv2.VideoCapture(0)
-                if not cap.isOpened():
-                    self.streaming = False
-                    return
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                 while self.streaming:
                     ret, frame = cap.read()
                     if ret and frame is not None:
@@ -483,6 +591,7 @@ class CameraManager:
 
         self.stream_thread = threading.Thread(target=_loop, daemon=True)
         self.stream_thread.start()
+        return True
 
     def stop_stream(self):
         with self.lock:
@@ -547,7 +656,7 @@ class AudioManager:
 
 class RemoteWebSocketServer:
     """Secure WebSocket Server for remote WAN & internet connections"""
-    def __init__(self, port=53531, command_handler=None, on_client_callback=None, auth_token="123456"):
+    def __init__(self, port=53531, command_handler=None, on_client_callback=None, auth_token=None):
         self.port = port
         self.command_handler = command_handler
         self.on_client_callback = on_client_callback
@@ -583,11 +692,9 @@ class RemoteWebSocketServer:
             print(f"[!] WebSocket server start error: {e}")
 
     async def _handle_client(self, websocket):
-        self.clients.add(websocket)
         authenticated = False
         client_id = "Remote-WAN Client"
-        if self.on_client_callback:
-            self.on_client_callback(client_id, True)
+        client_reported = False
         try:
             async for message in websocket:
                 try:
@@ -599,8 +706,12 @@ class RemoteWebSocketServer:
                 if not authenticated:
                     if cmd_type == "auth":
                         token = str(data.get("token", "")).strip()
-                        if not self.auth_token or token == self.auth_token:
+                        if self.auth_token and hmac.compare_digest(token, str(self.auth_token)):
                             authenticated = True
+                            self.clients.add(websocket)
+                            if self.on_client_callback:
+                                self.on_client_callback(client_id, True)
+                                client_reported = True
                             await websocket.send(json.dumps({"type": "auth_response", "authenticated": True, "message": "Access granted"}))
                             continue
                         else:
@@ -608,27 +719,36 @@ class RemoteWebSocketServer:
                             await websocket.close()
                             return
                     else:
-                        if not self.auth_token:
-                            authenticated = True
-                        else:
-                            await websocket.send(json.dumps({"type": "auth_response", "authenticated": False, "message": "Authentication required"}))
-                            continue
+                        await websocket.send(json.dumps({"type": "auth_response", "authenticated": False, "message": "Authentication required"}))
+                        await websocket.close()
+                        return
 
                 def _respond(resp_dict):
                     if self.loop and self.loop.is_running():
                         try:
                             payload = json.dumps(resp_dict)
-                            asyncio.run_coroutine_threadsafe(websocket.send(payload), self.loop)
-                        except Exception:
-                            pass
+                            future = asyncio.run_coroutine_threadsafe(websocket.send(payload), self.loop)
+                            def _report_send_error(done_future):
+                                try:
+                                    done_future.result()
+                                except Exception as e:
+                                    print(f"[-] WebSocket response write failed: {e}")
+                            future.add_done_callback(_report_send_error)
+                        except Exception as e:
+                            print(f"[-] Could not serialize WebSocket response: {e}")
 
                 if self.command_handler:
                     self.command_handler(data, addr=("WebSocket", 0), responder=_respond)
         except Exception:
             pass
         finally:
+            if authenticated and self.command_handler:
+                try:
+                    self.command_handler({"type": "disconnect"}, addr=("WebSocket", 0))
+                except Exception as e:
+                    print(f"[-] Could not release WebSocket input state: {e}")
             self.clients.discard(websocket)
-            if self.on_client_callback:
+            if client_reported and self.on_client_callback:
                 self.on_client_callback(client_id, False)
 
     def broadcast(self, data_dict):
@@ -646,12 +766,12 @@ class RemoteWebSocketServer:
 
 
 class Server:
-    def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token="123456"):
+    def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token=None):
         ensure_interactive_desktop()
         self.port = port
         self.discovery_port = discovery_port
         self.ws_port = ws_port
-        self.auth_token = auth_token
+        self.auth_token = str(auth_token or f"{secrets.randbelow(1_000_000):06d}")
         self.running = False
         self.sock = None
         self.discovery_sock = None
@@ -670,9 +790,13 @@ class Server:
             self.keyboard = None
 
         self.last_buttons = 0
+        self.last_pen_button = None
+        self.pressed_keys = set()
+        self.last_input_at = time.monotonic()
         self.packets_received = 0
         self.last_log_time = 0
         self.connected_client = None
+        self.auth_failures = {}
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
         # Bluetooth RFCOMM Server for mobile companion
@@ -690,6 +814,37 @@ class Server:
         self.on_packet_callback = None
         self.on_client_callback = None
         self.on_status_callback = None
+
+    def _is_authorized(self, addr, data):
+        if addr and addr[0] in ("Bluetooth", "WebSocket"):
+            return True
+        if not addr:
+            return False
+        req_token = str(data.get("token", data.get("auth_token", ""))).strip()
+        return bool(req_token) and hmac.compare_digest(req_token, self.auth_token)
+
+    def _auth_attempt_allowed(self, addr):
+        if not addr:
+            return False
+        key = addr[0]
+        now = time.monotonic()
+        started, attempts = self.auth_failures.get(key, (now, 0))
+        if now - started >= 60:
+            started, attempts = now, 0
+        if attempts >= 10:
+            self.auth_failures[key] = (started, attempts)
+            return False
+        return True
+
+    def _record_auth_failure(self, addr):
+        if not addr:
+            return
+        key = addr[0]
+        now = time.monotonic()
+        started, attempts = self.auth_failures.get(key, (now, 0))
+        if now - started >= 60:
+            started, attempts = now, 0
+        self.auth_failures[key] = (started, attempts + 1)
 
     def _on_bt_client(self, client_name, is_connected):
         if is_connected:
@@ -764,6 +919,7 @@ class Server:
                     data, addr = self.discovery_sock.recvfrom(1024)
                     message = data.decode("utf-8", errors="ignore").strip()
                     if message == "BT_MOUSE_DISCOVER":
+                        # Discovery is intentionally unauthenticated but never discloses the PIN.
                         reply = f"BT_MOUSE_SERVER:{hostname}:{self.port}"
                         self.discovery_sock.sendto(reply.encode("utf-8"), addr)
                         print(f"[*] Discovery ping from {addr[0]} -> Responded with '{reply}'")
@@ -781,11 +937,61 @@ class Server:
         thread.start()
 
     def handle_packet(self, data, addr=None, responder=None):
+        if not isinstance(data, dict):
+            return
         cmd_type = data.get("type")
+
+        def respond(payload):
+            if responder:
+                responder(payload)
+            elif addr and self.sock:
+                self._send_udp_json(payload, addr)
+
+        if cmd_type in ("connect", "client_connect"):
+            if not self._auth_attempt_allowed(addr):
+                return
+            is_valid = self._is_authorized(addr, data)
+            if is_valid:
+                self.auth_failures.pop(addr[0], None)
+                client_name = str(data.get("client", "Android Client"))[:80]
+                self.connected_client = f"{client_name} ({addr[0]})" if addr else client_name
+                if self.on_client_callback:
+                    self.on_client_callback(self.connected_client, True)
+                response = {
+                    "type": "connect_ack",
+                    "success": True,
+                    "server_name": socket.gethostname(),
+                    "version": "1.3.1"
+                }
+            else:
+                self._record_auth_failure(addr)
+                response = {"type": "connect_ack", "success": False, "error": "Invalid pairing PIN"}
+            respond(response)
+            return
+
+        # Every UDP operation requires the pairing PIN. RFCOMM is trusted only
+        # after the OS Bluetooth session is established; WebSocket is gated by
+        # its own authenticated handshake before it calls this dispatcher.
+        if not self._is_authorized(addr, data):
+            if self._auth_attempt_allowed(addr):
+                self._record_auth_failure(addr)
+                respond({"type": "auth_error", "message": "Pairing PIN required or invalid"})
+            return
+
+        if cmd_type == "ping":
+            respond({"type": "pong", "time": time.time()})
+            return
+
+        if cmd_type == "disconnect":
+            self._release_mouse_buttons()
+            if self.connected_client and self.on_client_callback:
+                self.on_client_callback(self.connected_client, False)
+            self.connected_client = None
+            return
 
         if self.on_packet_callback:
             try:
-                self.on_packet_callback(cmd_type, addr, data)
+                self.on_packet_callback(cmd_type, addr, {"type": cmd_type})
             except Exception:
                 pass
 
@@ -795,6 +1001,7 @@ class Server:
             btn = int(data.get("btn", 0))
             v_scroll = int(round(data.get("v_scroll", 0)))
             h_scroll = int(round(data.get("h_scroll", 0)))
+            self.last_input_at = time.monotonic()
 
             if IS_WINDOWS:
                 if dx != 0 or dy != 0:
@@ -849,12 +1056,55 @@ class Server:
 
                     self.last_buttons = btn
 
+        elif cmd_type in ("button", "mouse_button"):
+            btn = int(data.get("btn", 0))
+            self.last_input_at = time.monotonic()
+            if IS_WINDOWS:
+                # Left
+                if (btn & 1) and not (self.last_buttons & 1):
+                    u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                elif not (btn & 1) and (self.last_buttons & 1):
+                    u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+                # Right
+                if (btn & 2) and not (self.last_buttons & 2):
+                    u32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                elif not (btn & 2) and (self.last_buttons & 2):
+                    u32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+
+                # Middle
+                if (btn & 4) and not (self.last_buttons & 4):
+                    u32.mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
+                elif not (btn & 4) and (self.last_buttons & 4):
+                    u32.mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+
+                self.last_buttons = btn
+            elif self.mouse:
+                if (btn & 1) and not (self.last_buttons & 1):
+                    self.mouse.press(Button.left)
+                elif not (btn & 1) and (self.last_buttons & 1):
+                    self.mouse.release(Button.left)
+
+                if (btn & 2) and not (self.last_buttons & 2):
+                    self.mouse.press(Button.right)
+                elif not (btn & 2) and (self.last_buttons & 2):
+                    self.mouse.release(Button.right)
+
+                if (btn & 4) and not (self.last_buttons & 4):
+                    self.mouse.press(Button.middle)
+                elif not (btn & 4) and (self.last_buttons & 4):
+                    self.mouse.release(Button.middle)
+
+                self.last_buttons = btn
+
         elif cmd_type == "pen":
             # Tablet Drawing / Writing Pad mode (1:1 Touchscreen & Stylus replacement)
             action = data.get("action")  # "down", "move", "up"
             x_ratio = float(data.get("x", 0.0))
             y_ratio = float(data.get("y", 0.0))
             is_eraser = bool(data.get("eraser", False))
+            if action in ("down", "move", "up"):
+                self.last_input_at = time.monotonic()
 
             if IS_WINDOWS:
                 norm_x = int(max(0.0, min(1.0, x_ratio)) * 65535)
@@ -866,17 +1116,23 @@ class Server:
                 if action == "down":
                     u32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
                     u32.mouse_event(btn_down, 0, 0, 0, 0)
+                    self.last_pen_button = ("right" if is_eraser else "left")
                 elif action == "move":
                     u32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
                 elif action == "up":
                     u32.mouse_event(btn_up, 0, 0, 0, 0)
+                    self.last_pen_button = None
             elif self.mouse:
                 if action == "down":
-                    self.mouse.press(Button.right if is_eraser else Button.left)
+                    pen_button = Button.right if is_eraser else Button.left
+                    self.mouse.press(pen_button)
+                    self.last_pen_button = pen_button
                 elif action == "up":
-                    self.mouse.release(Button.right if is_eraser else Button.left)
+                    pen_button = Button.right if is_eraser else Button.left
+                    self.mouse.release(pen_button)
+                    self.last_pen_button = None
 
-        elif cmd_type == "media_query":
+        elif cmd_type in ("media_query", "query_media"):
             # Mobile app querying live media status, track title, progression, and volume
             state = self.media_controller.get_media_state()
             response = {"type": "media_status"}
@@ -884,11 +1140,7 @@ class Server:
             if responder:
                 responder(response)
             elif addr and self.sock:
-                try:
-                    payload = json.dumps(response).encode("utf-8")
-                    self.sock.sendto(payload, addr)
-                except Exception:
-                    pass
+                self._send_udp_json(response, addr)
 
         elif cmd_type == "media_seek":
             pos = float(data.get("position", 0.0))
@@ -913,17 +1165,17 @@ class Server:
 
         elif cmd_type == "launch_app":
             app_id = str(data.get("app", "")).strip()
-            self._launch_application(app_id)
+            success = self._launch_application(app_id)
+            respond({"type": "launch_app_response", "success": success, "app": app_id[:120]})
 
         elif cmd_type == "system_power":
             action = str(data.get("action", "")).lower().strip()
             self._handle_system_power(action)
 
         elif cmd_type == "unlock":
-            password = str(data.get("password", ""))
-            self._unlock_workstation(password)
+            respond({"type": "error", "message": "Workstation unlock is not supported"})
 
-        elif cmd_type in ("query_apps", "list_apps"):
+        elif cmd_type in ("query_apps", "query_installed_apps", "list_apps"):
             apps = self._get_installed_apps()
             resp = {"type": "installed_apps_response", "apps": apps}
             if responder:
@@ -948,7 +1200,7 @@ class Server:
             elif addr and self.sock:
                 self._send_udp_json(resp, addr)
 
-        elif cmd_type in ("query_stats", "system_stats"):
+        elif cmd_type in ("query_stats", "system_stats", "query_system_stats"):
             stats = self._get_system_stats()
             resp = {"type": "system_stats_response"}
             resp.update(stats)
@@ -958,42 +1210,62 @@ class Server:
                 self._send_udp_json(resp, addr)
 
         elif cmd_type == "camera_snapshot":
-            b64 = self.camera_manager.get_snapshot()
+            # Limit UDP snapshots to a bounded datagram; WebSocket/RFCOMM can
+            # carry the higher quality default image without UDP fragmentation.
+            b64 = self.camera_manager.get_snapshot(
+                max_width=320 if responder is None else 800,
+                quality=45 if responder is None else 75,
+                max_encoded_bytes=24 * 1024 if responder is None else None
+            )
             resp = {"type": "camera_frame_response", "frame": b64, "is_snapshot": True, "success": b64 is not None}
             if responder:
                 responder(resp)
             elif addr and self.sock:
                 self._send_udp_json(resp, addr)
 
-        elif cmd_type == "camera_stream_start":
+        elif cmd_type in ("camera_stream_start", "start_camera_stream"):
+            if responder is None:
+                respond({
+                    "type": "error",
+                    "message": "Live camera streaming is not supported over UDP. Use Bluetooth RFCOMM or Remote mode."
+                })
+                return
             def _on_frame(b64):
                 frame_data = {"type": "camera_frame_response", "frame": b64, "is_streaming": True}
                 if responder:
                     responder(frame_data)
-                if hasattr(self, "ws_server") and self.ws_server:
-                    self.ws_server.broadcast(frame_data)
-            self.camera_manager.start_stream(_on_frame)
-            resp = {"type": "camera_stream_status", "streaming": True}
+                elif addr and self.sock:
+                    self._send_udp_json(frame_data, addr)
+            started = self.camera_manager.start_stream(_on_frame)
+            resp = {"type": "camera_stream_status", "streaming": bool(started)}
             if responder:
                 responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
 
-        elif cmd_type == "camera_stream_stop":
+        elif cmd_type in ("camera_stream_stop", "stop_camera_stream"):
             self.camera_manager.stop_stream()
             resp = {"type": "camera_stream_status", "streaming": False}
             if responder:
                 responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
 
-        elif cmd_type == "audio_record_start":
+        elif cmd_type in ("audio_record_start", "start_audio_record"):
             rec_file = self.audio_manager.start_recording()
-            resp = {"type": "audio_status_response", "recording": True, "file": os.path.basename(rec_file) if rec_file else ""}
+            resp = {"type": "audio_status_response", "recording": bool(rec_file), "file": os.path.basename(rec_file) if rec_file else ""}
             if responder:
                 responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
 
-        elif cmd_type == "audio_record_stop":
+        elif cmd_type in ("audio_record_stop", "stop_audio_record"):
             rec_file = self.audio_manager.stop_recording()
             resp = {"type": "audio_status_response", "recording": False, "file": os.path.basename(rec_file) if rec_file else ""}
             if responder:
                 responder(resp)
+            elif addr and self.sock:
+                self._send_udp_json(resp, addr)
 
         elif cmd_type == "text":
             text = data.get("text", "")
@@ -1019,26 +1291,55 @@ class Server:
             code = data.get("code")
             self._execute_media(code)
 
-        elif cmd_type == "connect":
-            client = data.get("client", "Phone")
-            self.connected_client = f"{client} ({addr[0] if addr else ''})"
-            print(f"[+] Client connected: {self.connected_client}")
-            if self.on_client_callback:
-                self.on_client_callback(self.connected_client, True)
-
-        elif cmd_type == "disconnect":
-            print(f"[-] Client disconnected: {self.connected_client}")
-            if self.on_client_callback:
-                self.on_client_callback(self.connected_client, False)
-            self.connected_client = None
-
     def _send_udp_json(self, resp_dict, addr):
         try:
             payload = json.dumps(resp_dict).encode("utf-8")
-            if len(payload) <= 65000:
+            if len(payload) <= 60000:
                 self.sock.sendto(payload, addr)
+                return True
+            print(f"[-] Dropped oversized UDP response ({len(payload)} bytes)")
         except Exception:
             pass
+        return False
+
+    def _release_mouse_buttons(self):
+        buttons = self.last_buttons
+        if buttons and IS_WINDOWS:
+            for mask, flag in ((1, MOUSEEVENTF_LEFTUP), (2, MOUSEEVENTF_RIGHTUP), (4, MOUSEEVENTF_MIDDLEUP)):
+                if buttons & mask:
+                    u32.mouse_event(flag, 0, 0, 0, 0)
+        elif buttons and self.mouse:
+            for mask, button in ((1, Button.left), (2, Button.right), (4, Button.middle)):
+                if buttons & mask:
+                    try:
+                        self.mouse.release(button)
+                    except Exception:
+                        pass
+        self.last_buttons = 0
+
+        if self.last_pen_button is not None:
+            try:
+                if IS_WINDOWS:
+                    flag = MOUSEEVENTF_RIGHTUP if self.last_pen_button == "right" else MOUSEEVENTF_LEFTUP
+                    u32.mouse_event(flag, 0, 0, 0, 0)
+                elif self.mouse:
+                    self.mouse.release(self.last_pen_button)
+            except Exception:
+                pass
+            self.last_pen_button = None
+
+        if self.keyboard and self.pressed_keys:
+            for key in tuple(self.pressed_keys):
+                try:
+                    self.keyboard.release(key)
+                except Exception:
+                    pass
+            self.pressed_keys.clear()
+
+    def _release_stale_inputs(self):
+        if (self.last_buttons or self.last_pen_button is not None or self.pressed_keys) and time.monotonic() - self.last_input_at >= 30.0:
+            self._release_mouse_buttons()
+            print("[*] Released held input after 30 seconds without client input")
 
     def _get_installed_apps(self):
         apps = []
@@ -1114,35 +1415,70 @@ class Server:
             return False
 
     def _launch_application(self, app_id):
-        import subprocess
-        apps = {
-            "onenote": "start onenote:",
-            "spotify": "start spotify:",
-            "chrome": "start chrome",
-            "terminal": "start wt || start powershell",
-            "taskmgr": "start taskmgr",
-            "calc": "start calc:",
-            "explorer": "explorer",
-            "settings": "start ms-settings:",
-            "notepad": "start notepad",
-            "vscode": "start code",
-            "edge": "start msedge",
-        }
-        if os.path.exists(app_id):
+        if not app_id:
+            return False
+        app_id_clean = str(app_id).strip()
+
+        # Only launch discovered Windows shortcuts rooted in the two Start Menu
+        # locations. Never accept arbitrary executable paths from a client.
+        if IS_WINDOWS and os.path.isfile(app_id_clean) and app_id_clean.lower().endswith(".lnk"):
+            real_path = os.path.realpath(app_id_clean)
+            roots = [
+                os.path.realpath(os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs")),
+                os.path.realpath(os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs"))
+            ]
             try:
-                os.startfile(app_id)
-                print(f"[+] Launched file/shortcut: {app_id}")
-                return
-            except Exception as e:
-                print(f"[-] os.startfile failed for {app_id}: {e}")
-        clean_key = app_id.lower().strip()
-        cmd = apps.get(clean_key, f"start {app_id}" if app_id else "")
-        if cmd:
-            try:
-                subprocess.Popen(cmd, shell=True)
-                print(f"[+] Launched application: {app_id} ({cmd})")
-            except Exception as e:
-                print(f"[-] Failed to launch application {app_id}: {e}")
+                if any(os.path.commonpath((real_path, root)).lower() == root.lower() for root in roots):
+                    os.startfile(real_path)
+                    print(f"[+] Launched discovered shortcut: {real_path}")
+                    return True
+            except (OSError, ValueError) as e:
+                print(f"[-] Shortcut validation failed: {e}")
+                return False
+
+        # 2. Strict system tools mapping without shell=True
+        clean_key = app_id_clean.lower()
+        try:
+            if clean_key == "calc":
+                os.startfile("calc:")
+                return True
+            elif clean_key == "settings":
+                os.startfile("ms-settings:")
+                return True
+            elif clean_key == "explorer":
+                import subprocess
+                subprocess.Popen(["explorer.exe"])
+                return True
+            elif clean_key == "taskmgr":
+                import subprocess
+                subprocess.Popen(["taskmgr.exe"])
+                return True
+            elif clean_key == "notepad":
+                import subprocess
+                subprocess.Popen(["notepad.exe"])
+                return True
+            elif clean_key in ("terminal", "cmd", "powershell") and IS_WINDOWS:
+                import subprocess
+                try:
+                    subprocess.Popen(["wt.exe"])
+                except Exception:
+                    subprocess.Popen(["powershell.exe"])
+                return True
+            elif clean_key in ("browser", "chrome", "edge") and IS_WINDOWS:
+                os.startfile("https://www.google.com")
+                return True
+            elif clean_key == "onenote" and IS_WINDOWS:
+                os.startfile("onenote:")
+                return True
+            elif clean_key == "spotify" and IS_WINDOWS:
+                os.startfile("spotify:")
+                return True
+        except Exception as e:
+            print(f"[-] Safe app launch failed for {clean_key}: {e}")
+            return False
+
+        print(f"[-] Blocked unrecognized or untrusted app launch: {app_id_clean}")
+        return False
 
     def _handle_system_power(self, action):
         import subprocess
@@ -1166,33 +1502,6 @@ class Server:
         except Exception as e:
             print(f"[-] Power action error ({action}): {e}")
 
-    def _unlock_workstation(self, password):
-        if not password:
-            return
-        def _do_unlock():
-            try:
-                if self.keyboard:
-                    from pynput.keyboard import Key
-                    # Wake up display and dismiss lock screen
-                    self.keyboard.tap(Key.enter)
-                    time.sleep(0.3)
-                    self.keyboard.tap(Key.esc)
-                    time.sleep(0.3)
-                    self.keyboard.tap(Key.space)
-                    time.sleep(0.7)
-                    # Clear any stale text in PIN input
-                    for _ in range(12):
-                        self.keyboard.tap(Key.backspace)
-                    time.sleep(0.1)
-                    # Type password/PIN
-                    self.keyboard.type(password)
-                    time.sleep(0.2)
-                    self.keyboard.tap(Key.enter)
-                    print("[+] Unlock keystrokes dispatched")
-            except Exception as e:
-                print(f"[-] Unlock error: {e}")
-        threading.Thread(target=_do_unlock, daemon=True).start()
-
     def _resolve_key(self, code):
         if not HAS_PYNPUT:
             return None
@@ -1208,32 +1517,45 @@ class Server:
     def _execute_key_down(self, code, mod):
         if not self.keyboard:
             return
+        self.last_input_at = time.monotonic()
         if mod & 1:
-            self.keyboard.press(Key.ctrl)
+            self._press_key(Key.ctrl)
         if mod & 2:
-            self.keyboard.press(Key.shift)
+            self._press_key(Key.shift)
         if mod & 4:
-            self.keyboard.press(Key.alt)
+            self._press_key(Key.alt)
         if mod & 8:
-            self.keyboard.press(Key.cmd)
+            self._press_key(Key.cmd)
         key = self._resolve_key(code)
         if key:
+            self._press_key(key)
+
+    def _press_key(self, key):
+        if key not in self.pressed_keys:
             self.keyboard.press(key)
+            self.pressed_keys.add(key)
 
     def _execute_key_up(self, code, mod):
         if not self.keyboard:
             return
+        self.last_input_at = time.monotonic()
         key = self._resolve_key(code)
-        if key:
+        if key and key in self.pressed_keys:
             self.keyboard.release(key)
+            self.pressed_keys.discard(key)
         if mod & 8:
-            self.keyboard.release(Key.cmd)
+            self._release_key(Key.cmd)
         if mod & 4:
-            self.keyboard.release(Key.alt)
+            self._release_key(Key.alt)
         if mod & 2:
-            self.keyboard.release(Key.shift)
+            self._release_key(Key.shift)
         if mod & 1:
-            self.keyboard.release(Key.ctrl)
+            self._release_key(Key.ctrl)
+
+    def _release_key(self, key):
+        if key in self.pressed_keys:
+            self.keyboard.release(key)
+            self.pressed_keys.discard(key)
 
     def _execute_keystroke(self, code, mod):
         self._execute_key_down(code, mod)
@@ -1258,6 +1580,7 @@ class Server:
 
     def stop(self):
         self.running = False
+        self._release_mouse_buttons()
         if hasattr(self, "bt_server") and self.bt_server:
             try:
                 self.bt_server.stop()
@@ -1304,6 +1627,7 @@ class Server:
         print(f"[*] Input UDP Port      : {self.port}")
         print(f"[*] Auto-Discovery Port : {self.discovery_port}")
         print(f"[*] Remote WAN WS Port  : {self.ws_port}")
+        print(f"[*] Pairing PIN         : {self.auth_token}")
         print(f"[*] Bluetooth RFCOMM    : Active (SPP)")
         print(f"[*] Input Backend       : {'Native Windows user32 + pynput' if IS_WINDOWS else 'pynput'}")
         print(f"[*] Status              : READY & LISTENING")
@@ -1357,6 +1681,7 @@ class Server:
                         print(f"[*] Active - Received {self.packets_received} input packets from {addr[0]}")
                     self.last_log_time = now
             except socket.timeout:
+                self._release_stale_inputs()
                 continue
             except KeyboardInterrupt:
                 print("\n[!] Stopping server...")

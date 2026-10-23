@@ -11,14 +11,17 @@ Transform any Android phone into a high-precision, low-latency **Wireless Mouse,
 
 ## 🚀 Key Highlights & Architecture
 
-### 1. Dual-Mode Connection
+### 1. Three Connection Paths
 * **Mode A: Native Bluetooth HID (Zero PC Software Needed!)**
   * Emulates a genuine, 100% standard Bluetooth Composite HID peripheral (Keyboard + Mouse + Consumer Controls) using Android's native `BluetoothHidDevice` API.
   * Pairs directly with Windows, Mac, or Linux through standard OS Bluetooth settings. **No companion app, server, or driver required on the PC!**
-* **Mode B: Wi-Fi / Local Network Mode (Companion Fallback)**
-  * For older PCs without Bluetooth or custom Android ROMs where Bluetooth HID is restricted.
-  * Connects over local Wi-Fi, phone hotspot, or USB tethering with ~1ms ultra-low latency UDP packets.
-  * Includes 1-tap **UDP Auto-Discovery beacon** (`BT_MOUSE_DISCOVER`).
+* **Mode B: Bluetooth RFCOMM or Wi-Fi Companion Mode**
+  * Uses the PC companion for authenticated input, media state, installed apps, process controls, PC stats, and supported camera/audio features.
+  * Wi-Fi uses UDP for low-latency input and automatic local discovery; enter the pairing PIN shown by the companion.
+  * RFCOMM uses an OS-paired Bluetooth serial session. Companion-only features are available only while connected to that server.
+* **Mode C: Remote WAN**
+  * Connects to an authenticated WebSocket endpoint. Internet connections must use `wss://` through a TLS-enabled tunnel or reverse proxy.
+  * The companion's built-in listener is plain `ws://` for local use only. Do not expose it directly to the Internet.
 
 ---
 
@@ -64,6 +67,16 @@ Transform any Android phone into a high-precision, low-latency **Wireless Mouse,
 * Wave your phone in the air to move the mouse pointer on your PC screen!
 * Utilizes phone's hardware Gyroscope (`Sensor.TYPE_GYROSCOPE`) with noise-canceling deadband filters to eliminate hand tremors.
 * Instant on-screen toggle button.
+
+### 🖊️ 6. Writing Pad
+* Shows ink preview on the phone and sends mouse input to the PC.
+* Windows absolute positioning is mouse emulation. Pressure-sensitive digitizer input is not supported; use a real digitizer for pressure-aware drawing.
+* Ink color changes the phone preview. The PC receives pointer actions, not colored stroke data.
+
+### 🖥️ 7. Companion Controls
+* Search and launch discovered Start Menu apps, inspect running processes and PC stats, and use supported media, power, camera, and microphone controls.
+* Camera snapshots are size-limited over Wi-Fi. Live camera streaming is available over RFCOMM/WebSocket, not UDP Wi-Fi.
+* Workstation unlock automation is unavailable.
 
 ---
 
@@ -125,11 +138,16 @@ The output `.apk` file will be generated at:
    pip install -r requirements.txt
    python server.py
    ```
-2. The terminal will display your PC's local IP (e.g. `192.168.1.15`).
+2. The terminal displays the local IP and six-digit pairing PIN. The PC GUI shows the same PIN.
 3. In the Android App:
-   * Go to the **Connect** tab -> Select **Wi-Fi Network**.
-   * Tap **"Auto-Discover PC Server on Wi-Fi"** (or type the IP manually and tap Connect).
+   * Go to the **Connect** tab -> Select **Wi-Fi** and enter the pairing PIN.
+   * Tap **Auto-Discover** or type the IP manually, then connect. The app waits for the server's PIN-validated acknowledgment.
 4. Enjoy instant wireless remote control over your local network!
+
+### Mode 3: Remote WAN
+1. Configure a TLS-enabled tunnel or reverse proxy to the PC companion's local WebSocket port (`53531`).
+2. Enter the external `wss://` URL and the pairing PIN in the app's **Remote WAN** tab.
+3. Do not port-forward the companion's plain `ws://` listener directly to the Internet.
 
 ---
 
@@ -175,7 +193,7 @@ BT Mouse/
 │       │           └── SettingsScreen.kt    # Fine-tuning & system info
 │       └── res/                        # Vector icons, colors, themes, adaptive launcher icons
 ├── pc_server/
-│   ├── server.py                       # Standalone Python UDP companion server
+│   ├── server.py                       # UDP, Bluetooth RFCOMM, and WebSocket companion server
 │   ├── requirements.txt
 │   └── README.md
 ├── build.gradle.kts                    # Root build configuration
@@ -187,5 +205,8 @@ BT Mouse/
 ---
 
 ## 🔒 Security & Privacy
-* **Zero Cloud Dependence**: All communications remain 100% strictly local between your phone and your PC. No data ever leaves your local environment.
-* **Standard Bluetooth HID**: In Bluetooth mode, communication is encrypted and authenticated through standard Bluetooth pairing protocols.
+* **Pairing PIN**: Wi-Fi commands require the PIN; the companion does not include it in discovery responses or QR codes. Bluetooth RFCOMM relies on OS Bluetooth pairing; WebSocket requires an authenticated handshake.
+* **Remote connections**: Internet access requires a `wss://` endpoint. The companion's built-in WebSocket listener is unencrypted and intended for local use behind a properly configured TLS proxy for remote access.
+* **Bluetooth HID**: Direct HID uses the operating system's Bluetooth pairing and link security.
+* **Privacy**: Local HID and companion modes do not require a cloud service. Remote WAN mode sends control traffic over the Internet to the endpoint you configure.
+* **Unlock**: The app does not store or inject workstation passwords and cannot automate secure-desktop unlock.

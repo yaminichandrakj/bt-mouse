@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import time
+import secrets
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -83,7 +84,7 @@ class CompanionApp(tk.Tk):
 
         self.current_port = 53530
         self.ws_port = 53531
-        self.auth_token = "123456"
+        self.auth_token = f"{secrets.randbelow(1_000_000):06d}"
         self._init_server()
 
         # Stats
@@ -398,11 +399,11 @@ class CompanionApp(tk.Tk):
                            highlightbackground=CARD_BORDER, highlightthickness=1)
         qr_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        lbl_qr_title = tk.Label(qr_card, text="Remote WAN Access (Over Internet)", font=("Segoe UI", 12, "bold"),
+        lbl_qr_title = tk.Label(qr_card, text="Secure Remote Access Setup", font=("Segoe UI", 12, "bold"),
                                 bg=CARD_BG, fg=TEXT_PRIMARY)
         lbl_qr_title.pack(anchor="center", pady=(0, 4))
 
-        lbl_qr_desc = tk.Label(qr_card, text="Access your laptop anywhere on Cellular 5G / Remote Wi-Fi",
+        lbl_qr_desc = tk.Label(qr_card, text="Scan to fill the local server address; enter the PIN separately",
                                font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
         lbl_qr_desc.pack(anchor="center", pady=(0, 10))
 
@@ -460,7 +461,7 @@ class CompanionApp(tk.Tk):
                                     relief="flat", padx=10, pady=6, command=self.generate_wan_qr, cursor="hand2")
         btn_refresh_wan.pack(fill="x")
 
-        lbl_tips = tk.Label(info_card, text="Tip: For remote access across the internet, forward port 53531 on your router, or use Cloudflare Tunnel / Ngrok.",
+        lbl_tips = tk.Label(info_card, text="Internet use requires a TLS endpoint (wss://), such as a securely configured tunnel or reverse proxy. This companion listens locally with ws://; never expose that port directly to the Internet.",
                             font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED, wraplength=280, justify="left")
         lbl_tips.pack(anchor="w", pady=(12, 0))
 
@@ -634,7 +635,7 @@ class CompanionApp(tk.Tk):
         if self.packet_count % 15 == 0:
             self.lbl_packets.config(text=f"Packets Received: {self.packet_count}")
         if cmd_type in ("connect", "disconnect", "text", "pen"):
-            self.after(0, lambda: self.log(f"{cmd_type.upper()} from {addr[0] if addr else ''}: {str(data)[:60]}"))
+            self.after(0, lambda: self.log(f"{cmd_type.upper()} from {addr[0] if addr else ''}"))
 
     def _on_client(self, client_name, is_connected):
         self.last_client = client_name if is_connected else "Disconnected"
@@ -675,18 +676,22 @@ class CompanionApp(tk.Tk):
 
     def _update_auth_token(self):
         new_token = self.ent_token.get().strip()
-        if new_token:
+        if new_token.isdigit() and len(new_token) == 6:
             self.auth_token = new_token
-            if self.server and hasattr(self.server, "ws_server") and self.server.ws_server:
-                self.server.ws_server.auth_token = new_token
+            if self.server:
+                self.server.auth_token = new_token
+                if hasattr(self.server, "ws_server") and self.server.ws_server:
+                    self.server.ws_server.auth_token = new_token
             self.generate_wan_qr()
-            messagebox.showinfo("Security Key Updated", f"Security Key set to: {new_token}")
+            messagebox.showinfo("Pairing PIN Updated", "The new six-digit PIN is active for Wi-Fi and remote pairing.")
+        else:
+            messagebox.showerror("Invalid PIN", "Use exactly six digits for the pairing PIN.")
 
     def copy_wan_url(self):
         url = f"ws://{self.current_ip}:{self.ws_port}"
         self.clipboard_clear()
         self.clipboard_append(url)
-        messagebox.showinfo("Copied", f"WAN WebSocket URL '{url}' copied to clipboard!")
+        messagebox.showinfo("Copied", f"Local WebSocket URL '{url}' copied. For Internet access, use a TLS-protected wss:// endpoint.")
 
     def generate_wan_qr(self):
         if not HAS_QR:
@@ -699,7 +704,6 @@ class CompanionApp(tk.Tk):
             "url": f"ws://{self.current_ip}:{self.ws_port}",
             "ip": self.current_ip,
             "port": self.ws_port,
-            "token": self.auth_token,
             "name": hostname
         })
         try:

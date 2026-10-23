@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -290,7 +291,7 @@ fun KeyboardScreen(
             "apps" -> QuickAppsSection(coordinator, settings, hapticsEnabled)
             "tasks" -> TasksAndHardwareSection(coordinator)
             "media_hw" -> CameraAndRecorderSection(coordinator)
-            "power" -> PowerAndUnlockSection(coordinator, context)
+            "power" -> PowerAndUnlockSection(coordinator)
             else -> {
 
         // Live Text Input Box
@@ -1408,80 +1409,10 @@ fun CameraAndRecorderSection(
 
 @Composable
 fun PowerAndUnlockSection(
-    coordinator: ConnectionCoordinator,
-    context: Context
+    coordinator: ConnectionCoordinator
 ) {
-    var showUnlockDialog by remember { mutableStateOf(false) }
     var showRestartDialog by remember { mutableStateOf(false) }
     var showShutdownDialog by remember { mutableStateOf(false) }
-    var passwordInput by remember { mutableStateOf("") }
-    var rememberPassword by remember { mutableStateOf(true) }
-
-    val prefs = remember { context.getSharedPreferences("bt_unlock_prefs", Context.MODE_PRIVATE) }
-    var savedPassword by remember { mutableStateOf(prefs.getString("saved_unlock_pw", "") ?: "") }
-
-    if (showUnlockDialog) {
-        AlertDialog(
-            onDismissRequest = { showUnlockDialog = false },
-            title = { Text("Unlock Windows PC", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "Enter your Windows password or PIN. The PC companion will automatically wake the screen, enter the credentials, and log you in.",
-                        color = TextSecondary,
-                        fontSize = 13.sp
-                    )
-                    OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = { passwordInput = it },
-                        label = { Text("Windows Password / PIN") },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AccentEmerald,
-                            unfocusedBorderColor = DarkBorder,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary
-                        ),
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = rememberPassword,
-                            onCheckedChange = { rememberPassword = it },
-                            colors = CheckboxDefaults.colors(checkedColor = AccentEmerald)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Remember password on device", color = TextPrimary, fontSize = 12.sp)
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (passwordInput.isNotEmpty()) {
-                            if (rememberPassword) {
-                                prefs.edit().putString("saved_unlock_pw", passwordInput).apply()
-                                savedPassword = passwordInput
-                            }
-                            coordinator.unlockWorkstation(passwordInput)
-                            showUnlockDialog = false
-                            passwordInput = ""
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald)
-                ) {
-                    Text("Unlock Now", color = DarkBackground, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showUnlockDialog = false }) {
-                    Text("Cancel", color = TextMuted)
-                }
-            },
-            containerColor = DarkSurface
-        )
-    }
 
     if (showRestartDialog) {
         AlertDialog(
@@ -1536,7 +1467,8 @@ fun PowerAndUnlockSection(
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Desktop Security & Power", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
 
-        // Lock & Unlock Cards
+        // Lock the workstation. Unlocking a Windows secure desktop by injected credentials
+        // is not supported safely by this companion.
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -1547,53 +1479,18 @@ fun PowerAndUnlockSection(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Lock, contentDescription = null, tint = AccentCyan)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Lock & Unlock Workstation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Lock Workstation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { coordinator.systemPower("lock") },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose.copy(alpha = 0.85f)),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Lock PC", fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            if (savedPassword.isNotEmpty()) {
-                                coordinator.unlockWorkstation(savedPassword)
-                            } else {
-                                showUnlockDialog = true
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.LockOpen, contentDescription = null, tint = DarkBackground, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (savedPassword.isNotEmpty()) "Unlock (1-Tap)" else "Unlock PC", color = DarkBackground, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                if (savedPassword.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("PIN/Password saved for 1-tap unlock", color = AccentEmerald, fontSize = 11.sp)
-                        TextButton(onClick = {
-                            passwordInput = savedPassword
-                            showUnlockDialog = true
-                        }) {
-                            Text("Change PIN", fontSize = 11.sp, color = AccentCyan)
-                        }
-                    }
+                Button(
+                    onClick = { coordinator.systemPower("lock") },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose.copy(alpha = 0.85f)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Lock PC", fontWeight = FontWeight.Bold)
                 }
             }
         }
