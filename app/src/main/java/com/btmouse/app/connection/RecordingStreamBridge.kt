@@ -1,6 +1,7 @@
 package com.btmouse.app.connection
 
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.runBlocking
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.net.InetAddress
@@ -70,11 +71,13 @@ class RecordingStreamBridge(extension: String) {
                 "Cache-Control: no-store\r\n" +
                 "Connection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
             output.flush()
-            for (chunk in chunks) {
-                output.write((chunk.size.toString(16) + "\r\n").toByteArray(Charsets.US_ASCII))
-                output.write(chunk)
-                output.write("\r\n".toByteArray(Charsets.US_ASCII))
-                output.flush()
+            runBlocking {
+                for (chunk in chunks) {
+                    output.write((chunk.size.toString(16) + "\r\n").toByteArray(Charsets.US_ASCII))
+                    output.write(chunk)
+                    output.write("\r\n".toByteArray(Charsets.US_ASCII))
+                    output.flush()
+                }
             }
             output.write("0\r\n\r\n".toByteArray(Charsets.US_ASCII))
             output.flush()
