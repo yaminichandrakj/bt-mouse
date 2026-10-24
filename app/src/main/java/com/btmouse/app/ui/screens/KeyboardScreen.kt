@@ -83,16 +83,21 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -118,7 +123,6 @@ import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.delay
 
 @Composable
 fun KeyboardScreen(
@@ -588,9 +592,16 @@ fun QuickAppsSection(
     }
 
     val installedApps by coordinator.installedApps.collectAsState()
+    val isConnected by coordinator.isConnected.collectAsState()
+    val connectionMessage by coordinator.statusMessage.collectAsState()
     val quickApps = installedApps.filter { it.isQuick }
 
-    LaunchedEffect(Unit) { coordinator.queryInstalledApps() }
+    LaunchedEffect(isConnected) {
+        while (true) {
+            if (isConnected) coordinator.queryInstalledApps()
+            delay(5000)
+        }
+    }
 
     // Browse PC Installed Apps Modal
     if (showBrowseDialog) {
@@ -654,6 +665,17 @@ fun QuickAppsSection(
                                             Text(app.path, color = TextMuted, fontSize = 10.sp, maxLines = 1)
                                         }
                                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            TextButton(
+                                                onClick = {
+                                                    val nextPaths = installedApps
+                                                        .filter { if (app.isQuick) it.path != app.path else it.isQuick || it.path == app.path }
+                                                        .map { it.path }
+                                                    coordinator.updateQuickApps(nextPaths)
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            ) {
+                                                Text(if (app.isQuick) "PC ✓" else "PC +", color = if (app.isQuick) AccentEmerald else AccentCyan, fontSize = 10.sp)
+                                            }
                                             IconButton(
                                                 onClick = {
                                                     val exists = customApps.any { it.cmd == app.path }
@@ -901,6 +923,11 @@ fun QuickAppsSection(
         }
 
         Text("Quick Apps from PC Companion", color = AccentEmerald, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+        if (connectionMessage.startsWith("Loading installed PC apps")) {
+            Text(connectionMessage, color = TextMuted, fontSize = 11.sp)
+        } else if (connectionMessage.startsWith("Saved ") || connectionMessage.startsWith("Could not update PC Quick Apps")) {
+            Text(connectionMessage, color = if (connectionMessage.startsWith("Saved ")) AccentEmerald else AccentRose, fontSize = 11.sp)
+        }
         if (quickApps.isEmpty()) {
             Text("Add installed apps to Quick Apps in the PC companion. Only apps present on this PC are shown here.",
                 color = TextMuted, fontSize = 11.sp)
@@ -968,7 +995,7 @@ fun TasksAndHardwareSection(
             delay(2500)
             coordinator.querySystemStats()
             processRefreshElapsed += 2500
-            if (processRefreshElapsed >= 10_000) {
+            if (processRefreshElapsed >= 5_000) {
                 coordinator.queryRunningProcesses()
                 processRefreshElapsed = 0
             }
@@ -1074,7 +1101,7 @@ fun TasksAndHardwareSection(
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
-                            Text("Disk Usage", color = TextSecondary, fontSize = 11.sp)
+                            Text("Storage capacity used", color = TextSecondary, fontSize = 11.sp)
                             val disk = stats?.disk ?: 0f
                             Text("${disk.toInt()}%", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                             Spacer(modifier = Modifier.height(6.dp))
@@ -1084,9 +1111,48 @@ fun TasksAndHardwareSection(
                                 color = AccentRose,
                                 trackColor = DarkBorder
                             )
+                            val diskActive = stats?.diskActivity ?: -1f
+                            Text(
+                                if (diskActive >= 0f) "Disk active ${diskActive.toInt()}%" else "Disk active unavailable",
+                                color = TextMuted, fontSize = 9.sp, modifier = Modifier.padding(top = 5.dp)
+                            )
                         }
                     }
                 }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Graphics & AI Hardware", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                val gpuList = stats?.gpus.orEmpty()
+                if (gpuList.isEmpty()) {
+                    Text("GPU usage is unavailable on this PC or its Windows driver.", color = TextMuted, fontSize = 11.sp)
+                } else {
+                    gpuList.forEach { gpu ->
+                        val value = gpu.utilization
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                if (value >= 0f) "${gpu.name} · ${value.toInt()}%${if (gpu.engine.isNotBlank()) " (${gpu.engine})" else ""}"
+                                else "${gpu.name} · usage unavailable",
+                                color = TextSecondary, fontSize = 11.sp, maxLines = 1
+                            )
+                            if (value >= 0f) LinearProgressIndicator(
+                                progress = { (value / 100f).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
+                                color = AccentCyan, trackColor = DarkBorder
+                            )
+                        }
+                    }
+                }
+                val npu = stats?.npu ?: -1f
+                Text(if (npu >= 0f) "NPU · ${npu.toInt()}%" else "NPU · not detected by Windows",
+                    color = TextSecondary, fontSize = 11.sp)
             }
         }
 
@@ -1178,22 +1244,45 @@ fun CameraAndRecorderSection(
     val isStreaming by coordinator.isCameraStreaming.collectAsState()
     val isRecording by coordinator.isAudioRecording.collectAsState()
     val connectionStatus by coordinator.statusMessage.collectAsState()
+    var cameraStreamMessage by remember { mutableStateOf("") }
 
-    val imageBitmap = remember(rawBytes) {
-        rawBytes?.let { bytes ->
-            try {
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-            } catch (e: Exception) {
-                null
+    DisposableEffect(coordinator) {
+        onDispose {
+            if (coordinator.isCameraStreaming.value) coordinator.stopCameraStream()
+        }
+    }
+
+    LaunchedEffect(isStreaming, rawBytes) {
+        if (!isStreaming) return@LaunchedEffect
+        val observedFrame = rawBytes
+        delay(7000)
+        if (coordinator.isCameraStreaming.value && coordinator.latestCameraFrame.value === observedFrame) {
+            cameraStreamMessage = "No live frame arrived for 7 seconds. Stopping the stalled stream; reconnect and try again."
+            coordinator.stopCameraStream()
+        }
+    }
+
+    val imageBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, rawBytes) {
+        value = rawBytes?.let { bytes ->
+            withContext(Dispatchers.Default) {
+                try {
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                } catch (_: Exception) {
+                    null
+                }
             }
         }
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Camera & Microphone Control", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        if (connectionStatus.startsWith("Microphone")) {
-            Text(connectionStatus, color = if (connectionStatus.contains("error", ignoreCase = true)) AccentRose else AccentEmerald,
+        if (connectionStatus.startsWith("Microphone") || connectionStatus.startsWith("Camera stream")) {
+            Text(connectionStatus, color = if (connectionStatus.contains("error", ignoreCase = true) ||
+                connectionStatus.contains("stopped", ignoreCase = true)) AccentRose else AccentEmerald,
                 fontSize = 11.sp)
+        }
+        if (cameraStreamMessage.isNotBlank()) {
+            Text(cameraStreamMessage, color = AccentRose, fontSize = 11.sp)
         }
 
         // Webcam Card
@@ -1253,8 +1342,15 @@ fun CameraAndRecorderSection(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Default.CameraAlt, contentDescription = null, tint = TextMuted, modifier = Modifier.size(36.dp))
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text("Camera stream standby", color = TextSecondary, fontSize = 12.sp)
-                            Text("Tap 'Capture Snapshot' or 'Live Stream' below", color = TextMuted, fontSize = 10.sp)
+                            Text(
+                                if (isStreaming) "Waiting for the first live frame…" else "Camera stream standby",
+                                color = TextSecondary, fontSize = 12.sp
+                            )
+                            Text(
+                                if (isStreaming) "The camera is connecting. This view will update as soon as a frame arrives."
+                                else "Tap 'Capture Snapshot' or 'Live Stream' below",
+                                color = TextMuted, fontSize = 10.sp
+                            )
                         }
                     }
                 }
@@ -1275,7 +1371,10 @@ fun CameraAndRecorderSection(
                     Button(
                         onClick = {
                             if (isStreaming) coordinator.stopCameraStream()
-                            else coordinator.startCameraStream()
+                            else {
+                                cameraStreamMessage = ""
+                                coordinator.startCameraStream()
+                            }
                         },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = if (isStreaming) AccentRose else AccentCyan),
@@ -1331,7 +1430,7 @@ fun CameraAndRecorderSection(
                 }
 
                 Text(
-                    "Record high-clarity microphone audio on your PC remotely. Captured recordings are saved directly into the 'pc_server/recordings/' directory.",
+                    "Record high-clarity microphone audio on your PC remotely. Recordings are saved in your Windows BTMouse recordings folder and appear in the Recordings section.",
                     color = TextSecondary,
                     fontSize = 11.sp
                 )

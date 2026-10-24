@@ -21,8 +21,8 @@ class ConnectionCoordinator(
 
     val bluetoothHidManager = BluetoothHidManager(context, scope)
     val bluetoothRfcommManager = BluetoothRfcommManager(context, scope)
-    val wifiClientManager = WifiClientManager(settings, scope)
-    val remoteWanManager = RemoteWanManager(settings, scope)
+    val wifiClientManager = WifiClientManager(context.applicationContext, settings, scope)
+    val remoteWanManager = RemoteWanManager(context.applicationContext, settings, scope)
 
     val activeMode: StateFlow<ConnectionMode> = settings.connectionMode
 
@@ -146,8 +146,8 @@ class ConnectionCoordinator(
             ConnectionMode.WIFI -> wifiClientManager.mediaStatus
         }
 
-    override fun queryMedia(includePreview: Boolean) {
-        currentInputConnection.queryMedia(includePreview)
+    override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
+        currentInputConnection.queryMedia(includePreview, includeVideoPreview)
     }
 
     override fun sendMediaSeek(position: Float) {
@@ -243,6 +243,20 @@ class ConnectionCoordinator(
             ConnectionMode.WIFI -> wifiClientManager.isAudioRecording
         }
 
+    override val isPcLiveAudioActive: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPcLiveAudioActive
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPcLiveAudioActive
+            ConnectionMode.WIFI -> wifiClientManager.isPcLiveAudioActive
+        }
+
+    override val isPhoneLiveAudioActive: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPhoneLiveAudioActive
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPhoneLiveAudioActive
+            ConnectionMode.WIFI -> wifiClientManager.isPhoneLiveAudioActive
+        }
+
     override fun querySystemStats() {
         currentInputConnection.querySystemStats()
     }
@@ -257,6 +271,47 @@ class ConnectionCoordinator(
 
     override fun queryInstalledApps() {
         currentInputConnection.queryInstalledApps()
+    }
+
+    override fun updateQuickApps(paths: List<String>) {
+        currentInputConnection.updateQuickApps(paths)
+    }
+
+    override val recordings: StateFlow<List<RecordingEntry>>?
+        get() = currentInputConnection.recordings
+    override val recordingTransferStatus: StateFlow<String>?
+        get() = currentInputConnection.recordingTransferStatus
+    override val recordingStreamUrl: StateFlow<String?>?
+        get() = currentInputConnection.recordingStreamUrl
+
+    override fun queryRecordings() {
+        currentInputConnection.queryRecordings()
+    }
+
+    override fun downloadRecording(id: String) {
+        currentInputConnection.downloadRecording(id)
+    }
+
+    override fun streamRecording(id: String) {
+        currentInputConnection.streamRecording(id)
+    }
+
+    override fun stopRecordingStream() {
+        currentInputConnection.stopRecordingStream()
+    }
+
+    override fun startPcLiveAudio(record: Boolean) {
+        currentInputConnection.startPcLiveAudio(record)
+    }
+
+    override fun stopPcLiveAudio() {
+        currentInputConnection.stopPcLiveAudio()
+    }
+
+    override fun startPhoneLiveAudio(record: Boolean): Boolean = currentInputConnection.startPhoneLiveAudio(record)
+
+    override fun stopPhoneLiveAudio() {
+        currentInputConnection.stopPhoneLiveAudio()
     }
 
     override fun requestCameraSnapshot() {

@@ -97,6 +97,7 @@ fun MediaRemoteScreen(
     val volumeNavigation by settings.presentationVolumeNavigation.collectAsState()
     val view = LocalView.current
     var previewEnabled by remember { mutableStateOf(false) }
+    var videoPreviewEnabled by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         settings.setMediaRemoteVisible(true)
@@ -104,10 +105,13 @@ fun MediaRemoteScreen(
     }
 
     // Periodically poll PC media state while on this screen
-    LaunchedEffect(isConnected, previewEnabled, mediaStatus.artworkBase64) {
+    LaunchedEffect(isConnected, previewEnabled, videoPreviewEnabled, mediaStatus.artworkBase64) {
         while (true) {
             if (isConnected) {
-                coordinator.queryMedia(includePreview = previewEnabled && mediaStatus.artworkBase64.isEmpty())
+                coordinator.queryMedia(
+                    includePreview = previewEnabled && mediaStatus.artworkBase64.isEmpty(),
+                    includeVideoPreview = videoPreviewEnabled
+                )
             }
             delay(1000)
         }
@@ -260,6 +264,37 @@ fun MediaRemoteScreen(
                 ) {
                     Text("Show playing media artwork", color = TextSecondary, fontSize = 11.sp)
                     Switch(checked = previewEnabled, onCheckedChange = { previewEnabled = it })
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Preview selected video area", color = TextSecondary, fontSize = 11.sp)
+                        Text("Select the player rectangle in the PC companion first.", color = TextMuted, fontSize = 10.sp)
+                    }
+                    Switch(checked = videoPreviewEnabled, onCheckedChange = { videoPreviewEnabled = it })
+                }
+                if (videoPreviewEnabled) {
+                    val videoBitmap = remember(mediaStatus.videoPreviewBase64) {
+                        runCatching {
+                            val bytes = Base64.decode(mediaStatus.videoPreviewBase64, Base64.DEFAULT)
+                            if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                        }.getOrNull()
+                    }
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(190.dp)
+                            .clip(RoundedCornerShape(12.dp)).background(DarkSurfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (videoBitmap != null) {
+                            Image(bitmap = videoBitmap, contentDescription = "Selected player video preview", modifier = Modifier.fillMaxSize())
+                        } else {
+                            Text("Waiting for selected player area…", color = TextMuted, fontSize = 12.sp)
+                        }
+                    }
                 }
 
                 // Usable Timeline / Progression Scrubber

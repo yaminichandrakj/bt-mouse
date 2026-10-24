@@ -1,5 +1,6 @@
 package com.btmouse.app.connection
 
+import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.btmouse.app.data.MediaStatus
@@ -28,6 +29,7 @@ import java.net.SocketTimeoutException
 import java.security.MessageDigest
 
 class WifiClientManager(
+    private val context: Context,
     private val settings: SettingsRepository,
     private val scope: CoroutineScope
 ) : InputConnection {
@@ -64,6 +66,17 @@ class WifiClientManager(
 
     private val _isAudioRecording = MutableStateFlow(false)
     override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
+
+    private val recordingTransfer = RecordingTransferClient(context)
+    private val liveAudioPlayer = LiveAudioPlayer()
+    private val liveAudioRecorder = LiveAudioRecorder()
+    private val _isPcLiveAudioActive = MutableStateFlow(false)
+    override val isPcLiveAudioActive: StateFlow<Boolean> = _isPcLiveAudioActive.asStateFlow()
+    private val _isPhoneLiveAudioActive = MutableStateFlow(false)
+    override val isPhoneLiveAudioActive: StateFlow<Boolean> = _isPhoneLiveAudioActive.asStateFlow()
+    override val recordings: StateFlow<List<RecordingEntry>> = recordingTransfer.recordings
+    override val recordingTransferStatus: StateFlow<String> = recordingTransfer.status
+    override val recordingStreamUrl: StateFlow<String?> = recordingTransfer.streamUrl
 
     private var udpSocket: DatagramSocket? = null
     private var heartbeatJob: Job? = null
@@ -142,6 +155,13 @@ class WifiClientManager(
     private fun handleIncomingPacket(jsonStr: String, sourceAddress: InetAddress, sourcePort: Int) {
         try {
             val json = gson.fromJson(jsonStr, JsonObject::class.java)
+            recordingTransfer.handleMessage(json) { ack ->
+                sendPacket(mapOf(
+                    "type" to ack.get("type").asString,
+                    "transfer_id" to ack.get("transfer_id").asString,
+                    "index" to ack.get("index").asInt
+                ))
+            }
             val type = json.get("type")?.asString ?: ""
             when (type) {
                 "pong" -> lastPongAtMs = android.os.SystemClock.elapsedRealtime()
@@ -184,6 +204,7 @@ class WifiClientManager(
                         volume = volume,
                         isMuted = muted,
                         artworkBase64 = json.get("artwork")?.asString ?: if (old.title == title && old.artist == artist) old.artworkBase64 else "",
+                        videoPreviewBase64 = json.get("video_preview")?.asString ?: old.videoPreviewBase64,
                         volumeAvailable = json.get("volume_available")?.asBoolean ?: true,
                         volumeError = json.get("volume_error")?.asString ?: ""
                     )
@@ -194,7 +215,16 @@ class WifiClientManager(
                     val battery = json.get("battery")?.asFloat ?: -1f
                     val powerPlugged = json.get("power_plugged")?.asBoolean ?: true
                     val disk = json.get("disk")?.asFloat ?: 0f
-                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk)
+                    val diskActivity = json.get("disk_activity")?.asFloat ?: -1f
+                    val gpus = json.getAsJsonArray("gpus")?.mapNotNull { item ->
+                        runCatching {
+                            val gpu = item.asJsonObject
+                            GpuStat(gpu.get("index")?.asInt ?: 0, gpu.get("name")?.asString ?: "GPU",
+                                gpu.get("utilization")?.asFloat ?: -1f, gpu.get("engine")?.asString ?: "")
+                        }.getOrNull()
+                    } ?: emptyList()
+                    val npu = json.get("npu")?.asFloat ?: -1f
+                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk, diskActivity, gpus, npu)
                 }
                 "process_list_response" -> {
                     val array = json.getAsJsonArray("processes") ?: JsonArray()
@@ -227,6 +257,20 @@ class WifiClientManager(
                         )
                     }
                     _installedApps.value = list
+                    val loading = json.get("loading")?.asBoolean ?: false
+                    val message = json.get("message")?.asString.orEmpty()
+                    _statusMessage.value = when {
+                        loading -> "Loading installed PC apps…"
+                        message.isNotBlank() -> message
+                        _statusMessage.value.startsWith("Loading installed PC apps") -> ""
+                        else -> _statusMessage.value
+                    }
+                }
+                "quick_apps_update_response" -> {
+                    val success = json.get("success")?.asBoolean ?: false
+                    val paths = json.getAsJsonArray("paths")?.mapNotNull { it.asString }?.toSet().orEmpty()
+                    if (success) _installedApps.value = _installedApps.value.map { it.copy(isQuick = it.path in paths) }
+                    _statusMessage.value = json.get("message")?.asString ?: "Could not update PC Quick Apps"
                 }
                 "camera_frame_response" -> {
                     val b64 = json.get("frame")?.asString
@@ -234,6 +278,7 @@ class WifiClientManager(
                         try {
                             val bytes = Base64.decode(b64, Base64.DEFAULT)
                             _latestCameraFrame.value = bytes
+                            if (_statusMessage.value.startsWith("Camera stream started")) _statusMessage.value = ""
                         } catch (e: Exception) {}
                     }
                 }
@@ -328,6 +373,15 @@ class WifiClientManager(
                 "camera_stream_status" -> {
                     val streaming = json.get("streaming")?.asBoolean ?: false
                     _isCameraStreaming.value = streaming
+                    if (!streaming) _latestCameraFrame.value = null
+                    val message = json.get("message")?.asString.orEmpty()
+                    _statusMessage.value = when {
+                        streaming && message.isNotBlank() -> "Camera is live, but recording was skipped: $message"
+                        streaming -> "Camera stream started. Waiting for a live frame…"
+                        message.isNotBlank() -> "Camera stream stopped: $message"
+                        _statusMessage.value.startsWith("Camera stream") -> ""
+                        else -> _statusMessage.value
+                    }
                 }
                 "audio_status_response" -> {
                     val recording = json.get("recording")?.asBoolean ?: false
@@ -338,6 +392,25 @@ class WifiClientManager(
                     } else if (message.isNotBlank()) {
                         _statusMessage.value = "Microphone error: $message"
                     }
+                }
+                "live_audio_frame" -> {
+                    if (json.get("direction")?.asString == "pc_to_phone") {
+                        val encoded = json.get("data")?.asString.orEmpty()
+                        if (encoded.isNotEmpty()) try {
+                            liveAudioPlayer.accept(Base64.decode(encoded, Base64.DEFAULT))
+                        } catch (_: Exception) {}
+                    }
+                }
+                "live_audio_status" -> {
+                    val active = json.get("active")?.asBoolean ?: false
+                    if (json.get("direction")?.asString == "phone_to_pc") {
+                        _isPhoneLiveAudioActive.value = active
+                        if (!active) liveAudioRecorder.stop()
+                    } else {
+                        _isPcLiveAudioActive.value = active
+                        if (!active) liveAudioPlayer.stop()
+                    }
+                    json.get("message")?.asString?.takeIf { it.isNotBlank() }?.let { _statusMessage.value = it }
                 }
             }
         } catch (e: Exception) {
@@ -491,6 +564,7 @@ class WifiClientManager(
     }
 
     private fun clearSessionState() {
+        recordingTransfer.cancel()
         snapshotRetryJob?.cancel()
         snapshotRetryJob = null
         pendingSnapshot = null
@@ -501,6 +575,10 @@ class WifiClientManager(
         _latestCameraFrame.value = null
         _isCameraStreaming.value = false
         _isAudioRecording.value = false
+        liveAudioPlayer.stop()
+        _isPcLiveAudioActive.value = false
+        liveAudioRecorder.stop()
+        _isPhoneLiveAudioActive.value = false
     }
 
     private fun sendPacket(
@@ -582,8 +660,8 @@ class WifiClientManager(
         )
     }
 
-    override fun queryMedia(includePreview: Boolean) {
-        sendPacket(mapOf("type" to "media_query", "include_preview" to includePreview))
+    override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
+        sendPacket(mapOf("type" to "media_query", "include_preview" to includePreview, "include_video_preview" to includeVideoPreview))
     }
 
     override fun sendMediaSeek(position: Float) {
@@ -681,6 +759,28 @@ class WifiClientManager(
         sendPacket(mapOf("type" to "query_apps"))
     }
 
+    override fun updateQuickApps(paths: List<String>) {
+        sendPacket(mapOf("type" to "update_quick_apps", "paths" to paths))
+    }
+
+    override fun queryRecordings() {
+        sendPacket(mapOf("type" to "recordings_list"))
+    }
+
+    override fun downloadRecording(id: String) {
+        sendPacket(mapOf("type" to "recording_download", "id" to id))
+    }
+
+    override fun streamRecording(id: String) = recordingTransfer.stream(id) { obj ->
+        sendPacket(mapOf("type" to obj.get("type").asString, "id" to (obj.get("id")?.asString ?: ""),
+            "transfer_id" to (obj.get("transfer_id")?.asString ?: "")))
+    }
+
+    override fun stopRecordingStream() = recordingTransfer.stopStream { obj ->
+        sendPacket(mapOf("type" to obj.get("type").asString, "id" to (obj.get("id")?.asString ?: ""),
+            "transfer_id" to (obj.get("transfer_id")?.asString ?: "")))
+    }
+
     override fun requestCameraSnapshot() {
         snapshotRetryJob?.cancel()
         pendingSnapshot = null
@@ -701,6 +801,48 @@ class WifiClientManager(
 
     override fun stopAudioRecord() {
         sendPacket(mapOf("type" to "audio_record_stop"))
+    }
+
+    override fun startPcLiveAudio(record: Boolean) {
+        if (!liveAudioPlayer.start()) {
+            _statusMessage.value = "Could not start phone audio playback"
+            return
+        }
+        _isPcLiveAudioActive.value = true
+        sendPacket(mapOf("type" to "live_audio_start", "record" to record))
+    }
+
+    override fun stopPcLiveAudio() {
+        sendPacket(mapOf("type" to "live_audio_stop"))
+        liveAudioPlayer.stop()
+        _isPcLiveAudioActive.value = false
+    }
+
+    override fun startPhoneLiveAudio(record: Boolean): Boolean {
+        sendPacket(mapOf("type" to "phone_audio_start", "record" to record))
+        val started = liveAudioRecorder.start(::sendPhoneAudioFrame) {
+            _isPhoneLiveAudioActive.value = false
+            sendPacket(mapOf("type" to "phone_audio_stop"))
+        }
+        _isPhoneLiveAudioActive.value = started
+        if (!started) {
+            sendPacket(mapOf("type" to "phone_audio_stop"))
+            _statusMessage.value = "Could not start phone microphone. Check microphone permission."
+        }
+        return started
+    }
+
+    override fun stopPhoneLiveAudio() {
+        liveAudioRecorder.stop()
+        sendPacket(mapOf("type" to "phone_audio_stop"))
+        _isPhoneLiveAudioActive.value = false
+    }
+
+    override fun sendPhoneAudioFrame(pcm: ByteArray) {
+        sendPacket(mapOf(
+            "type" to "phone_audio_frame",
+            "data" to Base64.encodeToString(pcm, Base64.NO_WRAP)
+        ))
     }
 
     fun cleanup() {

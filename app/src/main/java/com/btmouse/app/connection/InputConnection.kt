@@ -7,7 +7,17 @@ data class SystemStats(
     val ram: Float = 0f,
     val battery: Float = -1f,
     val powerPlugged: Boolean = true,
-    val disk: Float = 0f
+    val disk: Float = 0f,
+    val diskActivity: Float = -1f,
+    val gpus: List<GpuStat> = emptyList(),
+    val npu: Float = -1f
+)
+
+data class GpuStat(
+    val index: Int = 0,
+    val name: String = "GPU",
+    val utilization: Float = -1f,
+    val engine: String = ""
 )
 
 data class ProcessInfo(
@@ -45,7 +55,7 @@ interface InputConnection {
     fun sendPenEvent(action: String, xRatio: Float, yRatio: Float, pressure: Float = 1.0f, isEraser: Boolean = false) {}
 
     val mediaStatus: StateFlow<com.btmouse.app.data.MediaStatus>? get() = null
-    fun queryMedia(includePreview: Boolean = false) {}
+    fun queryMedia(includePreview: Boolean = false, includeVideoPreview: Boolean = false) {}
     fun sendMediaSeek(position: Float) {}
     fun sendMediaToggle() {}
     fun sendMediaNext() {}
@@ -63,14 +73,29 @@ interface InputConnection {
     val latestCameraFrame: StateFlow<ByteArray?>? get() = null
     val isCameraStreaming: StateFlow<Boolean>? get() = null
     val isAudioRecording: StateFlow<Boolean>? get() = null
+    val recordings: StateFlow<List<RecordingEntry>>? get() = null
+    val recordingTransferStatus: StateFlow<String>? get() = null
+    val recordingStreamUrl: StateFlow<String?>? get() = null
+    val isPcLiveAudioActive: StateFlow<Boolean>? get() = null
+    val isPhoneLiveAudioActive: StateFlow<Boolean>? get() = null
 
     fun querySystemStats() {}
     fun queryRunningProcesses() {}
     fun killProcess(pid: Int) {}
     fun queryInstalledApps() {}
+    fun updateQuickApps(paths: List<String>) {}
     fun requestCameraSnapshot() {}
     fun startCameraStream() {}
     fun stopCameraStream() {}
     fun startAudioRecord() {}
     fun stopAudioRecord() {}
+    fun queryRecordings() {}
+    fun downloadRecording(id: String) {}
+    fun streamRecording(id: String) {}
+    fun stopRecordingStream() {}
+    fun startPcLiveAudio(record: Boolean = false) {}
+    fun stopPcLiveAudio() {}
+    fun startPhoneLiveAudio(record: Boolean = false): Boolean = false
+    fun stopPhoneLiveAudio() {}
+    fun sendPhoneAudioFrame(pcm: ByteArray) {}
 }

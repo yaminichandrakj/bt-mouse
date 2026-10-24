@@ -2,6 +2,7 @@ package com.btmouse.app.data
 
 import android.content.Context
 import android.content.Intent
+import android.content.ClipData
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -24,7 +26,8 @@ data class ReleaseInfo(
     val releaseName: String,
     val releaseNotes: String,
     val downloadUrl: String,
-    val apkSize: Long = 0L
+    val apkSize: Long = 0L,
+    val sha256: String? = null
 )
 
 sealed class UpdateState {
@@ -40,6 +43,7 @@ sealed class UpdateState {
 class InAppUpdateManager(private val context: Context) {
 
     private val tag = "InAppUpdateManager"
+    private var awaitingInstallPermission = false
     private val repoOwner = "yaminichandrakj"
     private val repoName = "bt-mouse"
     val currentVersion: String
@@ -98,6 +102,7 @@ class InAppUpdateManager(private val context: Context) {
             // Find APK asset
             var apkUrl: String? = null
             var apkSize = 0L
+            var apkSha256: String? = null
             val assets = root.getAsJsonArray("assets")
             if (assets != null) {
                 for (element in assets) {
@@ -106,6 +111,9 @@ class InAppUpdateManager(private val context: Context) {
                     if (name.endsWith(".apk", ignoreCase = true)) {
                         apkUrl = asset.get("browser_download_url")?.asString
                         apkSize = asset.get("size")?.asLong ?: 0L
+                        apkSha256 = asset.get("digest")?.asString
+                            ?.takeIf { it.startsWith("sha256:", ignoreCase = true) }
+                            ?.substringAfter(":")
                         break
                     }
                 }
@@ -123,7 +131,8 @@ class InAppUpdateManager(private val context: Context) {
                     releaseName = releaseName,
                     releaseNotes = releaseNotes,
                     downloadUrl = apkUrl,
-                    apkSize = apkSize
+                    apkSize = apkSize,
+                    sha256 = apkSha256
                 )
                 _updateState.value = UpdateState.UpdateAvailable(releaseInfo)
             } else {
@@ -158,6 +167,7 @@ class InAppUpdateManager(private val context: Context) {
                 }
                 val totalBytes = if (connection.contentLengthLong > 0) connection.contentLengthLong else release.apkSize
                 var downloadedBytes = 0L
+                val digest = MessageDigest.getInstance("SHA-256")
                 connection.inputStream.use { input ->
                     FileOutputStream(partialFile).use { output ->
                         val buffer = ByteArray(32 * 1024)
@@ -165,6 +175,7 @@ class InAppUpdateManager(private val context: Context) {
                             val bytesRead = input.read(buffer)
                             if (bytesRead < 0) break
                             output.write(buffer, 0, bytesRead)
+                            digest.update(buffer, 0, bytesRead)
                             downloadedBytes += bytesRead
 
                             if (totalBytes > 0) {
@@ -180,6 +191,11 @@ class InAppUpdateManager(private val context: Context) {
                 if (downloadedBytes == 0L || (totalBytes > 0 && downloadedBytes != totalBytes)) {
                     throw IllegalStateException("The APK download was incomplete. Please retry.")
                 }
+                if (release.sha256 != null && !digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+                        .equals(release.sha256, ignoreCase = true)) {
+                    throw IllegalStateException("The downloaded APK failed its SHA-256 integrity check. Please retry.")
+                }
+                validateDownloadedApk(partialFile, release)
                 if (apkFile.exists() && !apkFile.delete()) {
                     throw IllegalStateException("Could not replace the previous downloaded update.")
                 }
@@ -209,13 +225,13 @@ class InAppUpdateManager(private val context: Context) {
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 !context.packageManager.canRequestPackageInstalls()) {
+                awaitingInstallPermission = true
                 val permissionIntent = Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                     Uri.parse("package:${context.packageName}")
                 ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
                 context.startActivity(permissionIntent)
-                // Keep the downloaded APK ready so the user can tap Install
-                // again after granting this source permission in Settings.
+                // Keep the APK available; the settings screen retries on return.
                 _updateState.value = UpdateState.ReadyToInstall(apkFile)
                 return
             }
@@ -226,16 +242,50 @@ class InAppUpdateManager(private val context: Context) {
                 apkFile
             )
 
-            @Suppress("DEPRECATION")
-            val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+            val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                clipData = ClipData.newRawUri("BT Mouse update", apkUri)
             }
 
             context.startActivity(installIntent)
+            awaitingInstallPermission = false
         } catch (e: Exception) {
             Log.e(tag, "Install launch error", e)
             _updateState.value = UpdateState.Error("Please install downloaded APK from Downloads or Browser: ${e.message}")
+        }
+    }
+
+    /** Resume the installer after Android returns from per-source install permission settings. */
+    fun onHostResumed() {
+        if (!awaitingInstallPermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (context.packageManager.canRequestPackageInstalls()) {
+            awaitingInstallPermission = false
+            val apkFile = (_updateState.value as? UpdateState.ReadyToInstall)?.apkFile ?: return
+            launchApkInstaller(apkFile)
+        }
+    }
+
+    private fun validateDownloadedApk(apkFile: File, release: ReleaseInfo) {
+        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getPackageArchiveInfo(
+                apkFile.absolutePath,
+                android.content.pm.PackageManager.PackageInfoFlags.of(0)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+        } ?: throw IllegalStateException("The downloaded file is not a readable Android APK.")
+
+        if (packageInfo.packageName != context.packageName) {
+            throw IllegalStateException("This release APK belongs to a different app and cannot update BT Mouse.")
+        }
+        val apkVersion = packageInfo.versionName?.removeSuffix("-debug")
+            ?: throw IllegalStateException("The APK does not contain a version name.")
+        if (!apkVersion.equals(release.tagName.removePrefix("v"), ignoreCase = true)) {
+            throw IllegalStateException(
+                "Release version ${release.tagName} does not match APK version $apkVersion. Please report this release mismatch."
+            )
         }
     }
 

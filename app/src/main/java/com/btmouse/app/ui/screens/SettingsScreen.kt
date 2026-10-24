@@ -1,6 +1,7 @@
 package com.btmouse.app.ui.screens
 
 import android.os.Build
+import android.content.ContextWrapper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +39,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -49,6 +51,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.btmouse.app.data.InAppUpdateManager
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.data.UpdateState
@@ -77,6 +82,23 @@ fun SettingsScreen(
     val coroutineScope = rememberCoroutineScope()
     val updateManager = remember { InAppUpdateManager(context) }
     val updateState by updateManager.updateState.collectAsState()
+    val lifecycleOwner = remember(context) {
+        var current: android.content.Context? = context
+        var owner: LifecycleOwner? = null
+        while (current != null && owner == null) {
+            owner = current as? LifecycleOwner
+            current = (current as? ContextWrapper)?.baseContext
+        }
+        owner
+    }
+
+    DisposableEffect(updateManager, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) updateManager.onHostResumed()
+        }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose { lifecycleOwner?.lifecycle?.removeObserver(observer) }
+    }
 
     val pointerSpeed by settings.pointerSpeed.collectAsState()
     val scrollSpeed by settings.scrollSpeed.collectAsState()
@@ -402,7 +424,7 @@ fun SettingsScreen(
 
                     is UpdateState.ReadyToInstall -> {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Download complete. If Android asks, allow BT Mouse to install updates, then return here and tap Install APK Now.", color = AccentEmerald, fontSize = 12.sp)
+                            Text("Download complete. The Android installer opens after install permission is granted. If it does not, tap Install APK Now.", color = AccentEmerald, fontSize = 12.sp)
                             Button(
                                 onClick = { updateManager.launchApkInstaller(state.apkFile) },
                                 colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald),

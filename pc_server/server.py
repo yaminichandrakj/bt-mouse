@@ -16,6 +16,9 @@ import asyncio
 import hmac
 import hashlib
 import secrets
+import queue
+import re
+import shutil
 from pathlib import Path
 
 
@@ -31,6 +34,96 @@ def _pairing_pin_config_path():
 
 PAIRING_PIN_PATH = _pairing_pin_config_path()
 QUICK_APPS_PATH = PAIRING_PIN_PATH.with_name("quick_apps.json")
+MEDIA_PREVIEW_REGION_PATH = PAIRING_PIN_PATH.with_name("media_preview_region.json")
+
+
+def load_media_preview_region():
+    """Return the explicitly selected screen rectangle, or None if not configured."""
+    try:
+        region = json.loads(MEDIA_PREVIEW_REGION_PATH.read_text(encoding="utf-8"))
+        x, y, width, height = (int(region[key]) for key in ("x", "y", "width", "height"))
+        if width < 80 or height < 60 or width > 8192 or height > 8192:
+            return None
+        return {"x": x, "y": y, "width": width, "height": height}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def save_media_preview_region(region):
+    clean = {key: int(region[key]) for key in ("x", "y", "width", "height")}
+    if clean["width"] < 80 or clean["height"] < 60:
+        raise ValueError("Select a region at least 80 by 60 pixels")
+    MEDIA_PREVIEW_REGION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = MEDIA_PREVIEW_REGION_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(clean), encoding="utf-8")
+    os.replace(temporary, MEDIA_PREVIEW_REGION_PATH)
+    return clean
+
+
+def capture_selected_media_preview():
+    """Capture only the rectangle explicitly selected in the desktop companion."""
+    region = load_media_preview_region()
+    if not region:
+        return ""
+    try:
+        from PIL import Image, ImageGrab
+        from io import BytesIO
+        x, y = region["x"], region["y"]
+        image = ImageGrab.grab(bbox=(x, y, x + region["width"], y + region["height"]))
+        image.thumbnail((480, 270), Image.Resampling.LANCZOS)
+        stream = BytesIO()
+        image.save(stream, format="JPEG", quality=48, optimize=True)
+        return base64.b64encode(stream.getvalue()).decode("ascii")
+    except Exception as exc:
+        print(f"[-] Selected media preview capture failed: {exc}")
+        return ""
+
+
+def prepare_recording_storage(directory, retention_days=0, max_storage_mb=0, min_free_mb=512,
+                              protected_paths=()):
+    """Apply user-selected retention without touching active files; reject new capture below free-space floor."""
+    folder = Path(directory)
+    folder.mkdir(parents=True, exist_ok=True)
+    protected = {os.path.normcase(os.path.realpath(str(path))) for path in protected_paths if path}
+    files = []
+    for path in folder.iterdir():
+        try:
+            if path.is_file() and os.path.normcase(os.path.realpath(str(path))) not in protected:
+                stat = path.stat()
+                files.append((path, stat.st_mtime, stat.st_size))
+        except OSError:
+            continue
+    files.sort(key=lambda item: item[1])
+    now = time.time()
+    if retention_days > 0:
+        cutoff = now - retention_days * 86400
+        remaining = []
+        for entry in files:
+            if entry[1] < cutoff:
+                try:
+                    entry[0].unlink()
+                except OSError:
+                    remaining.append(entry)
+            else:
+                remaining.append(entry)
+        files = remaining
+    if max_storage_mb > 0:
+        total = sum(entry[2] for entry in files)
+        for entry in files:
+            if total <= max_storage_mb * 1024 * 1024:
+                break
+            try:
+                entry[0].unlink()
+                total -= entry[2]
+            except OSError:
+                continue
+    try:
+        free_mb = shutil.disk_usage(folder).free / (1024 * 1024)
+    except OSError as exc:
+        return False, f"Could not check recording storage: {exc}"
+    if min_free_mb > 0 and free_mb < min_free_mb:
+        return False, f"Recording skipped: only {free_mb:.0f} MB is free; the configured minimum is {min_free_mb} MB"
+    return True, ""
 
 
 def save_quick_apps(apps):
@@ -359,11 +452,74 @@ class MediaController:
             print(f"[-] Media artwork unavailable: {e}")
         return ""
 
+    def _detect_browser_audio_session(self):
+        """Recognize active browser audio even when it does not publish an SMTC session."""
+        if not IS_WINDOWS or not self.has_pycaw:
+            return None
+        browser_names = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"}
+        initialized = False
+        try:
+            import comtypes
+            comtypes.CoInitialize()
+            initialized = True
+            for session in self.audio_utilities.GetAllSessions():
+                process = getattr(session, "Process", None)
+                if process and process.name().lower() in browser_names and int(session.State) == 1:
+                    return process.name().removesuffix(".exe"), process.pid
+        except Exception:
+            return None
+        finally:
+            if initialized:
+                try:
+                    comtypes.CoUninitialize()
+                except Exception:
+                    pass
+        return None
+
+    @staticmethod
+    def _get_process_window_title(process_id):
+        """Return the browser window title only; never capture the page or screen."""
+        if not IS_WINDOWS or not process_id:
+            return ""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            titles = []
+            callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def _visit(hwnd, _lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                owner = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+                if owner.value != process_id:
+                    return True
+                length = min(512, user32.GetWindowTextLengthW(hwnd))
+                if length:
+                    title = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, title, length + 1)
+                    if title.value.strip():
+                        titles.append(title.value.strip())
+                return not titles
+
+            user32.EnumWindows(callback_type(_visit), 0)
+            return titles[0] if titles else ""
+        except Exception:
+            return ""
+
     def get_media_state(self, include_preview=False, max_artwork_bytes=12 * 1024):
         vol, muted = self.get_volume()
         self.last_state["volume"] = round(vol, 2)
         self.last_state["muted"] = muted
         self.last_state["is_muted"] = muted
+        # Rebuild playback identity for every poll; a lost SMTC/audio session
+        # must not leave the previous track looking active indefinitely.
+        self.last_state.update({
+            "has_media": False, "title": "", "artist": "", "album": "",
+            "status": "NoMedia", "position": 0.0, "duration": 0.0,
+            "artwork": ""
+        })
 
         if self.has_winrt:
             try:
@@ -387,6 +543,10 @@ class MediaController:
                             continue
                     if active:
                         session = next((item for status, item in active if status == 5), active[0][1])
+                    else:
+                        # Do not report an idle current-session pointer as the
+                        # media that is currently playing in the browser.
+                        session = None
 
                     if session:
                         props = await session.try_get_media_properties_async()
@@ -418,15 +578,43 @@ class MediaController:
                 if res:
                     self.last_state.update(res)
                     return self.last_state
-                else:
-                    self.last_state.update({
-                        "has_media": False, "title": "", "artist": "", "album": "",
-                        "status": "NoMedia", "position": 0.0, "duration": 0.0,
-                        "artwork": ""
-                    })
             except Exception:
                 pass
+        if not self.last_state.get("has_media"):
+            browser_audio = self._detect_browser_audio_session()
+            if browser_audio:
+                browser_name, process_id = browser_audio
+                window_title = self._get_process_window_title(process_id)
+                self.last_state.update({
+                    "has_media": True,
+                    "title": window_title or f"Playing in {browser_name}",
+                    "artist": "Browser audio",
+                    "album": "",
+                    "status": "Playing",
+                    "position": 0.0,
+                    "duration": 0.0,
+                    "artwork": "",
+                })
         return self.last_state
+
+    async def _active_smtc_session(self):
+        if not self.has_winrt:
+            return None
+        manager = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
+        sessions = list(manager.get_sessions() or [])
+        current = manager.get_current_session()
+        if current and current not in sessions:
+            sessions.insert(0, current)
+        active = []
+        for session in sessions:
+            try:
+                playback = session.get_playback_info()
+                status = int(playback.playback_status) if playback else 0
+                if status in (4, 5):
+                    active.append((status, session))
+            except Exception:
+                continue
+        return next((session for status, session in active if status == 5), active[0][1] if active else None)
 
     def seek(self, seconds):
         if self.has_winrt:
@@ -435,12 +623,7 @@ class MediaController:
                 import datetime
 
                 async def _seek():
-                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
-                    session = mgr.get_current_session()
-                    if not session:
-                        sessions = mgr.get_sessions()
-                        if sessions:
-                            session = sessions[0]
+                    session = await self._active_smtc_session()
                     if session:
                         delta = datetime.timedelta(seconds=float(seconds))
                         await session.try_change_playback_position_async(delta)
@@ -459,12 +642,7 @@ class MediaController:
                 import asyncio
 
                 async def _toggle():
-                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
-                    session = mgr.get_current_session()
-                    if not session:
-                        sessions = mgr.get_sessions()
-                        if sessions:
-                            session = sessions[0]
+                    session = await self._active_smtc_session()
                     if session:
                         return bool(await session.try_toggle_play_pause_async())
                     return False
@@ -493,12 +671,7 @@ class MediaController:
                 import asyncio
 
                 async def _next():
-                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
-                    session = mgr.get_current_session()
-                    if not session:
-                        sessions = mgr.get_sessions()
-                        if sessions:
-                            session = sessions[0]
+                    session = await self._active_smtc_session()
                     if session:
                         return bool(await session.try_skip_next_async())
                     return False
@@ -527,12 +700,7 @@ class MediaController:
                 import asyncio
 
                 async def _prev():
-                    mgr = await self.wmc.GlobalSystemMediaTransportControlsSessionManager.request_async()
-                    session = mgr.get_current_session()
-                    if not session:
-                        sessions = mgr.get_sessions()
-                        if sessions:
-                            session = sessions[0]
+                    session = await self._active_smtc_session()
                     if session:
                         return bool(await session.try_skip_previous_async())
                     return False
@@ -701,7 +869,17 @@ class CameraManager:
     def __init__(self):
         self.streaming = False
         self.stream_thread = None
+        self.stream_capture = None
         self.lock = threading.Lock()
+        self.lifecycle_lock = threading.RLock()
+        self.generation = 0
+        user_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        self.recordings_dir = os.path.join(user_data, "BTMouse", "Recordings")
+        os.makedirs(self.recordings_dir, exist_ok=True)
+        self.auto_record_enabled = False
+        self.last_recording_path = None
+        self.last_recording_error = ""
+        self.recording_policy = {"retention_days": 0, "max_storage_mb": 0, "min_free_mb": 512}
         self.has_cv2 = False
         try:
             import cv2
@@ -739,9 +917,22 @@ class CameraManager:
             print(f"[-] Camera snapshot error: {e}")
         return None
 
-    def start_stream(self, on_frame_callback, max_width=640, quality=65, max_frame_bytes=None, fps=15):
+    def start_stream(self, on_frame_callback, max_width=640, quality=65, max_frame_bytes=None, fps=15,
+                     on_stream_end_callback=None):
+        with self.lifecycle_lock:
+            return self._start_stream(
+                on_frame_callback, max_width, quality, max_frame_bytes, fps, on_stream_end_callback
+            )
+
+    def _start_stream(self, on_frame_callback, max_width=640, quality=65, max_frame_bytes=None, fps=15,
+                      on_stream_end_callback=None):
         if not self.has_cv2:
             return False
+        if not self.stop_stream():
+            return False
+        record_enabled = bool(self.auto_record_enabled)
+        self.last_recording_path = None
+        self.last_recording_error = ""
         try:
             import cv2
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
@@ -751,47 +942,166 @@ class CameraManager:
             if not cap.isOpened():
                 cap.release()
                 return False
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, max_width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, max(90, int(max_width * 3 / 4)))
+            capture_width = 1280 if record_enabled else max_width
+            capture_height = 720 if record_enabled else max(90, int(max_width * 3 / 4))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
         except Exception as e:
+            try:
+                cap.release()
+            except Exception:
+                pass
             print(f"[-] Camera open error: {e}")
             return False
+        if record_enabled:
+            allowed, message = prepare_recording_storage(
+                self.recordings_dir,
+                **self.recording_policy,
+                protected_paths=(self.last_recording_path,),
+            )
+            if not allowed:
+                record_enabled = False
+                self.last_recording_error = message
+                print(f"[-] {message}")
         with self.lock:
-            if self.streaming:
-                cap.release()
-                return True
+            self.generation += 1
+            generation = self.generation
             self.streaming = True
+            self.stream_capture = cap
 
         def _loop():
+            writer = None
+            recording_path = None
+            failure_reason = None
+            consecutive_read_failures = 0
+            consecutive_frame_drops = 0
             try:
-                while self.streaming:
+                while True:
+                    with self.lock:
+                        if not self.streaming or generation != self.generation:
+                            break
                     ret, frame = cap.read()
+                    if not ret or frame is None:
+                        consecutive_read_failures += 1
+                        if consecutive_read_failures >= 5:
+                            failure_reason = "The camera stopped returning frames."
+                            break
+                        time.sleep(1.0 / max(1, fps))
+                        continue
+                    consecutive_read_failures = 0
                     if ret and frame is not None:
+                        if record_enabled:
+                            if writer is None:
+                                height, width = frame.shape[:2]
+                                stamp = time.strftime("%Y%m%d_%H%M%S")
+                                recording_path = os.path.join(
+                                    self.recordings_dir,
+                                    f"webcam_{stamp}_{int(time.time() * 1000) % 1000:03d}.avi"
+                                )
+                                fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+                                writer = cv2.VideoWriter(recording_path, fourcc, max(1, fps), (width, height))
+                                if not writer.isOpened():
+                                    writer.release()
+                                    writer = None
+                                    recording_path = None
+                                    print("[-] Could not start webcam video recording (MJPG codec unavailable)")
+                                else:
+                                    self.last_recording_path = recording_path
+                                    print(f"[+] Recording webcam stream to {recording_path}")
+                            if writer is not None:
+                                writer.write(frame)
                         height, width = frame.shape[:2]
-                        if width > max_width:
-                            frame = cv2.resize(frame, (max_width, int(height * max_width / width)))
-                        ret, buf = False, None
-                        for frame_quality in (quality, max(20, quality - 10), max(15, quality - 20)):
-                            ret, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), frame_quality])
-                            if ret and (max_frame_bytes is None or buf.nbytes <= max_frame_bytes):
+                        live_width = min(width, max_width)
+                        buf = None
+                        while live_width >= min(80, min(width, max_width)):
+                            live_frame = frame
+                            if width > live_width:
+                                live_frame = cv2.resize(
+                                    frame, (live_width, max(1, int(height * live_width / width)))
+                                )
+                            for frame_quality in (quality, max(20, quality - 10), max(15, quality - 20)):
+                                encoded, candidate = cv2.imencode(
+                                    '.jpg', live_frame, [int(cv2.IMWRITE_JPEG_QUALITY), frame_quality]
+                                )
+                                if encoded and (max_frame_bytes is None or candidate.nbytes <= max_frame_bytes):
+                                    buf = candidate
+                                    break
+                            if buf is not None or max_frame_bytes is None or live_width <= 80:
                                 break
-                        if ret and (max_frame_bytes is None or buf.nbytes <= max_frame_bytes):
+                            live_width = max(80, int(live_width * 0.75))
+                        if buf is None:
+                            consecutive_frame_drops += 1
+                            if consecutive_frame_drops >= 10:
+                                failure_reason = "Live frames could not fit the connection's frame-size limit."
+                                break
+                            time.sleep(1.0 / max(1, fps))
+                            continue
+                        consecutive_frame_drops = 0
+                        if buf is not None:
                             b64 = base64.b64encode(buf).decode('utf-8')
-                            on_frame_callback(b64)
+                            with self.lock:
+                                is_current = self.streaming and generation == self.generation
+                            if is_current:
+                                on_frame_callback(b64)
                     time.sleep(1.0 / max(1, fps))
-                cap.release()
             except Exception as e:
-                print(f"[-] Camera stream error: {e}")
+                failure_reason = f"Camera stream error: {e}"
+                print(f"[-] {failure_reason}")
             finally:
-                self.streaming = False
+                if writer is not None:
+                    writer.release()
+                    print(f"[+] Finished webcam recording: {recording_path}")
+                with self.lock:
+                    release_capture = self.stream_capture is cap
+                    if release_capture:
+                        self.stream_capture = None
+                if release_capture:
+                    cap.release()
+                with self.lock:
+                    is_current = generation == self.generation
+                    if is_current:
+                        self.streaming = False
+                        if self.stream_thread is threading.current_thread():
+                            self.stream_thread = None
+                if is_current and failure_reason and on_stream_end_callback:
+                    try:
+                        on_stream_end_callback(failure_reason)
+                    except Exception as e:
+                        print(f"[-] Camera stop notification failed: {e}")
 
-        self.stream_thread = threading.Thread(target=_loop, daemon=True)
-        self.stream_thread.start()
+        thread = threading.Thread(target=_loop, daemon=True)
+        with self.lock:
+            if not self.streaming or generation != self.generation:
+                cap.release()
+                return False
+            self.stream_thread = thread
+            thread.start()
         return True
 
     def stop_stream(self):
+        with self.lifecycle_lock:
+            return self._stop_stream()
+
+    def _stop_stream(self):
         with self.lock:
             self.streaming = False
+            self.generation += 1
+            thread = self.stream_thread
+            capture = self.stream_capture
+            self.stream_capture = None
+        # Releasing a capture handle from the stop path helps unblock a driver
+        # stuck inside read(), so a lost phone cannot leave the webcam active.
+        if capture is not None:
+            try:
+                capture.release()
+            except Exception:
+                pass
+        if thread and thread is not threading.current_thread() and thread.is_alive():
+            thread.join(timeout=2.0)
+        if thread and thread.is_alive():
+            print("[-] Camera stream did not stop before timeout")
+            return False
+        return True
 
 
 class AudioManager:
@@ -804,6 +1114,7 @@ class AudioManager:
         os.makedirs(self.recordings_dir, exist_ok=True)
         self.current_filename = None
         self.last_error = None
+        self.recording_policy = {"retention_days": 0, "max_storage_mb": 0, "min_free_mb": 512}
         self.has_audio = False
         try:
             import sounddevice as sd
@@ -818,6 +1129,14 @@ class AudioManager:
             return None
         if self.recording:
             return self.current_filename
+        allowed, message = prepare_recording_storage(
+            self.recordings_dir,
+            **self.recording_policy,
+            protected_paths=(self.current_filename,),
+        )
+        if not allowed:
+            self.last_error = message
+            return None
         self.last_error = None
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.current_filename = os.path.join(self.recordings_dir, f"audio_{ts}.wav")
@@ -869,6 +1188,358 @@ class AudioManager:
             print(f"[+] Stopped microphone recording: {self.current_filename}")
         return self.current_filename
 
+
+class LiveAudioManager:
+    """Relays low-latency mono PCM between the PC microphone and one client."""
+    SAMPLE_RATE = 16000
+    BLOCK_SAMPLES = 320  # 20 ms at 16 kHz
+
+    def __init__(self, recordings_dir):
+        self.recordings_dir = recordings_dir
+        self.recording_policy = {"retention_days": 0, "max_storage_mb": 0, "min_free_mb": 512}
+        self.lock = threading.RLock()
+        self.capture_stream = None
+        self.capture_thread = None
+        self.capture_running = False
+        self.capture_owner = None
+        self.capture_recorder = None
+        self.capture_path = None
+        self.capture_respond = None
+        self.capture_last_seen = 0.0
+        self.output_stream = None
+        self.output_owner = None
+        self.output_recorder = None
+        self.output_path = None
+        self.output_queue = None
+        self.output_thread = None
+        self.output_running = False
+        self.output_respond = None
+        self.output_last_seen = 0.0
+        self.lease_thread = None
+
+    def start_pc_to_phone(self, owner, respond, record=False):
+        if not self.stop_pc_to_phone():
+            return False, "The previous PC microphone stream is still stopping"
+        try:
+            import sounddevice as sd
+            import wave
+            stream = sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1, dtype="int16",
+                                    blocksize=self.BLOCK_SAMPLES)
+            stream.start()
+            recorder = None
+            recording_path = None
+            record_warning = ""
+            if record:
+                allowed, record_warning = prepare_recording_storage(
+                    self.recordings_dir, **self.recording_policy,
+                    protected_paths=(self.capture_path, self.output_path),
+                )
+                if allowed:
+                    recording_path = self._new_recording_path("live_pc_mic")
+                    recorder = wave.open(recording_path, "wb")
+                    recorder.setnchannels(1)
+                    recorder.setsampwidth(2)
+                    recorder.setframerate(self.SAMPLE_RATE)
+            with self.lock:
+                self.capture_stream = stream
+                self.capture_running = True
+                self.capture_owner = owner
+                self.capture_recorder = recorder
+                self.capture_path = recording_path
+                self.capture_respond = respond
+                self.capture_last_seen = time.monotonic()
+                self.capture_thread = threading.Thread(
+                    target=self._capture_loop, args=(stream, respond),
+                    name="LivePcAudioCapture", daemon=True)
+                self.capture_thread.start()
+                self._start_lease_watcher()
+            message = "PC microphone audio is live"
+            if record and not recorder:
+                message += f"; recording skipped: {record_warning}"
+            return True, message
+        except Exception as exc:
+            try:
+                recorder.close()
+            except Exception:
+                pass
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+            return False, f"Could not start PC microphone audio: {exc}"
+
+    def _capture_loop(self, stream, respond):
+        try:
+            while True:
+                with self.lock:
+                    if not self.capture_running or self.capture_stream is not stream:
+                        break
+                    recorder = self.capture_recorder
+                data, _overflowed = stream.read(self.BLOCK_SAMPLES)
+                pcm = data.tobytes()
+                if recorder:
+                    recorder.writeframesraw(pcm)
+                respond({
+                    "type": "live_audio_frame",
+                    "direction": "pc_to_phone",
+                    "rate": self.SAMPLE_RATE,
+                    "data": base64.b64encode(pcm).decode("ascii"),
+                })
+        except Exception as exc:
+            print(f"[-] Live PC audio capture ended: {exc}")
+            with self.lock:
+                owner = self.capture_owner if self.capture_running else None
+            if owner is not None:
+                try:
+                    respond({"type": "live_audio_status", "direction": "pc_to_phone",
+                             "active": False, "message": f"PC microphone stream ended: {exc}"})
+                except Exception:
+                    pass
+        finally:
+            finished_path = None
+            with self.lock:
+                if self.capture_stream is stream:
+                    self.capture_running = False
+                    self.capture_stream = None
+                    self.capture_thread = None
+                    self.capture_owner = None
+                    self.capture_respond = None
+                    recorder = self.capture_recorder
+                    self.capture_recorder = None
+                    finished_path = self.capture_path
+                else:
+                    recorder = None
+            if recorder:
+                try:
+                    recorder.close()
+                except Exception:
+                    pass
+            with self.lock:
+                if self.capture_path == finished_path:
+                    self.capture_path = None
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+    def stop_pc_to_phone(self, owner=None):
+        with self.lock:
+            if owner is not None and self.capture_owner != owner:
+                return False
+            stream = self.capture_stream
+            thread = self.capture_thread
+            self.capture_running = False
+        if stream:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                print("[-] Live PC audio capture did not stop before timeout")
+                return False
+        return True
+
+    def _new_recording_path(self, prefix):
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        unique = f"{time.time_ns() % 1_000_000_000:09d}"
+        return os.path.join(self.recordings_dir, f"{prefix}_{stamp}_{unique}.wav")
+
+    def touch_owner(self, owner):
+        now = time.monotonic()
+        with self.lock:
+            if self.capture_owner == owner:
+                self.capture_last_seen = now
+            if self.output_owner == owner:
+                self.output_last_seen = now
+
+    def _start_lease_watcher(self):
+        if self.lease_thread and self.lease_thread.is_alive():
+            return
+        self.lease_thread = threading.Thread(target=self._watch_leases, name="LiveAudioLease", daemon=True)
+        self.lease_thread.start()
+
+    def _watch_leases(self):
+        while True:
+            stale_capture = stale_output = False
+            with self.lock:
+                if not self.capture_running and not self.output_running:
+                    return
+                now = time.monotonic()
+                stale_capture = bool(self.capture_owner and self.capture_owner[0] == "wifi" and
+                                     now - self.capture_last_seen > 8.0)
+                stale_output = bool(self.output_owner and self.output_owner[0] == "wifi" and
+                                    now - self.output_last_seen > 8.0)
+                capture_respond = self.capture_respond
+                output_respond = self.output_respond
+                capture_owner = self.capture_owner
+                output_owner = self.output_owner
+            if stale_capture:
+                if capture_respond:
+                    try:
+                        capture_respond({"type": "live_audio_status", "direction": "pc_to_phone",
+                                         "active": False, "message": "Audio stopped after the Wi-Fi client disconnected"})
+                    except Exception:
+                        pass
+                self.stop_pc_to_phone(capture_owner)
+            if stale_output:
+                if output_respond:
+                    try:
+                        output_respond({"type": "live_audio_status", "direction": "phone_to_pc",
+                                        "active": False, "message": "Audio stopped after the Wi-Fi client disconnected"})
+                    except Exception:
+                        pass
+                self.stop_phone_to_pc(output_owner)
+            time.sleep(0.5)
+
+    def start_phone_to_pc(self, owner, record=False, respond=None):
+        if not self.stop_phone_to_pc():
+            return False, "The previous phone audio stream is still stopping"
+        stream = None
+        recorder = None
+        try:
+            import sounddevice as sd
+            import wave
+            stream = sd.OutputStream(samplerate=self.SAMPLE_RATE, channels=1, dtype="int16",
+                                     blocksize=self.BLOCK_SAMPLES)
+            stream.start()
+            recording_path = None
+            record_warning = ""
+            if record:
+                allowed, record_warning = prepare_recording_storage(
+                    self.recordings_dir, **self.recording_policy,
+                    protected_paths=(self.capture_path, self.output_path),
+                )
+                if allowed:
+                    recording_path = self._new_recording_path("live_phone_mic")
+                    recorder = wave.open(recording_path, "wb")
+                    recorder.setnchannels(1)
+                    recorder.setsampwidth(2)
+                    recorder.setframerate(self.SAMPLE_RATE)
+            with self.lock:
+                self.output_stream = stream
+                self.output_owner = owner
+                self.output_respond = respond
+                self.output_last_seen = time.monotonic()
+                self.output_recorder = recorder
+                self.output_path = recording_path
+                self.output_queue = queue.Queue(maxsize=16)
+                self.output_running = True
+                self.output_thread = threading.Thread(
+                    target=self._output_loop, args=(stream,), name="LivePhoneAudioPlayback", daemon=True)
+                self.output_thread.start()
+            message = "Phone microphone audio is playing on the PC"
+            if record and not recorder:
+                message += f"; recording skipped: {record_warning}"
+            return True, message
+        except Exception as exc:
+            if recorder:
+                try:
+                    recorder.close()
+                except Exception:
+                    pass
+            if stream:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+            return False, f"Could not start PC audio output: {exc}"
+
+    def accept_phone_audio(self, owner, pcm):
+        with self.lock:
+            if not self.output_running or self.output_owner != owner:
+                return False
+            audio_queue = self.output_queue
+        try:
+            audio_queue.put_nowait(pcm)
+            return True
+        except queue.Full:
+            try:
+                audio_queue.get_nowait()
+                audio_queue.put_nowait(pcm)
+                return True
+            except queue.Empty:
+                return False
+
+    def _output_loop(self, stream):
+        try:
+            while True:
+                with self.lock:
+                    if not self.output_running or self.output_stream is not stream:
+                        break
+                    audio_queue = self.output_queue
+                    recorder = self.output_recorder
+                try:
+                    pcm = audio_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if len(pcm) != self.BLOCK_SAMPLES * 2:
+                    continue
+                stream.write(pcm)
+                if recorder:
+                    recorder.writeframesraw(pcm)
+        except Exception as exc:
+            print(f"[-] Live phone audio output ended: {exc}")
+            with self.lock:
+                respond = self.output_respond
+            if respond:
+                try:
+                    respond({"type": "live_audio_status", "direction": "phone_to_pc",
+                             "active": False, "message": f"PC audio output ended: {exc}"})
+                except Exception:
+                    pass
+        finally:
+            self.stop_phone_to_pc()
+
+    def stop_phone_to_pc(self, owner=None):
+        with self.lock:
+            if owner is not None and self.output_owner != owner:
+                return False
+            stream = self.output_stream
+            thread = self.output_thread
+            self.output_running = False
+        if stream:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                print("[-] Live phone audio output did not stop before timeout")
+                return False
+        finished_path = None
+        with self.lock:
+            if self.output_stream is stream:
+                self.output_stream = None
+                self.output_thread = None
+                self.output_owner = None
+                self.output_respond = None
+                self.output_queue = None
+                self.output_running = False
+                recorder = self.output_recorder
+                self.output_recorder = None
+                finished_path = self.output_path
+            else:
+                recorder = None
+        if recorder:
+            try:
+                recorder.close()
+            except Exception:
+                pass
+        with self.lock:
+            if self.output_path == finished_path:
+                self.output_path = None
+        if stream:
+            try:
+                stream.close()
+            except Exception:
+                pass
+        return True
 
 class RemoteWebSocketServer:
     """Secure WebSocket Server for remote WAN & internet connections"""
@@ -1037,8 +1708,28 @@ class Server:
         self._query_cache = {}
         self._query_cache_lock = threading.Lock()
         self._query_cache_key_locks = {}
+        self._apps_refresh_lock = threading.Lock()
+        self._apps_refresh_waiters = {}
+        self._apps_refresh_running = False
+        self._async_query_lock = threading.Lock()
+        self._async_query_waiters = {}
+        self._async_query_running = set()
         self._snapshot_transfers = {}
         self._snapshot_transfer_lock = threading.Lock()
+        self._recording_download_acks = {}
+        self._recording_download_lock = threading.Lock()
+        self._active_recording_downloads = set()
+        self._recording_download_cancels = {}
+        self._recording_download_names = {}
+        self._recording_download_owners = {}
+        self._hardware_metrics_lock = threading.Lock()
+        self._hardware_metrics = {"disk_activity": -1.0, "gpus": [], "npu": -1.0}
+        self._performance_sampler_running = False
+        self._performance_sampler_thread = None
+        self._camera_stream_owner = None
+        self._camera_stream_owner_lock = threading.Lock()
+        self.auto_record_audio_with_video = False
+        self._camera_auto_audio_recording = False
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
         # Bluetooth RFCOMM Server for mobile companion
@@ -1051,6 +1742,7 @@ class Server:
         # Camera & Audio Managers
         self.camera_manager = CameraManager()
         self.audio_manager = AudioManager()
+        self.live_audio_manager = LiveAudioManager(self.audio_manager.recordings_dir)
 
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
@@ -1094,6 +1786,7 @@ class Server:
         else:
             if self.connected_client == client_name:
                 self.connected_client = None
+            self._stop_camera_stream_for_client(("bluetooth", None))
         if self.on_client_callback:
             self.on_client_callback(self.connected_client, is_connected)
 
@@ -1103,8 +1796,77 @@ class Server:
         else:
             if self.connected_client == client_name:
                 self.connected_client = None
+            self._stop_camera_stream_for_client(("wan", None))
         if self.on_client_callback:
             self.on_client_callback(self.connected_client, is_connected)
+
+    @staticmethod
+    def _camera_client_key(addr):
+        if not addr:
+            return ("unknown", None)
+        transport = str(addr[0]).lower()
+        if transport == "bluetooth":
+            return ("bluetooth", None)
+        if transport == "websocket":
+            return ("wan", None)
+        return ("wifi", tuple(addr))
+
+    def _refresh_camera_stream_lease(self, addr):
+        key = self._camera_client_key(addr)
+        owner_lock = getattr(self, "_camera_stream_owner_lock", None)
+        if owner_lock is not None:
+            with owner_lock:
+                owner = getattr(self, "_camera_stream_owner", None)
+                if owner and owner.get("key") == key:
+                    owner["last_seen"] = time.monotonic()
+        if hasattr(self, "live_audio_manager"):
+            self.live_audio_manager.touch_owner(key)
+
+    def _cancel_recording_transfers_for_client(self, owner):
+        with self._recording_download_lock:
+            for transfer_id, transfer_owner in self._recording_download_owners.items():
+                if transfer_owner == owner:
+                    cancel = self._recording_download_cancels.get(transfer_id)
+                    if cancel:
+                        cancel.set()
+
+    def _stop_camera_stream_for_client(self, key=None):
+        should_stop = False
+        with self._camera_stream_owner_lock:
+            owner = self._camera_stream_owner
+            if owner and (key is None or owner["key"] == key):
+                self._camera_stream_owner = None
+                should_stop = True
+        if should_stop:
+            self.camera_manager.stop_stream()
+            if self._camera_auto_audio_recording:
+                self.audio_manager.stop_recording()
+                self._camera_auto_audio_recording = False
+
+    def _on_camera_stream_ended(self, session_id, owner_key, respond, reason):
+        with self._camera_stream_owner_lock:
+            owner = self._camera_stream_owner
+            if not owner or owner.get("session_id") != session_id or owner.get("key") != owner_key:
+                return
+            self._camera_stream_owner = None
+            stop_auto_audio = self._camera_auto_audio_recording
+            self._camera_auto_audio_recording = False
+        if stop_auto_audio:
+            self.audio_manager.stop_recording()
+        print(f"[-] Webcam stream ended: {reason}")
+        try:
+            respond({"type": "camera_stream_status", "streaming": False, "message": reason})
+        except Exception:
+            pass
+
+    def _expire_udp_camera_stream(self):
+        with self._camera_stream_owner_lock:
+            owner = self._camera_stream_owner
+            expired = bool(owner and owner["key"][0] == "wifi" and time.monotonic() - owner["last_seen"] > 8.0)
+            key = owner["key"] if expired else None
+        if key:
+            print("[*] Wi-Fi camera client timed out; stopping webcam capture")
+            self._stop_camera_stream_for_client(key)
 
     def get_local_ip(self):
         try:
@@ -1210,7 +1972,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.7"
+                    "version": "1.3.8"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -1227,12 +1989,19 @@ class Server:
                 respond({"type": "auth_error", "message": "Pairing PIN required or invalid"})
             return
 
+        self._refresh_camera_stream_lease(addr)
+
         if cmd_type == "ping":
             respond({"type": "pong", "time": time.time()})
             return
 
         if cmd_type == "disconnect":
             self._release_mouse_buttons()
+            owner_key = self._camera_client_key(addr)
+            self._stop_camera_stream_for_client(owner_key)
+            self.live_audio_manager.stop_pc_to_phone(owner_key)
+            self.live_audio_manager.stop_phone_to_pc(owner_key)
+            self._cancel_recording_transfers_for_client(owner_key)
             if self.connected_client and self.on_client_callback:
                 self.on_client_callback(self.connected_client, False)
             self.connected_client = None
@@ -1388,6 +2157,8 @@ class Server:
             )
             response = {"type": "media_status"}
             response.update(state)
+            if data.get("include_video_preview"):
+                response["video_preview"] = capture_selected_media_preview()
             if responder:
                 responder(response)
             elif addr and self.sock:
@@ -1427,20 +2198,56 @@ class Server:
             respond({"type": "error", "message": "Workstation unlock is not supported"})
 
         elif cmd_type in ("query_apps", "query_installed_apps", "list_apps"):
-            apps = self._cached_query("apps", 5.0, self._get_installed_apps)
-            resp = {"type": "installed_apps_response", "apps": apps}
-            if responder:
-                responder(resp)
-            elif addr and self.sock:
-                self._send_udp_json(resp, addr)
+            self._respond_installed_apps_async(addr, responder)
+
+        elif cmd_type == "update_quick_apps":
+            requested_paths = data.get("paths", [])
+            if not isinstance(requested_paths, list) or len(requested_paths) > 150:
+                respond({"type": "quick_apps_update_response", "success": False,
+                         "message": "Invalid Quick Apps list"})
+                return
+            with self._query_cache_lock:
+                cached_apps = self._query_cache.get("apps")
+                discovered_apps = cached_apps[1] if cached_apps else None
+            discovered_by_path = {
+                os.path.normcase(os.path.realpath(app.get("path", ""))): app
+                for app in (discovered_apps or [])
+                if isinstance(app, dict) and app.get("path")
+            }
+            selected = []
+            seen_paths = set()
+            for requested_path in requested_paths:
+                if not isinstance(requested_path, str) or len(requested_path) > 2048:
+                    continue
+                resolved = os.path.normcase(os.path.realpath(requested_path.strip()))
+                app = discovered_by_path.get(resolved)
+                if app and resolved not in seen_paths:
+                    selected.append({"name": app.get("name", "App"), "path": app["path"]})
+                    seen_paths.add(resolved)
+            try:
+                saved = save_quick_apps(selected)
+                saved_paths = {os.path.normcase(os.path.realpath(app["path"])) for app in saved}
+                with self._query_cache_lock:
+                    if cached_apps:
+                        current_apps = cached_apps[1]
+                        for app in current_apps:
+                            app["is_quick"] = os.path.normcase(os.path.realpath(app.get("path", ""))) in saved_paths
+                        self._query_cache["apps"] = (time.monotonic(), current_apps)
+                respond({
+                    "type": "quick_apps_update_response",
+                    "success": True,
+                    "paths": [app["path"] for app in saved],
+                    "message": f"Saved {len(saved)} Quick Apps on the PC",
+                })
+            except (OSError, ValueError) as exc:
+                respond({"type": "quick_apps_update_response", "success": False,
+                         "message": f"Could not save PC Quick Apps: {str(exc)[:140]}"})
 
         elif cmd_type in ("query_processes", "list_processes"):
-            procs = self._cached_query("processes", 3.0, self._get_running_processes)
-            resp = {"type": "process_list_response", "processes": procs}
-            if responder:
-                responder(resp)
-            elif addr and self.sock:
-                self._send_udp_json(resp, addr)
+            self._respond_query_async(
+                "processes", 3.0, self._get_running_processes,
+                "process_list_response", "processes", [], addr, responder
+            )
 
         elif cmd_type == "kill_process":
             pid = data.get("pid")
@@ -1452,16 +2259,75 @@ class Server:
                 self._send_udp_json(resp, addr)
 
         elif cmd_type in ("query_stats", "system_stats", "query_system_stats"):
-            stats = self._cached_query("stats", 1.0, self._get_system_stats)
-            resp = {"type": "system_stats_response"}
-            resp.update(stats)
-            if responder:
-                responder(resp)
-            elif addr and self.sock:
-                self._send_udp_json(resp, addr)
+            self._respond_query_async(
+                "stats", 1.0, self._get_system_stats,
+                "system_stats_response", None, {}, addr, responder
+            )
 
         elif cmd_type == "camera_snapshot_ack":
             self._ack_udp_snapshot_transfer(data, addr)
+
+        elif cmd_type == "recordings_list":
+            respond(self._get_recordings_list())
+
+        elif cmd_type == "live_audio_start":
+            owner = self._camera_client_key(addr)
+            started, message = self.live_audio_manager.start_pc_to_phone(
+                owner, respond, record=bool(data.get("record", False)))
+            respond({"type": "live_audio_status", "direction": "pc_to_phone",
+                     "active": started, "recording": bool(started and data.get("record", False)),
+                     "message": message})
+
+        elif cmd_type == "live_audio_stop":
+            self.live_audio_manager.stop_pc_to_phone(self._camera_client_key(addr))
+            respond({"type": "live_audio_status", "direction": "pc_to_phone", "active": False})
+
+        elif cmd_type == "phone_audio_start":
+            started, message = self.live_audio_manager.start_phone_to_pc(
+                self._camera_client_key(addr), record=bool(data.get("record", False)), respond=respond)
+            respond({"type": "live_audio_status", "direction": "phone_to_pc",
+                     "active": started, "recording": bool(started and data.get("record", False)),
+                     "message": message})
+
+        elif cmd_type == "phone_audio_stop":
+            self.live_audio_manager.stop_phone_to_pc(self._camera_client_key(addr))
+            respond({"type": "live_audio_status", "direction": "phone_to_pc", "active": False})
+
+        elif cmd_type == "phone_audio_frame":
+            try:
+                pcm = base64.b64decode(str(data.get("data", "")), validate=True)
+                if len(pcm) == LiveAudioManager.BLOCK_SAMPLES * 2:
+                    self.live_audio_manager.accept_phone_audio(self._camera_client_key(addr), pcm)
+            except Exception:
+                pass
+
+        elif cmd_type == "recording_download":
+            self._start_recording_download(data, addr, respond)
+
+        elif cmd_type == "recording_stream":
+            self._start_recording_download(data, addr, respond, stream_mode=True)
+
+        elif cmd_type in ("recording_stream_stop", "recording_download_stop"):
+            transfer_id = str(data.get("transfer_id", ""))
+            with self._recording_download_lock:
+                if transfer_id:
+                    cancel = self._recording_download_cancels.get(transfer_id)
+                    if cancel:
+                        cancel.set()
+                else:
+                    stop_name = str(data.get("id", ""))
+                    for active_id, active_name in self._recording_download_names.items():
+                        if active_name == stop_name and (cancel := self._recording_download_cancels.get(active_id)):
+                            cancel.set()
+
+        elif cmd_type == "recording_download_ack":
+            transfer_id = str(data.get("transfer_id", ""))
+            index = data.get("index")
+            if transfer_id and isinstance(index, int):
+                with self._recording_download_lock:
+                    ack = self._recording_download_acks.get((transfer_id, index))
+                if ack:
+                    ack.set()
 
         elif cmd_type == "camera_snapshot":
             # Snapshot quality is independent of the lower-resolution live
@@ -1483,6 +2349,15 @@ class Server:
                 self._send_udp_json({"type": "camera_frame_response", "frame": None, "is_snapshot": True, "success": False}, addr)
 
         elif cmd_type in ("camera_stream_start", "start_camera_stream"):
+            self._stop_camera_stream_for_client()
+            owner_key = self._camera_client_key(addr)
+            session_id = secrets.token_hex(8)
+            with self._camera_stream_owner_lock:
+                self._camera_stream_owner = {
+                    "key": owner_key,
+                    "session_id": session_id,
+                    "last_seen": time.monotonic(),
+                }
             def _on_frame(b64):
                 frame_data = {"type": "camera_frame_response", "frame": b64, "is_streaming": True}
                 respond(frame_data)
@@ -1492,16 +2367,36 @@ class Server:
                 max_width=160 if max_bytes else 640,
                 quality=35 if max_bytes else 65,
                 max_frame_bytes=max_bytes,
-                fps=8 if max_bytes else 15
+                fps=8 if max_bytes else 15,
+                on_stream_end_callback=lambda reason: self._on_camera_stream_ended(
+                    session_id, owner_key, respond, reason
+                ),
             )
+            if started:
+                if self.auto_record_audio_with_video and not self.audio_manager.recording:
+                    audio_path = self.audio_manager.start_recording()
+                    with self._camera_stream_owner_lock:
+                        owner = self._camera_stream_owner
+                        still_active = bool(owner and owner.get("session_id") == session_id)
+                        self._camera_auto_audio_recording = bool(audio_path) and still_active
+                    if audio_path and not still_active:
+                        self.audio_manager.stop_recording()
+                    if not audio_path:
+                        print(f"[-] Could not record PC microphone with webcam session: {self.audio_manager.last_error}")
+            else:
+                with self._camera_stream_owner_lock:
+                    if self._camera_stream_owner and self._camera_stream_owner.get("session_id") == session_id:
+                        self._camera_stream_owner = None
             resp = {"type": "camera_stream_status", "streaming": bool(started)}
+            if started and self.camera_manager.last_recording_error:
+                resp["message"] = self.camera_manager.last_recording_error
             if responder:
                 responder(resp)
             elif addr and self.sock:
                 self._send_udp_json(resp, addr)
 
         elif cmd_type in ("camera_stream_stop", "stop_camera_stream"):
-            self.camera_manager.stop_stream()
+            self._stop_camera_stream_for_client(self._camera_client_key(addr))
             resp = {"type": "camera_stream_status", "streaming": False}
             if responder:
                 responder(resp)
@@ -1563,6 +2458,188 @@ class Server:
         except Exception:
             pass
         return False
+
+    def _get_recordings_list(self):
+        folder = Path(self.audio_manager.recordings_dir).resolve()
+        allowed_extensions = {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv"}
+        files = []
+        try:
+            for path in folder.iterdir():
+                if not path.is_file() or path.suffix.lower() not in allowed_extensions:
+                    continue
+                if self._is_recording_active(path):
+                    continue
+                try:
+                    stat = path.stat()
+                    files.append({
+                        "id": path.name,
+                        "name": path.name,
+                        "size": stat.st_size,
+                        "modified": int(stat.st_mtime * 1000),
+                        "media_type": "audio" if path.suffix.lower() in {".wav", ".m4a", ".mp3"} else "video",
+                    })
+                except OSError:
+                    continue
+        except OSError as exc:
+            return {"type": "recordings_list_response", "files": [], "message": str(exc)}
+        files.sort(key=lambda item: item["modified"], reverse=True)
+        return {"type": "recordings_list_response", "files": files[:500]}
+
+    def _is_recording_active(self, path):
+        resolved = str(Path(path).resolve())
+        return bool(
+            (self.camera_manager.stream_thread and self.camera_manager.stream_thread.is_alive() and self.camera_manager.last_recording_path and
+             str(Path(self.camera_manager.last_recording_path).resolve()) == resolved) or
+            (self.audio_manager.recording and self.audio_manager.current_filename and
+             str(Path(self.audio_manager.current_filename).resolve()) == resolved) or
+            (self.live_audio_manager.capture_path and
+             str(Path(self.live_audio_manager.capture_path).resolve()) == resolved) or
+            (self.live_audio_manager.output_path and
+             str(Path(self.live_audio_manager.output_path).resolve()) == resolved)
+        )
+
+    def _recording_path(self, recording_id):
+        if not isinstance(recording_id, str) or not recording_id or len(recording_id) > 255:
+            return None
+        if Path(recording_id).name != recording_id:
+            return None
+        if Path(recording_id).suffix.lower() not in {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv"}:
+            return None
+        folder = Path(self.audio_manager.recordings_dir).resolve()
+        candidate = (folder / recording_id).resolve()
+        try:
+            if os.path.commonpath((str(folder), str(candidate))) != str(folder):
+                return None
+        except (OSError, ValueError):
+            return None
+        return candidate if candidate.is_file() else None
+
+    def _start_recording_download(self, data, addr, respond, stream_mode=False):
+        prefix = "recording_stream" if stream_mode else "recording_download"
+        path = self._recording_path(data.get("id", ""))
+        if path is None:
+            respond({"type": f"{prefix}_error", "message": "Recording was not found"})
+            return
+        if self._is_recording_active(path):
+            respond({"type": f"{prefix}_error", "message": "Recording is still in progress"})
+            return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            respond({"type": f"{prefix}_error", "message": "Recording is unavailable"})
+            return
+        if size <= 0 or size > 1024 * 1024 * 1024:
+            respond({"type": f"{prefix}_error", "message": "Recording size is outside the 1 GiB transfer limit"})
+            return
+        transport = str(addr[0]).lower() if addr else "unknown"
+        chunk_size = 900 if transport not in ("bluetooth", "websocket") else (8192 if transport == "bluetooth" else 49152)
+        transfer_id = secrets.token_hex(12)
+        with self._recording_download_lock:
+            if len(self._active_recording_downloads) >= 3:
+                respond({"type": f"{prefix}_error", "message": "Too many active recording downloads"})
+                return
+            self._active_recording_downloads.add(transfer_id)
+            cancel = threading.Event()
+            self._recording_download_cancels[transfer_id] = cancel
+            self._recording_download_names[transfer_id] = path.name
+            self._recording_download_owners[transfer_id] = self._camera_client_key(addr)
+        threading.Thread(
+            target=self._recording_download_worker,
+            args=(path, size, chunk_size, transfer_id, transport, respond, stream_mode, cancel),
+            daemon=True,
+        ).start()
+
+    def _recording_download_worker(self, path, size, chunk_size, transfer_id, transport, respond, stream_mode=False, cancel=None):
+        prefix = "recording_stream" if stream_mode else "recording_download"
+
+        def wait_for_ack(ack, timeout):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if cancel and cancel.is_set():
+                    return False
+                if ack.wait(min(0.1, max(0.0, deadline - time.monotonic()))):
+                    return True
+            return False
+
+        try:
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                while True:
+                    if cancel and cancel.is_set():
+                        return
+                    block = source.read(1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+            if path.stat().st_size != size:
+                raise OSError("Recording changed before download started")
+            chunk_count = (size + chunk_size - 1) // chunk_size
+            start_message = {
+                "type": f"{prefix}_start",
+                "transfer_id": transfer_id,
+                "id": path.name,
+                "name": path.name,
+                "size": size,
+                "chunk_size": chunk_size,
+                "chunk_count": chunk_count,
+                "sha256": digest.hexdigest(),
+            }
+            start_ack_key = (transfer_id, -1)
+            start_acknowledged = False
+            for _attempt in range(5):
+                if cancel and cancel.is_set():
+                    return
+                start_ack = threading.Event()
+                with self._recording_download_lock:
+                    self._recording_download_acks[start_ack_key] = start_ack
+                respond(start_message)
+                if wait_for_ack(start_ack, 0.8 if transport == "wifi" else 8.0):
+                    start_acknowledged = True
+                    break
+            with self._recording_download_lock:
+                self._recording_download_acks.pop(start_ack_key, None)
+            if not start_acknowledged:
+                raise TimeoutError("Phone did not accept the recording download")
+            with path.open("rb") as source:
+                for index in range(chunk_count):
+                    if cancel and cancel.is_set():
+                        return
+                    chunk = source.read(chunk_size)
+                    if not chunk:
+                        raise OSError("Recording ended before all data was transferred")
+                    ack_key = (transfer_id, index)
+                    acknowledged = False
+                    for attempt in range(5):
+                        ack = threading.Event()
+                        with self._recording_download_lock:
+                            self._recording_download_acks[ack_key] = ack
+                        respond({
+                            "type": f"{prefix}_chunk",
+                            "transfer_id": transfer_id,
+                            "index": index,
+                            "data": base64.b64encode(chunk).decode("ascii"),
+                        })
+                        if wait_for_ack(ack, 0.8 if transport == "wifi" else 8.0):
+                            acknowledged = True
+                            break
+                    with self._recording_download_lock:
+                        self._recording_download_acks.pop(ack_key, None)
+                    if not acknowledged:
+                        raise TimeoutError(f"Phone did not acknowledge recording chunk {index + 1}/{chunk_count}")
+            respond({"type": f"{prefix}_complete", "transfer_id": transfer_id})
+        except Exception as exc:
+            print(f"[-] Recording download failed for {path.name}: {exc}")
+            if not (cancel and cancel.is_set()):
+                respond({"type": f"{prefix}_error", "transfer_id": transfer_id, "message": str(exc)[:200]})
+        finally:
+            with self._recording_download_lock:
+                self._active_recording_downloads.discard(transfer_id)
+                self._recording_download_cancels.pop(transfer_id, None)
+                self._recording_download_names.pop(transfer_id, None)
+                self._recording_download_owners.pop(transfer_id, None)
+                stale = [key for key in self._recording_download_acks if key[0] == transfer_id]
+                for key in stale:
+                    self._recording_download_acks.pop(key, None)
 
     def _start_udp_snapshot_transfer(self, raw_frame, addr):
         chunk_size = 900
@@ -1698,6 +2775,160 @@ class Server:
                 self._query_cache[key] = (time.monotonic(), value)
             return value
 
+    def _respond_query_async(self, cache_key, ttl_seconds, loader, response_type,
+                             value_key, default_value, addr, responder=None):
+        """Serve a cached snapshot now and refresh slower telemetry outside input handlers."""
+        client_key = self._camera_client_key(addr)
+        send = responder
+        if send is None and addr and self.sock:
+            send = lambda payload: self._send_udp_json(payload, addr)
+        if send is None:
+            return
+
+        now = time.monotonic()
+        with self._query_cache_lock:
+            cached = self._query_cache.get(cache_key)
+            if cached and now - cached[0] < ttl_seconds:
+                fresh_value = cached[1]
+                stale_value = fresh_value
+            else:
+                fresh_value = None
+                stale_value = cached[1] if cached else default_value
+        if fresh_value is not None:
+            payload = {"type": response_type}
+            if value_key is None:
+                payload.update(fresh_value)
+            else:
+                payload[value_key] = fresh_value
+            send(payload)
+            return
+
+        with self._async_query_lock:
+            self._async_query_waiters.setdefault(cache_key, {})[client_key] = send
+            start_refresh = cache_key not in self._async_query_running
+            if start_refresh:
+                self._async_query_running.add(cache_key)
+        payload = {"type": response_type, "loading": True}
+        if value_key is None:
+            payload.update(stale_value)
+        else:
+            payload[value_key] = stale_value
+        send(payload)
+        if start_refresh:
+            threading.Thread(
+                target=self._refresh_query_for_waiters,
+                args=(cache_key, ttl_seconds, loader, response_type, value_key, default_value),
+                name=f"Refresh-{cache_key}", daemon=True
+            ).start()
+
+    def _refresh_query_for_waiters(self, cache_key, ttl_seconds, loader, response_type,
+                                  value_key, default_value):
+        value = default_value
+        error = ""
+        try:
+            value = self._cached_query(cache_key, ttl_seconds, loader)
+        except Exception as exc:
+            error = str(exc)
+            print(f"[-] {cache_key} refresh failed: {exc}")
+            with self._query_cache_lock:
+                cached = self._query_cache.get(cache_key)
+                if cached:
+                    value = cached[1]
+        with self._async_query_lock:
+            waiters = list(self._async_query_waiters.pop(cache_key, {}).values())
+            self._async_query_running.discard(cache_key)
+        payload = {"type": response_type, "loading": False}
+        if value_key is None:
+            payload.update(value or {})
+        else:
+            payload[value_key] = value
+        if error:
+            payload["message"] = f"Could not refresh {cache_key}: {error[:160]}"
+        for send in waiters:
+            try:
+                send(payload)
+            except Exception as exc:
+                print(f"[-] Could not deliver {cache_key} refresh: {exc}")
+
+    def _respond_installed_apps_async(self, addr, responder=None):
+        """Return cached apps immediately and complete slow Start Menu scans off the command path."""
+        client_key = self._camera_client_key(addr)
+        send = responder
+        if send is None and addr and self.sock:
+            send = lambda payload: self._send_udp_json(payload, addr)
+        if send is None:
+            return
+
+        now = time.monotonic()
+        fresh_apps = None
+        with self._query_cache_lock:
+            cached = self._query_cache.get("apps")
+            if cached and now - cached[0] < 10.0:
+                fresh_apps = cached[1]
+            fallback_apps = cached[1] if cached else None
+        if fresh_apps is not None:
+            send({"type": "installed_apps_response", "apps": fresh_apps, "loading": False})
+            return
+        if fallback_apps is None:
+            try:
+                fallback_apps = [dict(app, is_quick=True) for app in load_quick_apps()]
+            except Exception:
+                fallback_apps = []
+
+        with self._apps_refresh_lock:
+            self._apps_refresh_waiters[client_key] = send
+            start_refresh = not self._apps_refresh_running
+            if start_refresh:
+                self._apps_refresh_running = True
+
+        # Send existing quick apps or stale data right away; never hold the UDP
+        # input loop, RFCOMM reader, or WebSocket command worker for disk scans.
+        send({"type": "installed_apps_response", "apps": fallback_apps, "loading": True})
+        if start_refresh:
+            threading.Thread(
+                target=self._refresh_installed_apps_for_waiters,
+                name="InstalledAppsRefresh",
+                daemon=True,
+            ).start()
+
+    def _refresh_installed_apps_for_waiters(self):
+        apps = None
+        error = ""
+        try:
+            apps = self._cached_query("apps", 10.0, self._get_installed_apps)
+        except Exception as exc:
+            error = str(exc)
+            print(f"[-] Installed-app refresh failed: {exc}")
+        with self._apps_refresh_lock:
+            waiters = list(self._apps_refresh_waiters.values())
+            self._apps_refresh_waiters.clear()
+            self._apps_refresh_running = False
+        if apps is None:
+            with self._query_cache_lock:
+                cached = self._query_cache.get("apps")
+                apps = cached[1] if cached else []
+        payload = {"type": "installed_apps_response", "apps": apps, "loading": False}
+        if error:
+            payload["message"] = f"Could not refresh installed apps: {error[:160]}"
+        for send in waiters:
+            try:
+                send(payload)
+            except Exception as exc:
+                print(f"[-] Could not deliver installed-app refresh: {exc}")
+
+    def _prefetch_common_queries(self):
+        # Prime the first phone views without making connection handshakes wait
+        # for Start Menu and process enumeration.
+        for key, ttl, loader in (
+            ("apps", 10.0, self._get_installed_apps),
+            ("processes", 3.0, self._get_running_processes),
+            ("stats", 1.0, self._get_system_stats),
+        ):
+            try:
+                self._cached_query(key, ttl, loader)
+            except Exception as exc:
+                print(f"[-] Could not prefetch {key}: {exc}")
+
     def _get_installed_apps(self):
         apps = []
         seen = set()
@@ -1723,7 +2954,13 @@ class Server:
                             path = os.path.realpath(os.path.join(root, f))
                             apps.append({"name": name, "path": path, "is_quick": path.lower() in quick_paths})
         apps.sort(key=lambda x: x["name"].lower())
-        return apps[:150]
+        apps = apps[:150]
+        if not QUICK_APPS_PATH.exists():
+            seeded = load_quick_apps(apps)
+            quick_paths = {os.path.realpath(app["path"]).lower() for app in seeded}
+        for app in apps:
+            app["is_quick"] = os.path.realpath(app["path"]).lower() in quick_paths
+        return apps
 
     def _get_running_processes(self):
         procs = []
@@ -1782,7 +3019,101 @@ class Server:
                 stats["power_plugged"] = bool(battery.power_plugged)
         except Exception:
             pass
+        with self._hardware_metrics_lock:
+            stats.update(self._hardware_metrics)
         return stats
+
+    def _start_performance_sampler(self):
+        if not IS_WINDOWS or (self._performance_sampler_thread and self._performance_sampler_thread.is_alive()):
+            return
+        self._performance_sampler_running = True
+
+        def _run():
+            while self.running and self._performance_sampler_running:
+                metrics = self._collect_windows_performance_metrics()
+                if metrics is not None:
+                    with self._hardware_metrics_lock:
+                        self._hardware_metrics = metrics
+                for _ in range(20):
+                    if not self.running or not self._performance_sampler_running:
+                        break
+                    time.sleep(0.1)
+
+        self._performance_sampler_thread = threading.Thread(target=_run, name="HardwareMetricSampler", daemon=True)
+        self._performance_sampler_thread.start()
+
+    @staticmethod
+    def _collect_windows_performance_metrics():
+        if not IS_WINDOWS:
+            return None
+        script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$disk = -1.0
+$gpu = @()
+$adapters = @()
+try {
+  $paths = @('\PhysicalDisk(_Total)\% Disk Time', '\GPU Engine(*)\Utilization Percentage')
+  $samples = Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 2
+  $counters = @($samples[-1].CounterSamples)
+  $diskSample = $counters | Where-Object { $_.Path -like '*PhysicalDisk*' } | Select-Object -Last 1
+  if ($diskSample) { $disk = [math]::Min(100, [math]::Max(0, [double]$diskSample.CookedValue)) }
+  $gpu = @($counters | Where-Object { $_.Path -like '*GPU Engine*' } | Select-Object Path, CookedValue)
+} catch {}
+try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-Object { $_.Name }) } catch {}
+[pscustomobject]@{ disk_activity = $disk; gpu_samples = $gpu; adapters = $adapters } | ConvertTo-Json -Compress -Depth 5
+"""
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, text=True, timeout=15, creationflags=flags,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            payload = json.loads(result.stdout.strip().splitlines()[-1])
+            return Server._parse_windows_performance_payload(payload)
+        except Exception as exc:
+            print(f"[-] Windows hardware metrics unavailable: {exc}")
+            return None
+
+    @staticmethod
+    def _parse_windows_performance_payload(payload):
+        adapter_names = payload.get("adapters") or []
+        if isinstance(adapter_names, str):
+            adapter_names = [adapter_names]
+        gpu_samples = payload.get("gpu_samples") or []
+        if isinstance(gpu_samples, dict):
+            gpu_samples = [gpu_samples]
+        engines = {}
+        for sample in gpu_samples:
+            path = str(sample.get("Path", ""))
+            match = re.search(r"phys_(\d+).*?engtype_([^\\)]+)", path, re.IGNORECASE)
+            if not match:
+                continue
+            adapter_index = int(match.group(1))
+            engine_type = match.group(2).split("_")[0]
+            utilization = max(0.0, min(100.0, float(sample.get("CookedValue", 0.0))))
+            by_engine = engines.setdefault(adapter_index, {})
+            by_engine[engine_type] = min(100.0, by_engine.get(engine_type, 0.0) + utilization)
+
+        gpus = []
+        count = max(len(adapter_names), (max(engines) + 1) if engines else 0)
+        for index in range(count):
+            name = str(adapter_names[index]) if index < len(adapter_names) else f"GPU {index}"
+            by_engine = engines.get(index, {})
+            peak_engine = max(by_engine, key=by_engine.get) if by_engine else ""
+            utilization = round(by_engine.get(peak_engine, -1.0), 1) if peak_engine else -1.0
+            gpus.append({"index": index, "name": name, "utilization": utilization, "engine": peak_engine})
+        raw_disk_activity = payload.get("disk_activity", -1.0)
+        disk_activity = float(raw_disk_activity) if raw_disk_activity not in (None, "") else -1.0
+        return {
+            "disk_activity": round(max(0.0, min(100.0, disk_activity)), 1) if disk_activity >= 0 else -1.0,
+            "gpus": gpus,
+            # Windows Task Manager exposes NPU data through its neural-processing
+            # diagnostics, but those counters are not the GPU Engine counters used
+            # here. Don't infer NPU load from a GPU or adapter name.
+            "npu": -1.0,
+        }
 
     def _kill_process(self, pid):
         try:
@@ -1962,6 +3293,16 @@ class Server:
 
     def stop(self):
         self.running = False
+        self._performance_sampler_running = False
+        with self._recording_download_lock:
+            for cancel in self._recording_download_cancels.values():
+                cancel.set()
+        if hasattr(self, "live_audio_manager") and self.live_audio_manager:
+            try:
+                self.live_audio_manager.stop_pc_to_phone()
+                self.live_audio_manager.stop_phone_to_pc()
+            except Exception:
+                pass
         self._release_mouse_buttons()
         if hasattr(self, "bt_server") and self.bt_server:
             try:
@@ -1975,7 +3316,7 @@ class Server:
                 pass
         if hasattr(self, "camera_manager") and self.camera_manager:
             try:
-                self.camera_manager.stop_stream()
+                self._stop_camera_stream_for_client()
             except Exception:
                 pass
         if hasattr(self, "audio_manager") and self.audio_manager:
@@ -2001,6 +3342,8 @@ class Server:
     def start(self):
         ensure_interactive_desktop()
         self.running = True
+        self._start_performance_sampler()
+        threading.Thread(target=self._prefetch_common_queries, name="InitialPhoneData", daemon=True).start()
         local_ip = self.get_local_ip()
         print("=" * 60)
         print("        BT MOUSE & KEYBOARD - PC COMPANION SERVER")
@@ -2064,6 +3407,7 @@ class Server:
                     self.last_log_time = now
             except socket.timeout:
                 self._release_stale_inputs()
+                self._expire_udp_camera_stream()
                 continue
             except KeyboardInterrupt:
                 print("\n[!] Stopping server...")

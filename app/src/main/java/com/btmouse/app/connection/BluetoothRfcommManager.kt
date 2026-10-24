@@ -74,6 +74,17 @@ class BluetoothRfcommManager(
     private val _isAudioRecording = MutableStateFlow(false)
     override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
 
+    private val recordingTransfer = RecordingTransferClient(context)
+    private val liveAudioPlayer = LiveAudioPlayer()
+    private val liveAudioRecorder = LiveAudioRecorder()
+    private val _isPcLiveAudioActive = MutableStateFlow(false)
+    override val isPcLiveAudioActive: StateFlow<Boolean> = _isPcLiveAudioActive.asStateFlow()
+    private val _isPhoneLiveAudioActive = MutableStateFlow(false)
+    override val isPhoneLiveAudioActive: StateFlow<Boolean> = _isPhoneLiveAudioActive.asStateFlow()
+    override val recordings: StateFlow<List<RecordingEntry>> = recordingTransfer.recordings
+    override val recordingTransferStatus: StateFlow<String> = recordingTransfer.status
+    override val recordingStreamUrl: StateFlow<String?> = recordingTransfer.streamUrl
+
     private val sendQueue = Channel<String>(capacity = 256)
     private val gson = Gson()
 
@@ -163,6 +174,10 @@ class BluetoothRfcommManager(
     }
 
     fun disconnect() {
+        recordingTransfer.cancel()
+        try {
+            if (_isConnected.value) sendJson(JsonObject().apply { addProperty("type", "disconnect") })
+        } catch (ignored: Exception) {}
         try {
             outputStream?.close()
         } catch (ignored: Exception) {}
@@ -173,12 +188,23 @@ class BluetoothRfcommManager(
         outputStream = null
         _isConnected.value = false
         _connectedDeviceName.value = null
+        _isCameraStreaming.value = false
+        _latestCameraFrame.value = null
+        _isAudioRecording.value = false
+        liveAudioPlayer.stop()
+        _isPcLiveAudioActive.value = false
+        liveAudioRecorder.stop()
+        _isPhoneLiveAudioActive.value = false
+        _systemStats.value = null
+        _runningProcesses.value = emptyList()
+        _installedApps.value = emptyList()
         _statusMessage.value = "Bluetooth disconnected"
     }
 
     private fun processIncomingPacket(line: String) {
         try {
             val root = gson.fromJson(line, JsonObject::class.java) ?: return
+            recordingTransfer.handleMessage(root, ::sendJson)
             val type = root.get("type")?.asString ?: ""
             when (type) {
                 "media_status" -> {
@@ -204,6 +230,7 @@ class BluetoothRfcommManager(
                         volume = volume,
                         isMuted = isMuted,
                         artworkBase64 = root.get("artwork")?.asString ?: if (old.title == title && old.artist == artist) old.artworkBase64 else "",
+                        videoPreviewBase64 = root.get("video_preview")?.asString ?: old.videoPreviewBase64,
                         volumeAvailable = root.get("volume_available")?.asBoolean ?: true,
                         volumeError = root.get("volume_error")?.asString ?: ""
                     )
@@ -214,7 +241,16 @@ class BluetoothRfcommManager(
                     val battery = root.get("battery")?.asFloat ?: -1f
                     val powerPlugged = root.get("power_plugged")?.asBoolean ?: true
                     val disk = root.get("disk")?.asFloat ?: 0f
-                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk)
+                    val diskActivity = root.get("disk_activity")?.asFloat ?: -1f
+                    val gpus = root.getAsJsonArray("gpus")?.mapNotNull { item ->
+                        runCatching {
+                            val gpu = item.asJsonObject
+                            GpuStat(gpu.get("index")?.asInt ?: 0, gpu.get("name")?.asString ?: "GPU",
+                                gpu.get("utilization")?.asFloat ?: -1f, gpu.get("engine")?.asString ?: "")
+                        }.getOrNull()
+                    } ?: emptyList()
+                    val npu = root.get("npu")?.asFloat ?: -1f
+                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk, diskActivity, gpus, npu)
                 }
                 "process_list_response" -> {
                     val array = root.getAsJsonArray("processes") ?: JsonArray()
@@ -247,6 +283,20 @@ class BluetoothRfcommManager(
                         )
                     }
                     _installedApps.value = list
+                    val loading = root.get("loading")?.asBoolean ?: false
+                    val message = root.get("message")?.asString.orEmpty()
+                    _statusMessage.value = when {
+                        loading -> "Loading installed PC apps…"
+                        message.isNotBlank() -> message
+                        _statusMessage.value.startsWith("Loading installed PC apps") -> ""
+                        else -> _statusMessage.value
+                    }
+                }
+                "quick_apps_update_response" -> {
+                    val success = root.get("success")?.asBoolean ?: false
+                    val paths = root.getAsJsonArray("paths")?.mapNotNull { it.asString }?.toSet().orEmpty()
+                    if (success) _installedApps.value = _installedApps.value.map { it.copy(isQuick = it.path in paths) }
+                    _statusMessage.value = root.get("message")?.asString ?: "Could not update PC Quick Apps"
                 }
                 "camera_frame_response" -> {
                     val b64 = root.get("frame")?.asString
@@ -254,12 +304,22 @@ class BluetoothRfcommManager(
                         try {
                             val bytes = Base64.decode(b64, Base64.DEFAULT)
                             _latestCameraFrame.value = bytes
+                            if (_statusMessage.value.startsWith("Camera stream started")) _statusMessage.value = ""
                         } catch (e: Exception) {}
                     }
                 }
                 "camera_stream_status" -> {
                     val streaming = root.get("streaming")?.asBoolean ?: false
                     _isCameraStreaming.value = streaming
+                    if (!streaming) _latestCameraFrame.value = null
+                    val message = root.get("message")?.asString.orEmpty()
+                    _statusMessage.value = when {
+                        streaming && message.isNotBlank() -> "Camera is live, but recording was skipped: $message"
+                        streaming -> "Camera stream started. Waiting for a live frame…"
+                        message.isNotBlank() -> "Camera stream stopped: $message"
+                        _statusMessage.value.startsWith("Camera stream") -> ""
+                        else -> _statusMessage.value
+                    }
                 }
                 "audio_status_response" -> {
                     val recording = root.get("recording")?.asBoolean ?: false
@@ -270,6 +330,25 @@ class BluetoothRfcommManager(
                     } else if (message.isNotBlank()) {
                         _statusMessage.value = "Microphone error: $message"
                     }
+                }
+                "live_audio_frame" -> {
+                    if (root.get("direction")?.asString == "pc_to_phone") {
+                        val encoded = root.get("data")?.asString.orEmpty()
+                        if (encoded.isNotEmpty()) try {
+                            liveAudioPlayer.accept(Base64.decode(encoded, Base64.DEFAULT))
+                        } catch (_: Exception) {}
+                    }
+                }
+                "live_audio_status" -> {
+                    val active = root.get("active")?.asBoolean ?: false
+                    if (root.get("direction")?.asString == "phone_to_pc") {
+                        _isPhoneLiveAudioActive.value = active
+                        if (!active) liveAudioRecorder.stop()
+                    } else {
+                        _isPcLiveAudioActive.value = active
+                        if (!active) liveAudioPlayer.stop()
+                    }
+                    root.get("message")?.asString?.takeIf { it.isNotBlank() }?.let { _statusMessage.value = it }
                 }
             }
         } catch (e: Exception) {
@@ -356,10 +435,11 @@ class BluetoothRfcommManager(
         sendJson(obj)
     }
 
-    override fun queryMedia(includePreview: Boolean) {
+    override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
         val obj = JsonObject().apply {
             addProperty("type", "media_query")
             addProperty("include_preview", includePreview)
+            addProperty("include_video_preview", includeVideoPreview)
         }
         sendJson(obj)
     }
@@ -448,6 +528,29 @@ class BluetoothRfcommManager(
         sendJson(obj)
     }
 
+    override fun updateQuickApps(paths: List<String>) {
+        val obj = JsonObject().apply {
+            addProperty("type", "update_quick_apps")
+            add("paths", com.google.gson.Gson().toJsonTree(paths))
+        }
+        sendJson(obj)
+    }
+
+    override fun queryRecordings() {
+        sendJson(JsonObject().apply { addProperty("type", "recordings_list") })
+    }
+
+    override fun downloadRecording(id: String) {
+        sendJson(JsonObject().apply {
+            addProperty("type", "recording_download")
+            addProperty("id", id)
+        })
+    }
+
+    override fun streamRecording(id: String) = recordingTransfer.stream(id, ::sendJson)
+
+    override fun stopRecordingStream() = recordingTransfer.stopStream(::sendJson)
+
     override fun requestCameraSnapshot() {
         val obj = JsonObject().apply { addProperty("type", "camera_snapshot") }
         sendJson(obj)
@@ -471,5 +574,53 @@ class BluetoothRfcommManager(
     override fun stopAudioRecord() {
         val obj = JsonObject().apply { addProperty("type", "audio_record_stop") }
         sendJson(obj)
+    }
+
+    override fun startPcLiveAudio(record: Boolean) {
+        if (!liveAudioPlayer.start()) {
+            _statusMessage.value = "Could not start phone audio playback"
+            return
+        }
+        _isPcLiveAudioActive.value = true
+        sendJson(JsonObject().apply {
+            addProperty("type", "live_audio_start")
+            addProperty("record", record)
+        })
+    }
+
+    override fun stopPcLiveAudio() {
+        sendJson(JsonObject().apply { addProperty("type", "live_audio_stop") })
+        liveAudioPlayer.stop()
+        _isPcLiveAudioActive.value = false
+    }
+
+    override fun startPhoneLiveAudio(record: Boolean): Boolean {
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_audio_start")
+            addProperty("record", record)
+        })
+        val started = liveAudioRecorder.start(::sendPhoneAudioFrame) {
+            _isPhoneLiveAudioActive.value = false
+            sendJson(JsonObject().apply { addProperty("type", "phone_audio_stop") })
+        }
+        _isPhoneLiveAudioActive.value = started
+        if (!started) {
+            sendJson(JsonObject().apply { addProperty("type", "phone_audio_stop") })
+            _statusMessage.value = "Could not start phone microphone. Check microphone permission."
+        }
+        return started
+    }
+
+    override fun stopPhoneLiveAudio() {
+        liveAudioRecorder.stop()
+        sendJson(JsonObject().apply { addProperty("type", "phone_audio_stop") })
+        _isPhoneLiveAudioActive.value = false
+    }
+
+    override fun sendPhoneAudioFrame(pcm: ByteArray) {
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_audio_frame")
+            addProperty("data", Base64.encodeToString(pcm, Base64.NO_WRAP))
+        })
     }
 }

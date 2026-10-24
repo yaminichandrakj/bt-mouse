@@ -52,9 +52,10 @@ except ImportError:
     HAS_TRAY = False
 
 from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin,
-                    save_pairing_pin, load_quick_apps, save_quick_apps)
+                    save_pairing_pin, load_quick_apps, save_quick_apps,
+                    load_media_preview_region, save_media_preview_region)
 
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -125,7 +126,10 @@ class CompanionApp(tk.Tk):
         self._build_header()
         self._build_notebook()
         self._build_statusbar()
+        executable_path = Path(sys.executable).resolve()
+        self.title(f"BT Mouse Companion v{APP_VERSION} — {executable_path}")
         self.after(500, self._show_update_recovery_notice)
+        self.after(3000, self._refresh_recordings_loop)
 
         # System Tray setup
         self.tray_icon = None
@@ -137,6 +141,8 @@ class CompanionApp(tk.Tk):
         # Handle window close: minimize to tray instead of quitting
         self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         self._write_update_ready_marker()
+        if "--minimized" in sys.argv:
+            self.after(700, self.hide_to_tray if self.tray_icon else self.iconify)
 
     @staticmethod
     def _write_update_ready_marker():
@@ -148,13 +154,84 @@ class CompanionApp(tk.Tk):
         except (ValueError, IndexError, OSError):
             pass
 
+    @staticmethod
+    def _startup_registry_value():
+        """Return the current-user sign-in command, if one is registered."""
+        if os.name != "nt":
+            return None
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0,
+                winreg.KEY_QUERY_VALUE,
+            ) as key:
+                return winreg.QueryValueEx(key, "BT Mouse Companion")[0]
+        except (OSError, ImportError):
+            return None
+
+    @staticmethod
+    def _startup_command():
+        if getattr(sys, "frozen", False):
+            return subprocess.list2cmdline([str(Path(sys.executable).resolve()), "--minimized"])
+        script = Path(__file__).resolve()
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        runner = pythonw if pythonw.is_file() else Path(sys.executable)
+        return subprocess.list2cmdline([str(runner), str(script), "--minimized"])
+
+    def _set_startup_enabled(self, enabled):
+        if os.name != "nt":
+            return
+        try:
+            import winreg
+            run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE) as key:
+                if enabled:
+                    winreg.SetValueEx(key, "BT Mouse Companion", 0, winreg.REG_SZ, self._startup_command())
+                else:
+                    try:
+                        winreg.DeleteValue(key, "BT Mouse Companion")
+                    except FileNotFoundError:
+                        pass
+        except (OSError, ImportError) as exc:
+            self.startup_var.set(not enabled)
+            messagebox.showerror("Startup setting", f"Could not update the Windows sign-in setting.\n\n{exc}", parent=self)
+
     def _init_server(self):
         """Initializes a clean Server instance with bound callbacks"""
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
-        self.available_apps = self.server._get_installed_apps()
-        self.quick_apps = load_quick_apps(self.available_apps)
+        # Installed-app discovery walks the Start Menu and can be slow on some
+        # machines. Keep it out of the updater's startup acknowledgement path.
+        self.available_apps = []
+        self.quick_apps = []
         self.adapters = self.server.get_all_ips()
         self.current_ip = self.server.get_local_ip()
+        self.recording_settings_path = Path(self.server.audio_manager.recordings_dir).parent / "recording_settings.json"
+        try:
+            preferences = json.loads(self.recording_settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            preferences = {}
+        def _preference_int(name, default, maximum):
+            try:
+                return min(maximum, max(0, int(preferences.get(name, default) or 0)))
+            except (TypeError, ValueError):
+                return default
+        self.auto_record_video = bool(preferences.get("auto_record_video", True))
+        self.auto_record_audio = bool(preferences.get("auto_record_audio", False))
+        self.recording_retention_days = _preference_int("recording_retention_days", 0, 3650)
+        self.recording_max_storage_mb = _preference_int("recording_max_storage_mb", 0, 500000)
+        self.recording_min_free_mb = _preference_int("recording_min_free_mb", 512, 100000)
+        self.server.recording_policy = {
+            "retention_days": self.recording_retention_days,
+            "max_storage_mb": self.recording_max_storage_mb,
+            "min_free_mb": self.recording_min_free_mb,
+        }
+        self.server.camera_manager.recording_policy = dict(self.server.recording_policy)
+        self.server.audio_manager.recording_policy = dict(self.server.recording_policy)
+        self.server.live_audio_manager.recording_policy = dict(self.server.recording_policy)
+        self.server.camera_manager.auto_record_enabled = self.auto_record_video
+        self.server.auto_record_audio_with_video = self.auto_record_audio
 
         self.server.on_packet_callback = self._on_packet
         self.server.on_client_callback = self._on_client
@@ -539,6 +616,20 @@ class CompanionApp(tk.Tk):
                            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
         lbl_sub.pack(anchor="w", pady=(0, 14))
 
+        startup_frame = tk.Frame(card, bg=CARD_BG)
+        startup_frame.pack(fill="x", pady=(0, 8))
+        self.startup_var = tk.BooleanVar(value=self._startup_registry_value() is not None)
+        tk.Checkbutton(
+            startup_frame,
+            text="Start with Windows (minimized to tray)",
+            variable=self.startup_var,
+            command=lambda: self._set_startup_enabled(self.startup_var.get()),
+            state="normal" if os.name == "nt" else "disabled",
+            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_PRIMARY,
+            activebackground=CARD_BG, activeforeground=TEXT_PRIMARY,
+            selectcolor=BUTTON_BG, anchor="w"
+        ).pack(anchor="w", fill="x")
+
         quick_box = tk.LabelFrame(card, text=" Quick Apps on this PC ", font=("Segoe UI", 10, "bold"),
                                   bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=8)
         quick_box.pack(fill="x", pady=(4, 8))
@@ -568,7 +659,7 @@ class CompanionApp(tk.Tk):
         self.lbl_quick_apps_status = tk.Label(quick_box, text="Quick apps are saved on this PC and shared with the phone app.",
                                               font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w")
         self.lbl_quick_apps_status.pack(fill="x", pady=(5, 0))
-        self.refresh_quick_apps()
+        self.after_idle(self.refresh_quick_apps)
 
         # Power Controls
         pwr_frame = tk.Frame(card, bg=CARD_BG)
@@ -582,9 +673,65 @@ class CompanionApp(tk.Tk):
                              command=lambda: self.server._handle_system_power("lock") if self.server else None)
         btn_lock.pack(side="left", padx=4)
 
+        self.auto_record_video_var = tk.BooleanVar(value=self.auto_record_video)
+        tk.Checkbutton(
+            card,
+            text="Record every live webcam session on this PC (1280×720, high quality)",
+            variable=self.auto_record_video_var,
+            command=self._save_recording_preferences,
+            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_PRIMARY,
+            activebackground=CARD_BG, activeforeground=TEXT_PRIMARY,
+            selectcolor=BUTTON_BG, anchor="w"
+        ).pack(anchor="w", fill="x", pady=(4, 0))
+        self.auto_record_audio_var = tk.BooleanVar(value=self.auto_record_audio)
+        tk.Checkbutton(
+            card,
+            text="Also record the PC microphone during each live webcam session",
+            variable=self.auto_record_audio_var,
+            command=self._save_recording_preferences,
+            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_PRIMARY,
+            activebackground=CARD_BG, activeforeground=TEXT_PRIMARY,
+            selectcolor=BUTTON_BG, anchor="w"
+        ).pack(anchor="w", fill="x", pady=(2, 0))
+
+        retention_row = tk.Frame(card, bg=CARD_BG)
+        retention_row.pack(anchor="w", fill="x", pady=(8, 2))
+        tk.Label(retention_row, text="Delete older than days (0 = keep):", font=("Segoe UI", 8),
+                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
+        self.recording_retention_var = tk.StringVar(value=str(self.recording_retention_days))
+        ttk.Spinbox(retention_row, from_=0, to=3650, width=6, textvariable=self.recording_retention_var).pack(side="left", padx=(5, 12))
+        tk.Label(retention_row, text="Maximum library MB (0 = unlimited):", font=("Segoe UI", 8),
+                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
+        self.recording_max_storage_var = tk.StringVar(value=str(self.recording_max_storage_mb))
+        ttk.Spinbox(retention_row, from_=0, to=500000, increment=512, width=8,
+                    textvariable=self.recording_max_storage_var).pack(side="left", padx=5)
+        reserve_row = tk.Frame(card, bg=CARD_BG)
+        reserve_row.pack(anchor="w", fill="x", pady=(2, 6))
+        tk.Label(reserve_row, text="Keep at least this much disk space free (MB):", font=("Segoe UI", 8),
+                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
+        self.recording_min_free_var = tk.StringVar(value=str(self.recording_min_free_mb))
+        ttk.Spinbox(reserve_row, from_=0, to=100000, increment=256, width=8,
+                    textvariable=self.recording_min_free_var).pack(side="left", padx=5)
+        tk.Button(reserve_row, text="Save recording limits", font=("Segoe UI", 8), bg=BUTTON_BG,
+                  fg=ACCENT_CYAN, relief="flat", padx=8, pady=4,
+                  command=self._save_recording_preferences).pack(side="left", padx=8)
+
         # Hardware & Multimedia tests
         media_frame = tk.Frame(card, bg=CARD_BG)
         media_frame.pack(anchor="w", fill="x", pady=12)
+
+        preview_row = tk.Frame(card, bg=CARD_BG)
+        preview_row.pack(anchor="w", fill="x", pady=(0, 8))
+        tk.Button(preview_row, text="Select player preview area", font=("Segoe UI", 9, "bold"),
+                  bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6,
+                  command=self.select_media_preview_region).pack(side="left", padx=(0, 8))
+        self.lbl_media_preview_region = tk.Label(
+            preview_row, text=self._media_preview_region_description(), font=("Segoe UI", 9),
+            bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
+        )
+        self.lbl_media_preview_region.pack(side="left", fill="x", expand=True)
+        tk.Label(card, text="Phone preview captures only this selected on-screen rectangle while its preview toggle is on. Page content inside the selection may appear; protected video can be black.",
+                 font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED, wraplength=610, justify="left").pack(anchor="w")
 
         btn_cam = tk.Button(media_frame, text="📸 Test Webcam Snapshot", font=("Segoe UI", 9, "bold"),
                             bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6, cursor="hand2",
@@ -602,6 +749,171 @@ class CompanionApp(tk.Tk):
         self.lbl_media_status = tk.Label(card, text="Webcam & Mic ready for remote commands.",
                                          font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
         self.lbl_media_status.pack(anchor="w", pady=4)
+
+        recordings = tk.LabelFrame(card, text=" Recordings on this PC ", font=("Segoe UI", 10, "bold"),
+                                   bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=8)
+        recordings.pack(fill="both", expand=True, pady=(8, 0))
+        self.list_recordings = tk.Listbox(recordings, height=5, font=("Segoe UI", 9), bg=BUTTON_BG,
+                                          fg=TEXT_PRIMARY, selectbackground=ACCENT_INDIGO,
+                                          borderwidth=0, highlightthickness=0, activestyle="none")
+        self.list_recordings.pack(fill="both", expand=True, pady=(0, 6))
+        self.list_recordings.bind("<Double-Button-1>", lambda _event: self.open_selected_recording())
+        recording_actions = tk.Frame(recordings, bg=CARD_BG)
+        recording_actions.pack(fill="x")
+        tk.Button(recording_actions, text="Open selected", font=("Segoe UI", 9), bg=BUTTON_BG,
+                  fg=TEXT_PRIMARY, relief="flat", padx=8, pady=5,
+                  command=self.open_selected_recording).pack(side="left", padx=(0, 5))
+        tk.Button(recording_actions, text="Open folder", font=("Segoe UI", 9), bg=BUTTON_BG,
+                  fg=ACCENT_CYAN, relief="flat", padx=8, pady=5,
+                  command=self.open_recordings_folder).pack(side="left", padx=5)
+        tk.Button(recording_actions, text="Refresh", font=("Segoe UI", 9), bg=BUTTON_BG,
+                  fg=TEXT_PRIMARY, relief="flat", padx=8, pady=5,
+                  command=self.refresh_recordings).pack(side="left", padx=5)
+        self.lbl_recordings_path = tk.Label(recordings, text="", font=("Segoe UI", 8), bg=CARD_BG,
+                                            fg=TEXT_MUTED, anchor="w")
+        self.lbl_recordings_path.pack(fill="x", pady=(5, 0))
+        self.refresh_recordings()
+
+    def _media_preview_region_description(self):
+        region = load_media_preview_region()
+        if not region:
+            return "No player area selected"
+        return f"Selected area: {region['width']} × {region['height']} px"
+
+    def select_media_preview_region(self):
+        overlay = tk.Toplevel(self)
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        overlay.attributes("-alpha", 0.78)
+        width, height = self.winfo_screenwidth(), self.winfo_screenheight()
+        overlay.geometry(f"{width}x{height}+0+0")
+        canvas = tk.Canvas(overlay, bg="#111827", cursor="crosshair", highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+        canvas.create_text(width // 2, 50, text="Drag around the video player area · Esc to cancel",
+                           fill="white", font=("Segoe UI", 18, "bold"))
+        canvas.create_text(width // 2, 82, text="Only the selected rectangle is sent to your phone while preview is enabled.",
+                           fill="#cbd5e1", font=("Segoe UI", 11))
+        selection = {"start": None, "rect": None}
+
+        def begin(event):
+            selection["start"] = (event.x, event.y)
+            if selection["rect"]:
+                canvas.delete(selection["rect"])
+            selection["rect"] = canvas.create_rectangle(event.x, event.y, event.x, event.y,
+                                                          outline="#22d3ee", width=3, fill="", stipple="gray25")
+
+        def drag(event):
+            if selection["start"] and selection["rect"]:
+                x0, y0 = selection["start"]
+                canvas.coords(selection["rect"], x0, y0, event.x, event.y)
+
+        def finish(event):
+            if not selection["start"]:
+                return
+            x0, y0 = selection["start"]
+            left, top = min(x0, event.x), min(y0, event.y)
+            region = {"x": left, "y": top, "width": abs(event.x - x0), "height": abs(event.y - y0)}
+            try:
+                save_media_preview_region(region)
+                self.lbl_media_preview_region.config(text=self._media_preview_region_description())
+                overlay.destroy()
+            except ValueError as exc:
+                messagebox.showinfo("Select player area", str(exc), parent=overlay)
+
+        canvas.bind("<ButtonPress-1>", begin)
+        canvas.bind("<B1-Motion>", drag)
+        canvas.bind("<ButtonRelease-1>", finish)
+        overlay.bind("<Escape>", lambda _event: overlay.destroy())
+        canvas.focus_set()
+
+    def _save_recording_preferences(self):
+        enabled = bool(self.auto_record_video_var.get())
+        record_audio = bool(self.auto_record_audio_var.get())
+        try:
+            retention_days = min(3650, max(0, int(self.recording_retention_var.get())))
+            max_storage_mb = min(500000, max(0, int(self.recording_max_storage_var.get())))
+            min_free_mb = min(100000, max(0, int(self.recording_min_free_var.get())))
+        except (AttributeError, ValueError):
+            messagebox.showerror("Recording limits", "Use whole numbers for the recording limits.")
+            return
+        self.auto_record_video = enabled
+        self.auto_record_audio = record_audio
+        self.recording_retention_days = retention_days
+        self.recording_max_storage_mb = max_storage_mb
+        self.recording_min_free_mb = min_free_mb
+        policy = {"retention_days": retention_days, "max_storage_mb": max_storage_mb, "min_free_mb": min_free_mb}
+        if self.server:
+            self.server.camera_manager.auto_record_enabled = enabled
+            self.server.auto_record_audio_with_video = record_audio
+            self.server.recording_policy = dict(policy)
+            self.server.camera_manager.recording_policy = dict(policy)
+            self.server.audio_manager.recording_policy = dict(policy)
+            self.server.live_audio_manager.recording_policy = dict(policy)
+        try:
+            self.recording_settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self.recording_settings_path.write_text(
+                json.dumps({
+                    "auto_record_video": enabled,
+                    "auto_record_audio": record_audio,
+                    "recording_retention_days": retention_days,
+                    "recording_max_storage_mb": max_storage_mb,
+                    "recording_min_free_mb": min_free_mb,
+                }, indent=2), encoding="utf-8"
+            )
+        except OSError as exc:
+            messagebox.showerror("Recording settings", f"Could not save the recording preference.\n\n{exc}")
+
+    def _recordings_dir(self):
+        if self.server and self.server.audio_manager:
+            return Path(self.server.audio_manager.recordings_dir)
+        user_data = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(user_data) / "BTMouse" / "Recordings"
+
+    def refresh_recordings(self):
+        if not hasattr(self, "list_recordings"):
+            return
+        folder = self._recordings_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        self.list_recordings.delete(0, "end")
+        self._recording_paths = []
+        for path in sorted((p for p in folder.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True):
+            if self.server and self.server.camera_manager.streaming and self.server.camera_manager.last_recording_path == str(path):
+                continue
+            if self.server and self.server.audio_manager.recording and self.server.audio_manager.current_filename == str(path):
+                continue
+            self._recording_paths.append(path)
+            size_mb = path.stat().st_size / (1024 * 1024)
+            self.list_recordings.insert("end", f"{path.name}  ·  {size_mb:.1f} MB")
+        self.lbl_recordings_path.config(text=str(folder))
+
+    def _refresh_recordings_loop(self):
+        if not self.winfo_exists():
+            return
+        self.refresh_recordings()
+        self.after(4000, self._refresh_recordings_loop)
+
+    def open_recordings_folder(self):
+        folder = self._recordings_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            if os.name == "nt":
+                os.startfile(str(folder))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as exc:
+            messagebox.showerror("Recordings", f"Could not open the recordings folder.\n\n{exc}")
+
+    def open_selected_recording(self):
+        selection = self.list_recordings.curselection() if hasattr(self, "list_recordings") else ()
+        if not selection:
+            return
+        path = self._recording_paths[selection[0]]
+        try:
+            os.startfile(str(path)) if os.name == "nt" else subprocess.Popen(["xdg-open", str(path)])
+        except Exception as exc:
+            messagebox.showerror("Recordings", f"Could not open {path.name}.\n\n{exc}")
 
     def _build_logs_tab(self):
         container = tk.Frame(self.tab_logs, bg=BG_DARK)
@@ -789,7 +1101,15 @@ class CompanionApp(tk.Tk):
                 "    Start-Sleep -Seconds 1\n"
                 "  }\n"
                 "  if (-not $copied) { throw 'Could not stage the replacement beside the app after waiting for Windows to release the executable.' }\n"
-                "  if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $backup -Force }\n"
+                "  $backedUp = -not (Test-Path -LiteralPath $target)\n"
+                "  $moveError = ''\n"
+                "  for ($attempt = 0; $attempt -lt 60 -and -not $backedUp; $attempt++) {\n"
+                "    try {\n"
+                "      Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction Stop\n"
+                "      $backedUp = $true\n"
+                "    } catch { $moveError = $_.Exception.Message; Start-Sleep -Seconds 1 }\n"
+                "  }\n"
+                "  if (-not $backedUp) { throw ('Could not move the previous companion into its rollback copy after waiting for Windows to release it: ' + $moveError) }\n"
                 "  Move-Item -LiteralPath $replacement -Destination $target -Force\n"
                 "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
                 "  $quotedMarker = '"' + $readyMarker + '"'\n"
@@ -918,19 +1238,56 @@ class CompanionApp(tk.Tk):
     def refresh_quick_apps(self):
         if not self.server:
             return
-        self.available_apps = self.server._get_installed_apps()
-        self.quick_apps = load_quick_apps(self.available_apps)
-        quick_paths = {item["path"].lower() for item in self.quick_apps}
-        self.combo_available_apps["values"] = [
-            item["name"] for item in self.available_apps if item["path"].lower() not in quick_paths
-        ]
-        self.list_quick_apps.delete(0, tk.END)
-        for item in self.quick_apps:
-            self.list_quick_apps.insert(tk.END, f"{item['name']}  —  {os.path.basename(item['path'])}")
-        if not self.quick_apps:
-            self.lbl_quick_apps_status.config(text="No quick apps saved yet. Select an installed app above to add one.", fg=TEXT_MUTED)
-        else:
-            self.lbl_quick_apps_status.config(text=f"{len(self.quick_apps)} quick app(s). Select one to rename or remove it.", fg=TEXT_MUTED)
+        self._quick_apps_refresh_generation = getattr(self, "_quick_apps_refresh_generation", 0) + 1
+        generation = self._quick_apps_refresh_generation
+        self.lbl_quick_apps_status.config(text="Loading installed apps…", fg=TEXT_MUTED)
+
+        def _load():
+            apps = self.server._cached_query("apps", 10.0, self.server._get_installed_apps)
+            quick_apps = load_quick_apps(apps)
+
+            def _update_ui():
+                if not self.winfo_exists() or generation != self._quick_apps_refresh_generation:
+                    return
+                self.available_apps = apps
+                self.quick_apps = quick_apps
+                quick_paths = {item["path"].lower() for item in quick_apps}
+                self.combo_available_apps["values"] = [
+                    item["name"] for item in apps if item["path"].lower() not in quick_paths
+                ]
+                self.list_quick_apps.delete(0, tk.END)
+                for app in quick_apps:
+                    self.list_quick_apps.insert(tk.END, f"{app['name']}  —  {os.path.basename(app['path'])}")
+                if not quick_apps:
+                    self.lbl_quick_apps_status.config(text="No quick apps saved yet. Select an installed app above to add one.", fg=TEXT_MUTED)
+                else:
+                    self.lbl_quick_apps_status.config(text=f"{len(quick_apps)} quick app(s). Select one to rename or remove it.", fg=TEXT_MUTED)
+
+            self.after(0, _update_ui)
+
+        def _report_error(exc):
+            def _update_ui():
+                if not self.winfo_exists() or generation != self._quick_apps_refresh_generation:
+                    return
+                self.lbl_quick_apps_status.config(text=f"Could not load installed apps: {exc}", fg=ACCENT_RED)
+            self.after(0, _update_ui)
+
+        def _run():
+            try:
+                _load()
+            except Exception as exc:
+                _report_error(exc)
+
+        threading.Thread(target=_run, name="QuickAppsRefresh", daemon=True).start()
+
+    def _publish_quick_apps_to_server(self):
+        if not self.server or not self.available_apps:
+            return
+        quick_paths = {os.path.realpath(item["path"]).lower() for item in self.quick_apps}
+        apps = [dict(item, is_quick=os.path.realpath(item["path"]).lower() in quick_paths)
+                for item in self.available_apps]
+        with self.server._query_cache_lock:
+            self.server._query_cache["apps"] = (time.monotonic(), apps)
 
     def add_quick_app(self):
         name = self.combo_available_apps.get().strip()
@@ -939,6 +1296,7 @@ class CompanionApp(tk.Tk):
             self.lbl_quick_apps_status.config(text="Choose an installed app from the list first.", fg=ACCENT_RED)
             return
         self.quick_apps = save_quick_apps(self.quick_apps + [{"name": match["name"], "path": match["path"]}])
+        self._publish_quick_apps_to_server()
         self.refresh_quick_apps()
         self.lbl_quick_apps_status.config(text=f"Added {match['name']}.", fg=ACCENT_GREEN)
 
@@ -957,6 +1315,7 @@ class CompanionApp(tk.Tk):
             return
         self.quick_apps[selected[0]]["name"] = new_name[:60]
         self.quick_apps = save_quick_apps(self.quick_apps)
+        self._publish_quick_apps_to_server()
         self.refresh_quick_apps()
         self.lbl_quick_apps_status.config(text="Quick app name saved.", fg=ACCENT_GREEN)
 
@@ -967,6 +1326,7 @@ class CompanionApp(tk.Tk):
             return
         name = self.quick_apps[selected[0]]["name"]
         self.quick_apps = save_quick_apps([app for i, app in enumerate(self.quick_apps) if i != selected[0]])
+        self._publish_quick_apps_to_server()
         self.refresh_quick_apps()
         self.lbl_quick_apps_status.config(text=f"Removed {name} from Quick Apps.", fg=ACCENT_GREEN)
 
