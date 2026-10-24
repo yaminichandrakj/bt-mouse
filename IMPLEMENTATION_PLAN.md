@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.14
-**Owner:** Codex | **Release:** [v1.3.14 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14) · [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.15
+**Owner:** Codex | **Release:** [v1.3.15 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.15) · [v1.3.14 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14) · [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
 
 ## Product objective
 
@@ -9,7 +9,7 @@ Make the Android phone a dependable PC input and companion device over Bluetooth
 
 ## Current implementation snapshot
 
-Source status below distinguishes CI/build verification from physical-device verification. v1.3.14 passed the GitHub Actions version check, 31 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
+Source status below distinguishes CI/build verification from physical-device verification. v1.3.15 passed the GitHub Actions version check, 32 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
 
 | Area | Present in source | Remaining |
 |---|---|---|
@@ -125,3 +125,4 @@ Completed implementation work is recorded in the release notes and current imple
 - [x] ~~Publish v1.3.12 (Phase 3 completed).~~ Release: [v1.3.12](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12).
 - [x] ~~Publish v1.3.13 (Phase 4 completed).~~ Release: [v1.3.13](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13).
 - [x] ~~Publish v1.3.14 (Phase 5 completed).~~ Release: [v1.3.14](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14).
+- [x] ~~Publish v1.3.15 (Phase 7 completed).~~ Release: [v1.3.15](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.15).
