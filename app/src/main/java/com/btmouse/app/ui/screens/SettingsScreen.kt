@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -413,7 +414,7 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Check Again", color = TextPrimary)
+                            Text("Check Again", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
 
@@ -462,7 +463,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Download APK in Browser", color = TextPrimary, fontSize = 12.sp)
+                                Text("Download APK in Browser", color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -497,7 +498,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Install APK Now", color = DarkBackground, fontWeight = FontWeight.Bold)
+                                Text("Install APK Now", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -516,7 +517,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Retry", color = TextPrimary)
+                                Text("Retry", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }

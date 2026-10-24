@@ -124,6 +124,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.AppInfo
@@ -238,7 +239,7 @@ fun KeyboardScreen(
             FilterChip(
                 selected = activeSubTab == "keys",
                 onClick = { activeSubTab = "keys" },
-                label = { Text("Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { ChipIcon(Icons.Filled.Keyboard) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
@@ -250,7 +251,7 @@ fun KeyboardScreen(
             FilterChip(
                 selected = activeSubTab == "numpad",
                 onClick = { activeSubTab = "numpad" },
-                label = { Text("Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { ChipIcon(Icons.Filled.Dialpad) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
@@ -264,7 +265,7 @@ fun KeyboardScreen(
                 FilterChip(
                     selected = isLiveTypingEnabled,
                     onClick = { isLiveTypingEnabled = !isLiveTypingEnabled },
-                    label = { Text(if (isLiveTypingEnabled) "Live" else "Batch", fontSize = 11.sp) },
+                    label = { Text(if (isLiveTypingEnabled) "Live" else "Batch", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { ChipIcon(if (isLiveTypingEnabled) Icons.Filled.Bolt else Icons.Filled.EditNote) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
@@ -797,7 +798,7 @@ fun QuickAppsSection(
             },
             dismissButton = {
                 TextButton(onClick = { showBrowseDialog = false }) {
-                    Text("Close", color = TextMuted)
+                    Text("Close", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         )
@@ -814,7 +815,7 @@ fun QuickAppsSection(
                     OutlinedTextField(
                         value = newCustomName,
                         onValueChange = { newCustomName = it },
-                        label = { Text("App Name (e.g. Steam, Blender)") },
+                        label = { Text("App Name (e.g. Steam, Blender)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AccentCyan,
@@ -827,7 +828,7 @@ fun QuickAppsSection(
                     OutlinedTextField(
                         value = newCustomCmd,
                         onValueChange = { newCustomCmd = it },
-                        label = { Text("Executable / Path / Command") },
+                        label = { Text("Executable / Path / Command", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         placeholder = { Text("steam or C:\\Program Files\\...") },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -853,12 +854,12 @@ fun QuickAppsSection(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
                 ) {
-                    Text("Add Shortcut", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    Text("Add Shortcut", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showAddCustomDialog = false }) {
-                    Text("Cancel", color = TextMuted)
+                    Text("Cancel", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         )
@@ -939,7 +940,7 @@ fun QuickAppsSection(
                 colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Run", color = DarkBackground, fontWeight = FontWeight.Bold)
+                Text("Run", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
@@ -1324,7 +1325,7 @@ fun TasksAndHardwareSection(
                                         shape = RoundedCornerShape(6.dp),
                                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
-                                        Text("End Task", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Text("End Task", fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                 }
                             }
@@ -1561,13 +1562,13 @@ fun CameraAndRecorderSection(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                         ) {
-                            Text("Confirm Delete", fontSize = 11.sp)
+                            Text("Confirm Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { showSnapshotDeleteConfirm = false },
                             colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
                         ) {
-                            Text("Cancel", fontSize = 11.sp)
+                            Text("Cancel", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     } else {
                         Button(
@@ -1584,19 +1585,19 @@ fun CameraAndRecorderSection(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                         ) {
-                            Text("Open", fontSize = 11.sp)
+                            Text("Open", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { showSnapshotDeleteConfirm = true },
                             colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                         ) {
-                            Text("Delete", fontSize = 11.sp)
+                            Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { selectedSnapshot = null },
                             colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
                         ) {
-                            Text("Close", fontSize = 11.sp)
+                            Text("Close", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -2137,7 +2138,7 @@ fun PhoneCameraWebcamCard(
                 FilterChip(
                     selected = currentOrientation == "landscape",
                     onClick = { coordinator.setPhoneCameraOrientation("landscape") },
-                    label = { Text("↔ Landscape 16:9", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                    label = { Text("↔ Landscape 16:9", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -2148,7 +2149,7 @@ fun PhoneCameraWebcamCard(
                 FilterChip(
                     selected = currentOrientation == "portrait",
                     onClick = { coordinator.setPhoneCameraOrientation("portrait") },
-                    label = { Text("↕ Portrait 9:16", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                    label = { Text("↕ Portrait 9:16", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -2159,7 +2160,7 @@ fun PhoneCameraWebcamCard(
                 FilterChip(
                     selected = currentRotation != 0,
                     onClick = { coordinator.rotatePhoneCamera90() },
-                    label = { Text("↻ Rotate 90° (${currentRotation}°)", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                    label = { Text("↻ Rotate 90° (${currentRotation}°)", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -2180,7 +2181,7 @@ fun PhoneCameraWebcamCard(
                     onClick = {
                         if (currentLens != "back") coordinator.switchPhoneCameraLens()
                     },
-                    label = { Text("Rear lens", fontSize = 10.sp) },
+                    label = { Text("Rear lens", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { ChipIcon(Icons.Filled.CameraRear) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
@@ -2194,7 +2195,7 @@ fun PhoneCameraWebcamCard(
                     onClick = {
                         if (currentLens != "front") coordinator.switchPhoneCameraLens()
                     },
-                    label = { Text("Front lens", fontSize = 10.sp) },
+                    label = { Text("Front lens", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { ChipIcon(Icons.Filled.CameraFront) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
@@ -2212,7 +2213,7 @@ fun PhoneCameraWebcamCard(
                     FilterChip(
                         selected = currentRes == res,
                         onClick = { coordinator.setPhoneCameraResolution(res.first, res.second) },
-                        label = { Text(label, fontSize = 10.sp) },
+                        label = { Text(label, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                             selectedLabelColor = AccentCyan,
@@ -2226,7 +2227,7 @@ fun PhoneCameraWebcamCard(
                     FilterChip(
                         selected = currentFps == fps,
                         onClick = { coordinator.setPhoneCameraFps(fps) },
-                        label = { Text("${fps}fps", fontSize = 10.sp) },
+                        label = { Text("${fps}fps", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                             selectedLabelColor = AccentCyan,
@@ -2342,12 +2343,12 @@ fun PowerAndUnlockSection(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                 ) {
-                    Text("Restart", color = TextPrimary)
+                    Text("Restart", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showRestartDialog = false }) {
-                    Text("Cancel", color = TextMuted)
+                    Text("Cancel", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             containerColor = DarkSurface
@@ -2367,12 +2368,12 @@ fun PowerAndUnlockSection(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                 ) {
-                    Text("Shut Down", color = TextPrimary)
+                    Text("Shut Down", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showShutdownDialog = false }) {
-                    Text("Cancel", color = TextMuted)
+                    Text("Cancel", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             containerColor = DarkSurface
@@ -2433,7 +2434,7 @@ fun PowerAndUnlockSection(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Sleep", fontSize = 12.sp)
+                        Text("Sleep", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
 
                     OutlinedButton(
@@ -2442,7 +2443,7 @@ fun PowerAndUnlockSection(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Restart", fontSize = 12.sp)
+                        Text("Restart", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
 
                     OutlinedButton(
@@ -2451,7 +2452,7 @@ fun PowerAndUnlockSection(
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Shutdown", fontSize = 12.sp)
+                        Text("Shutdown", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

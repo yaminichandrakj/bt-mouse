@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PermMedia
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -124,7 +125,7 @@ fun CamerasAndAudioScreen(coordinator: ConnectionCoordinator) {
                     selected = selected,
                     onClick = { activeTab = key },
                     leadingIcon = { ChipIcon(icon) },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
+                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.38f),
                         selectedLabelColor = AccentCyan,
@@ -164,7 +165,7 @@ fun UtilitiesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposi
                     selected = selected,
                     onClick = { activeSection = key },
                     leadingIcon = { ChipIcon(icon) },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
+                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                         selectedLabelColor = AccentCyan,
@@ -245,7 +246,7 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (pcToPhoneActive) AccentRose else PrimaryIndigo)
                 ) {
-                    Text(if (pcToPhoneActive) "Stop PC Mic" else "Listen to PC Mic", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(if (pcToPhoneActive) "Stop PC Mic" else "Listen to PC Mic", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Button(
                     onClick = {
@@ -356,7 +357,7 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                         colors = ButtonDefaults.buttonColors(containerColor = AccentRose),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("Exit Fullscreen", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Exit Fullscreen", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -465,7 +466,7 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
             ) {
-                Text("Refresh", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("Refresh", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
@@ -484,7 +485,7 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                     selected = selectedCategory == key,
                     onClick = { selectedCategory = key },
                     leadingIcon = { ChipIcon(icon) },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                    label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -564,13 +565,13 @@ private fun RecordingRow(
                         coordinator.deleteRecording(recording.id)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
-                ) { Text("Delete") }
+                ) { Text("Delete", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             },
             dismissButton = {
                 Button(
                     onClick = { showDeleteConfirm = false },
                     colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)
-                ) { Text("Cancel") }
+                ) { Text("Cancel", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             },
             containerColor = DarkSurfaceVariant
         )
@@ -642,14 +643,14 @@ private fun RecordingRow(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
                     ) {
-                        Text("↗ External App", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        IconLabel(Icons.Filled.OpenInNew, "External app", fontWeight = FontWeight.SemiBold, iconSize = 16.dp)
                     }
                     Button(
                         onClick = { showDeleteConfirm = true },
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                     ) {
-                        Text("Delete", fontSize = 11.sp)
+                        Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             } else {
@@ -674,7 +675,7 @@ private fun RecordingRow(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                     ) {
-                        Text("Delete", fontSize = 11.sp)
+                        Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

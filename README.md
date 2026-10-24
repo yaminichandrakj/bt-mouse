@@ -145,9 +145,17 @@ The output `.apk` file will be generated at:
 4. Enjoy instant wireless remote control over your local network!
 
 ### Mode 3: Remote WAN
-1. Configure a TLS-enabled tunnel or reverse proxy to the PC companion's local WebSocket port (`53531`).
-2. Enter the external `wss://` URL and the pairing PIN in the app's **Remote WAN** tab.
-3. Do not port-forward the companion's plain `ws://` listener directly to the Internet.
+The companion's WebSocket listener (`53531`) is plain `ws://`. Never port-forward it on your router; reach it through one of these instead.
+
+**Option A: Tailscale (private, simplest).** Install Tailscale on the PC and the phone and sign in to the same account. In the app's **Remote WAN** tab enter `ws://<pc-name>.<tailnet>.ts.net:53531` (or `ws://100.x.y.z:53531`) and the pairing PIN. The app allows `ws://` here because the tailnet is already WireGuard-encrypted.
+
+**Option B: Cloudflare Tunnel (public `wss://` URL).**
+1. Install `cloudflared` on the PC (`winget install Cloudflare.cloudflared`).
+2. Quick test: run `cloudflared tunnel --url http://localhost:53531`. It prints an `https://<random>.trycloudflare.com` address.
+3. In the app enter `wss://<random>.trycloudflare.com` (no port) and the pairing PIN.
+4. Quick-tunnel addresses change on every run. For a fixed address, create a named tunnel on your own domain (`cloudflared tunnel login`, `cloudflared tunnel create btmouse`, route a hostname such as `mouse.example.com` to `http://localhost:53531`, then `cloudflared service install`).
+
+The six-digit PIN is still required on every connection, so use a PIN nobody else knows.
 
 ---
 

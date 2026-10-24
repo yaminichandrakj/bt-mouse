@@ -24,6 +24,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 
+/** Pings go out every 3 s; after this long with no pong the link is treated as dead. */
+private const val NO_RESPONSE_DISCONNECT_MS = 20_000L
+
 class RemoteWanManager(
     context: Context,
     private val settings: SettingsRepository,
@@ -480,6 +483,13 @@ class RemoteWanManager(
                     if (lastPongAtMs > 0 && now - lastPongAtMs > 10_000L) {
                         _isConnectionHealthy.value = false
                     }
+                    if (now - lastPongAtMs > NO_RESPONSE_DISCONNECT_MS) {
+                        // A half-open TCP link (PC asleep, network gone) never fires onClosed; cancel
+                        // so onFailure clears the session and the UI stops claiming we are connected.
+                        _statusMessage.value = "PC stopped responding"
+                        webSocket?.cancel()
+                        break
+                    }
                     sendPacket(mapOf("type" to "ping", "client_time" to now), includeSeq = false)
                 }
                 delay(3000L)
@@ -508,13 +518,16 @@ class RemoteWanManager(
     private fun isLocalHost(host: String): Boolean {
         val normalized = host.lowercase()
         if (normalized == "localhost" || normalized.endsWith(".local")) return true
+        // Tailscale MagicDNS names: the tailnet is already WireGuard-encrypted end to end.
+        if (normalized.endsWith(".ts.net")) return true
         val octets = normalized.split('.')
         if (octets.size == 4) {
             val ip = octets.map { it.toIntOrNull() ?: return false }
             return ip[0] == 10 || ip[0] == 127 ||
                 (ip[0] == 172 && ip[1] in 16..31) ||
                 (ip[0] == 192 && ip[1] == 168) ||
-                (ip[0] == 169 && ip[1] == 254)
+                (ip[0] == 169 && ip[1] == 254) ||
+                (ip[0] == 100 && ip[1] in 64..127) // Tailscale / CGNAT 100.64.0.0/10
         }
         return normalized == "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:")
     }

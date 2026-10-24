@@ -46,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
@@ -109,7 +110,7 @@ fun TouchpadScreen(
                 leadingIcon = {
                     Icon(Icons.Default.Mouse, contentDescription = null, modifier = Modifier.size(14.dp))
                 },
-                label = { Text("Trackpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("Trackpad", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                     selectedLabelColor = AccentCyan,
@@ -124,7 +125,7 @@ fun TouchpadScreen(
                 leadingIcon = {
                     Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(14.dp))
                 },
-                label = { Text("Pen Slate", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("Pen Slate", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                     selectedLabelColor = AccentCyan,
@@ -140,7 +141,7 @@ fun TouchpadScreen(
                     leadingIcon = {
                         Icon(Icons.Default.ControlCamera, contentDescription = null, modifier = Modifier.size(14.dp))
                     },
-                    label = { Text(if (isAirMouseEnabled) "Gyro ON" else "Gyro Air", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                    label = { Text(if (isAirMouseEnabled) "Gyro ON" else "Gyro Air", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -156,7 +157,7 @@ fun TouchpadScreen(
                 leadingIcon = {
                     Icon(Icons.Default.Keyboard, contentDescription = null, modifier = Modifier.size(14.dp))
                 },
-                label = { Text("Quick Type", fontSize = 11.sp) },
+                label = { Text("Quick Type", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                     selectedLabelColor = AccentCyan,
@@ -171,7 +172,7 @@ fun TouchpadScreen(
                 leadingIcon = {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp), tint = AccentCyan)
                 },
-                label = { Text("Play/Pause", fontSize = 11.sp) },
+                label = { Text("Play/Pause", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(containerColor = DarkSurface, labelColor = TextSecondary)
             )
 
@@ -181,7 +182,7 @@ fun TouchpadScreen(
                 leadingIcon = {
                     Icon(Icons.Default.VolumeOff, contentDescription = null, modifier = Modifier.size(14.dp), tint = if (mediaStatus.isMuted) AccentRose else TextSecondary)
                 },
-                label = { Text(if (mediaStatus.isMuted) "Unmute PC" else "Mute PC", fontSize = 11.sp) },
+                label = { Text(if (mediaStatus.isMuted) "Unmute PC" else "Mute PC", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AccentRose.copy(alpha = 0.25f),
                     selectedLabelColor = AccentRose,
@@ -196,7 +197,7 @@ fun TouchpadScreen(
                 leadingIcon = {
                     Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = AccentRose)
                 },
-                label = { Text("Lock PC", fontSize = 11.sp) },
+                label = { Text("Lock PC", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(containerColor = DarkSurface, labelColor = TextSecondary)
             )
         }

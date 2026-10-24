@@ -28,6 +28,9 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.security.MessageDigest
 
+/** Pings go out every 1.5 s; after this long with no pong the PC is treated as gone. */
+private const val NO_RESPONSE_DISCONNECT_MS = 9_000L
+
 class WifiClientManager(
     private val context: Context,
     private val settings: SettingsRepository,
@@ -534,11 +537,11 @@ class WifiClientManager(
                     if (lastPongAtMs > 0 && now - lastPongAtMs > 4500L) {
                         _isConnectionHealthy.value = false
                     }
-                    if (now - lastPongAtMs > 30_000L) {
+                    if (now - lastPongAtMs > NO_RESPONSE_DISCONNECT_MS) {
                         _isConnected.value = false
                         _connectedDeviceName.value = null
                         clearSessionState()
-                        _statusMessage.value = "PC server has not responded for 30 seconds"
+                        _statusMessage.value = "PC stopped responding"
                         break
                     }
                     sendPacket(mapOf("type" to "ping", "client_time" to now), includeSeq = false)

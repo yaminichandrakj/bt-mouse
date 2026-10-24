@@ -308,13 +308,19 @@ class PhoneCameraStreamer(
     }
 
     private fun findClosestSize(sizes: Array<Size>, reqW: Int, reqH: Int): Size {
-        if (sizes.isEmpty()) return Size(reqW, reqH)
-        val targetArea = reqW * reqH
-        return sizes.minByOrNull { s ->
-            val areaDiff = kotlin.math.abs(s.width * s.height - targetArea)
-            val aspectDiff = kotlin.math.abs((s.width.toDouble() / s.height.toDouble()) - (reqW.toDouble() / reqH.toDouble()))
-            (aspectDiff * 100000).toInt() + areaDiff
-        } ?: sizes[0]
+        // Sensor sizes are always landscape, so compare against the landscape form of the request.
+        val wantW = maxOf(reqW, reqH)
+        val wantH = minOf(reqW, reqH)
+        if (sizes.isEmpty()) return Size(wantW, wantH)
+        val wantAspect = wantW.toDouble() / wantH
+        // Prefer an exact aspect match (no cropping needed), then the smallest size that still
+        // covers the request, so frames are downscaled rather than upscaled.
+        val sameAspect = sizes.filter { kotlin.math.abs(it.width.toDouble() / it.height - wantAspect) < 0.02 }
+        val pool = sameAspect.ifEmpty { sizes.toList() }
+        val covering = pool.filter { it.width >= wantW && it.height >= wantH }
+        return covering.minByOrNull { it.width * it.height }
+            ?: pool.maxByOrNull { it.width * it.height }
+            ?: sizes[0]
     }
 
     private fun createCaptureSession(gen: Int, camera: CameraDevice, surface: android.view.Surface) {
@@ -377,10 +383,6 @@ class PhoneCameraStreamer(
         val totalRotation = (baseRotation + extraRot) % 360
         val shouldMirror = (lens == "front" && _mirrorFront.value)
 
-        val (targetBaseW, targetBaseH) = _currentResolution.value
-        val desiredW = if (mode == "portrait") minOf(targetBaseW, targetBaseH) else maxOf(targetBaseW, targetBaseH)
-        val desiredH = if (mode == "portrait") maxOf(targetBaseW, targetBaseH) else minOf(targetBaseW, targetBaseH)
-
         val matrix = Matrix()
         if (totalRotation != 0) {
             matrix.postRotate(totalRotation.toFloat())
@@ -395,10 +397,29 @@ class PhoneCameraStreamer(
             bitmap
         }
 
-        val scaled = if (rotated.width != desiredW || rotated.height != desiredH) {
-            Bitmap.createScaledBitmap(rotated, desiredW, desiredH, true)
+        // Output follows the shape of the rotated frame (a manual 90° turn flips it), and is
+        // centre-cropped to the target aspect before scaling so it is never stretched.
+        val (targetBaseW, targetBaseH) = _currentResolution.value
+        val landscapeOut = rotated.width >= rotated.height
+        val desiredW = if (landscapeOut) maxOf(targetBaseW, targetBaseH) else minOf(targetBaseW, targetBaseH)
+        val desiredH = if (landscapeOut) minOf(targetBaseW, targetBaseH) else maxOf(targetBaseW, targetBaseH)
+        val targetAspect = desiredW.toFloat() / desiredH
+        var cropW = rotated.width
+        var cropH = rotated.height
+        if (cropW.toFloat() / cropH > targetAspect) {
+            cropW = (cropH * targetAspect).toInt()
+        } else {
+            cropH = (cropW / targetAspect).toInt()
+        }
+        val cropped = if (cropW != rotated.width || cropH != rotated.height) {
+            Bitmap.createBitmap(rotated, (rotated.width - cropW) / 2, (rotated.height - cropH) / 2, cropW, cropH)
         } else {
             rotated
+        }
+        val scaled = if (cropped.width > desiredW) {
+            Bitmap.createScaledBitmap(cropped, desiredW, desiredH, true)
+        } else {
+            cropped
         }
 
         // Compress with adaptive quality so UDP datagrams NEVER exceed 36 KB
@@ -413,7 +434,8 @@ class PhoneCameraStreamer(
 
         val finalW = scaled.width
         val finalH = scaled.height
-        if (scaled !== rotated) scaled.recycle()
+        if (scaled !== cropped) scaled.recycle()
+        if (cropped !== rotated) cropped.recycle()
         if (rotated !== bitmap) rotated.recycle()
         bitmap.recycle()
 

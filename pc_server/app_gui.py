@@ -710,6 +710,10 @@ class CompanionApp(QMainWindow):
         self.phone_cam_timer.timeout.connect(self._check_phone_cam_active)
         self.phone_cam_timer.start(2000)
 
+        self.client_status_timer = QTimer(self)
+        self.client_status_timer.timeout.connect(self._refresh_client_status)
+        self.client_status_timer.start(1000)
+
         QTimer.singleShot(400, self._show_update_recovery_notice)
         QTimer.singleShot(250, self.refresh_quick_apps)
 
@@ -1044,7 +1048,7 @@ class CompanionApp(QMainWindow):
         b_layout.addWidget(self.lbl_footer_left)
         b_layout.addStretch()
 
-        self.lbl_footer_client = QLabel("Client: Disconnected")
+        self.lbl_footer_client = QLabel("No phone connected")
         self.lbl_footer_client.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 700;")
         b_layout.addWidget(self.lbl_footer_client)
 
@@ -1820,7 +1824,7 @@ class CompanionApp(QMainWindow):
         t_row = QHBoxLayout(top_card)
         t_row.setContentsMargins(18, 12, 18, 12)
 
-        self.lbl_client = QLabel("Client: Disconnected")
+        self.lbl_client = QLabel("No phone connected")
         self.lbl_client.setStyleSheet("font-size: 14px; font-weight: 700; color: #94A3B8;")
         t_row.addWidget(self.lbl_client)
         t_row.addStretch()
@@ -2565,8 +2569,22 @@ class CompanionApp(QMainWindow):
         self.bridge.client_signal.emit(str(client_name or ""), bool(is_connected))
 
     def _update_client_ui(self, client_name, is_connected):
-        text = f"Client: {client_name}" if is_connected else "Client: Disconnected"
-        color = "#10B981" if is_connected else "#94A3B8"
+        # Link events are only logged: with concurrent transports one link closing does not mean
+        # the phone is gone. The status labels come from _refresh_client_status instead.
+        self.log(f"{'Connected' if is_connected else 'Link closed'}: {client_name or 'phone'}")
+
+    def _refresh_client_status(self):
+        clients = self.server.active_clients() if self.server else []
+        if clients:
+            transports = ", ".join(sorted({label for label, _name in clients}))
+            text = f"Connected: {clients[0][1]}  ·  {transports}"
+            color = "#10B981"
+        else:
+            text = "No phone connected"
+            color = "#94A3B8"
+        if getattr(self, "_last_client_status", None) == text:
+            return
+        self._last_client_status = text
         if hasattr(self, "lbl_client"):
             self.lbl_client.setText(text)
             self.lbl_client.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {color};")

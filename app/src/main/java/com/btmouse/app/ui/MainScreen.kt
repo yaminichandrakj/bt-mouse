@@ -61,6 +61,7 @@ import com.btmouse.app.ui.screens.MediaRemoteScreen
 import com.btmouse.app.ui.screens.SettingsScreen
 import com.btmouse.app.ui.screens.TouchpadScreen
 import com.btmouse.app.ui.screens.UtilitiesScreen
+import com.btmouse.app.ui.theme.AccentAmber
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -100,6 +101,8 @@ fun MainScreen(
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     val isConnected by coordinator.isConnected.collectAsState()
+    val isHealthy by coordinator.isConnectionHealthy.collectAsState()
+    val linkLive = isConnected && isHealthy
     val reconnectStatus by coordinator.reconnectStatus.collectAsState()
     val activeTransportLabel by coordinator.activeTransportLabel.collectAsState()
     val currentTab = tabs.getOrElse(selectedTabIndex) { NavigationTab.ControlPad }
@@ -176,16 +179,16 @@ fun MainScreen(
                                 modifier = Modifier
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(if (isConnected) AccentEmerald else AccentRose)
+                                    .background(if (linkLive) AccentEmerald else if (isConnected) AccentAmber else AccentRose)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isConnected && activeTransportLabel != "Disconnected") {
-                                    activeTransportLabel
-                                } else {
-                                    "Connect"
+                                text = when {
+                                    linkLive && activeTransportLabel != "Disconnected" -> activeTransportLabel
+                                    isConnected -> "No response"
+                                    else -> "Connect"
                                 },
-                                color = if (isConnected) AccentCyan else TextSecondary,
+                                color = if (linkLive) AccentCyan else if (isConnected) AccentAmber else TextSecondary,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1

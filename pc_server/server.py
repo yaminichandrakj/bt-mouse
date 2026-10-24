@@ -539,6 +539,23 @@ def extract_windows_app_icon_base64(path_or_cmd, size=44):
     return ""
 
 
+def letterbox_frame(img, width, height):
+    """Fit an image into width x height without distortion, padding the rest with black."""
+    h, w = img.shape[:2]
+    if (w, h) == (width, height):
+        return img
+    import cv2
+    import numpy as np
+
+    scale = min(width / w, height / h)
+    new_w, new_h = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    canvas = np.zeros((height, width) + img.shape[2:], dtype=img.dtype)
+    x, y = (width - new_w) // 2, (height - new_h) // 2
+    canvas[y : y + new_h, x : x + new_w] = resized
+    return canvas
+
+
 def set_exclusive_bind(sock):
     """Stop a second companion from silently sharing our UDP ports.
 
@@ -2620,8 +2637,10 @@ class PhoneCameraReceiver:
                                 h_f, w_f = bgr.shape[:2]
                                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                                 self._video_writer = cv2.VideoWriter(rec_path, fourcc, max(10.0, self.fps or 20.0), (w_f, h_f))
+                                self._video_writer_size = (w_f, h_f)
                             if self._video_writer is not None and self._video_writer.isOpened():
-                                self._video_writer.write(bgr)
+                                # VideoWriter silently drops frames whose size differs from the first one.
+                                self._video_writer.write(letterbox_frame(bgr, *self._video_writer_size))
             except Exception:
                 pass
 
@@ -2672,8 +2691,7 @@ class PhoneCameraReceiver:
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if img is not None:
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                if (img_rgb.shape[1], img_rgb.shape[0]) != (self.virtual_cam.width, self.virtual_cam.height):
-                    img_rgb = cv2.resize(img_rgb, (self.virtual_cam.width, self.virtual_cam.height))
+                img_rgb = letterbox_frame(img_rgb, self.virtual_cam.width, self.virtual_cam.height)
                 self.virtual_cam.send(img_rgb)
         except Exception:
             pass
@@ -2926,6 +2944,36 @@ class Server:
             self._stop_camera_stream_for_client(("wan", None))
         if self.on_client_callback:
             self.on_client_callback(self.connected_client, is_connected)
+
+    TRANSPORT_LABELS = {"wifi": "Wi-Fi", "bluetooth": "Bluetooth", "wan": "Remote"}
+
+    def _note_client_activity(self, addr, client_name=None, alive=True):
+        """Record the last authenticated packet per transport; the GUI derives status from this.
+
+        Connect/disconnect events alone are unreliable with concurrent transports: one link
+        dropping (or a failover "disconnect") must not mark the phone as gone while another
+        link is still carrying its pings.
+        """
+        seen = getattr(self, "_client_seen", None)
+        if seen is None:
+            seen = self._client_seen = {}
+        transport = self._camera_client_key(addr)[0]
+        if not alive:
+            seen.pop(transport, None)
+            return
+        previous = seen.get(transport)
+        name = client_name or (previous[0] if previous else None) or "Phone"
+        seen[transport] = (name, time.monotonic())
+
+    def active_clients(self, timeout=8.0):
+        """[(transport label, client name)] for transports that heard from the phone recently."""
+        now = time.monotonic()
+        seen = getattr(self, "_client_seen", None) or {}
+        return [
+            (self.TRANSPORT_LABELS.get(transport, transport), name)
+            for transport, (name, last) in list(seen.items())
+            if now - last <= timeout
+        ]
 
     @staticmethod
     def _camera_client_key(addr):
@@ -3242,6 +3290,7 @@ class Server:
                 self.auth_failures.pop(addr[0], None)
                 client_name = str(data.get("client", "Android Client"))[:80]
                 self.connected_client = f"{client_name} ({addr[0]})" if addr else client_name
+                self._note_client_activity(addr, client_name)
                 if self.on_client_callback:
                     self.on_client_callback(self.connected_client, True)
                 response = {
@@ -3266,6 +3315,7 @@ class Server:
             return
 
         self._refresh_camera_stream_lease(addr, data, respond)
+        self._note_client_activity(addr, alive=cmd_type != "disconnect")
 
         if cmd_type == "ping":
             client_time = data.get("client_time")

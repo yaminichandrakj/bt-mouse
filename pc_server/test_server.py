@@ -918,6 +918,23 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
         self.assertTrue(responses[0]["icons"]["steam"]["icon"])
 
 
+class ClientActivityTests(unittest.TestCase):
+    def test_one_link_closing_keeps_phone_connected_on_the_other(self):
+        instance = object.__new__(server.Server)
+        instance._note_client_activity(("192.168.1.5", 40000), "Pixel 8")
+        instance._note_client_activity(("Bluetooth", 0))
+        instance._note_client_activity(("Bluetooth", 0), alive=False)
+        self.assertEqual(instance.active_clients(), [("Wi-Fi", "Pixel 8")])
+
+    def test_silent_transport_expires(self):
+        instance = object.__new__(server.Server)
+        instance._note_client_activity(("WebSocket", 0), "Pixel 8")
+        self.assertEqual(instance.active_clients(), [("Remote", "Pixel 8")])
+        later = server.time.monotonic() + 30
+        with patch("server.time.monotonic", return_value=later):
+            self.assertEqual(instance.active_clients(), [])
+
+
 class SingleInstanceTests(unittest.TestCase):
     def test_exclusive_bind_prefers_windows_exclusive_option(self):
         sock = Mock()

@@ -68,12 +68,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.ConnectionMode
 import com.btmouse.app.data.SettingsRepository
+import com.btmouse.app.ui.theme.AccentAmber
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -98,6 +100,8 @@ fun ConnectionScreen(
     val clipboardManager = LocalClipboardManager.current
     val activeMode by coordinator.activeMode.collectAsState()
     val isConnected by coordinator.isConnected.collectAsState()
+    val isHealthy by coordinator.isConnectionHealthy.collectAsState()
+    val linkLive = isConnected && isHealthy
     val statusMessage by coordinator.statusMessage.collectAsState()
     val connectedDevice by coordinator.connectedDeviceName.collectAsState()
     val reconnectStatus by coordinator.reconnectStatus.collectAsState()
@@ -325,12 +329,16 @@ fun ConnectionScreen(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(if (isConnected) AccentEmerald else AccentRose)
+                            .background(if (linkLive) AccentEmerald else if (isConnected) AccentAmber else AccentRose)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isConnected) (connectedDevice ?: "Connected") else "Not Connected",
+                            text = when {
+                                linkLive -> connectedDevice ?: "Connected"
+                                isConnected -> "Waiting for the PC to respond"
+                                else -> "Not connected"
+                            },
                             color = TextPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
@@ -338,12 +346,12 @@ fun ConnectionScreen(
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (isConnected && activeTransportLabel != "Disconnected") {
+                            text = if (linkLive && activeTransportLabel != "Disconnected") {
                                 if (failoverEnabled) "Failover Active • $activeTransportLabel" else activeTransportLabel
                             } else {
                                 statusMessage
                             },
-                            color = if (isConnected) AccentCyan else TextSecondary,
+                            color = if (linkLive) AccentCyan else TextSecondary,
                             fontSize = 12.sp,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -388,11 +396,11 @@ fun ConnectionScreen(
                     Row {
                         if (reconnectStatus?.contains("Tap to retry") == true) {
                             TextButton(onClick = { coordinator.startAutoReconnect() }) {
-                                Text("Retry", color = AccentCyan, fontSize = 12.sp)
+                                Text("Retry", color = AccentCyan, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                         TextButton(onClick = { coordinator.cancelReconnect() }) {
-                            Text("Cancel", color = AccentRose, fontSize = 12.sp)
+                            Text("Cancel", color = AccentRose, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -455,7 +463,7 @@ fun ConnectionScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("Open Bluetooth Settings")
+                                Text("Open Bluetooth Settings", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -531,7 +539,7 @@ fun ConnectionScreen(
                             OutlinedTextField(
                                 value = manualHost,
                                 onValueChange = { manualHost = it },
-                                label = { Text("PC IP Address (e.g. 172.25.100.123)") },
+                                label = { Text("PC IP Address (e.g. 172.25.100.123)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = PrimaryIndigo,
@@ -545,7 +553,7 @@ fun ConnectionScreen(
                             OutlinedTextField(
                                 value = manualPort,
                                 onValueChange = { manualPort = it },
-                                label = { Text("Port (Default: 53530)") },
+                                label = { Text("Port (Default: 53530)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = PrimaryIndigo,
@@ -559,7 +567,7 @@ fun ConnectionScreen(
                             OutlinedTextField(
                                 value = wifiPin,
                                 onValueChange = { wifiPin = it.filter(Char::isDigit).take(12) },
-                                label = { Text("PC companion pairing PIN") },
+                                label = { Text("PC companion pairing PIN", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = PrimaryIndigo,
@@ -584,7 +592,7 @@ fun ConnectionScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("Connect to PC", color = TextPrimary, fontWeight = FontWeight.Bold)
+                                Text("Connect to PC", color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -643,7 +651,7 @@ fun ConnectionScreen(
                             OutlinedTextField(
                                 value = inputWanUrl,
                                 onValueChange = { inputWanUrl = it },
-                                label = { Text("WebSocket URL (use wss:// over the Internet)") },
+                                label = { Text("WebSocket URL (use wss:// over the Internet)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 placeholder = { Text("wss://your-domain:53531 (Internet) or ws://PC-IP:53531 (LAN)") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
@@ -658,7 +666,7 @@ fun ConnectionScreen(
                             OutlinedTextField(
                                 value = inputWanToken,
                                 onValueChange = { inputWanToken = it },
-                                label = { Text("Security Access Key / PIN") },
+                                label = { Text("Security Access Key / PIN", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 placeholder = { Text("Enter the PIN shown by the PC companion") },
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = OutlinedTextFieldDefaults.colors(
@@ -682,7 +690,7 @@ fun ConnectionScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("Connect Over Internet", color = DarkBackground, fontWeight = FontWeight.Bold)
+                                Text("Connect Over Internet", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -740,7 +748,7 @@ fun ConnectionScreen(
                             qrInputText = it
                             qrError = null
                         },
-                        label = { Text("PC IP Address (e.g. 172.25.100.123)") },
+                        label = { Text("PC IP Address (e.g. 172.25.100.123)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         placeholder = { Text("172.25.100.123") },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -788,12 +796,12 @@ fun ConnectionScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
                 ) {
-                    Text("Connect to PC", color = DarkBackground, fontWeight = FontWeight.Bold)
+                    Text("Connect to PC", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showQrDialog = false }) {
-                    Text("Cancel", color = TextMuted)
+                    Text("Cancel", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         )
@@ -843,7 +851,7 @@ private fun DeviceItem(
                 ),
                 shape = RoundedCornerShape(8.dp)
             ) {
-                Text(if (isCurrentlyConnected) "Active" else "Connect", fontSize = 12.sp)
+                Text(if (isCurrentlyConnected) "Active" else "Connect", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

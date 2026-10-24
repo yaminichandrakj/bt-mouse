@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
@@ -175,7 +176,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isAbsoluteMapping,
                 onClick = { isAbsoluteMapping = true },
-                label = { Text("Absolute Mouse (Windows)", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Absolute Mouse (Windows)", fontSize = 11.sp, softWrap = false, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -187,7 +188,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = !isAbsoluteMapping,
                 onClick = { isAbsoluteMapping = false },
-                label = { Text("Relative Mouse", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Relative Mouse", fontSize = 11.sp, softWrap = false, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -202,7 +203,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = !isEraser,
                 onClick = { isEraser = false },
-                label = { Text("Pen", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Pen", fontSize = 11.sp, softWrap = false, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { ChipIcon(Icons.Filled.Draw) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
@@ -215,7 +216,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isEraser,
                 onClick = { isEraser = true },
-                label = { Text("Right button", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Right button", fontSize = 11.sp, softWrap = false, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = { ChipIcon(Icons.Filled.Mouse) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AccentRose.copy(alpha = 0.35f),
@@ -246,7 +247,7 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isStylusOnly,
                 onClick = { isStylusOnly = !isStylusOnly },
-                label = { Text("Palm Reject", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Palm Reject", fontSize = 11.sp, softWrap = false, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Default.PanTool,
