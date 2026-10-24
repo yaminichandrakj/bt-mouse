@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
 **Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.10
-**Owner:** Codex | **Release:** v1.3.10 release candidate · [feature notes](release-notes/v1.3.10.md)
+**Owner:** Codex | **Release:** [v1.3.10 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.10) · [feature notes](release-notes/v1.3.10.md)
 
 ## Product objective
 
@@ -52,7 +52,7 @@ Phases are ordered from integration and verification toward larger platform work
 9. ~~Write phone-compatible MP4 webcam recordings and convert legacy AVI webcam recordings on playback/download.~~
 10. Smoke-test Bluetooth HID without the companion and each companion transport independently.
 
-**Acceptance:** v1.3.10 CI builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
+**Acceptance:** v1.3.10 Android and Windows builds, version check, and 17 existing companion checks passed in GitHub Actions. Hardware reliability still requires target-device checks; no claim is made for those until performed.
 
 ### Phase 1 - Webcam video recording, recordings library, and browser video preview (medium effort; high priority)
 
@@ -185,5 +185,5 @@ Phases are ordered from integration and verification toward larger platform work
 - [ ] Check both updater flows, rollback, and correct relaunch path.
 - [ ] Check startup/reconnect without auto-starting capture.
 - [ ] Compare disk/GPU readings with Task Manager.
-- [ ] Verify v1.3.10 CI artifacts, signing identity, version/tag consistency, release notes, and assets.
-- [ ] Publish v1.3.10 after both CI builds pass; hardware checks unavailable in CI remain open.
+- [x] ~~Verify v1.3.10 CI artifacts, signing identity, version/tag consistency, release notes, and assets.~~
+- [x] ~~Publish v1.3.10 after both CI builds pass; hardware checks unavailable in CI remain open.~~ Release: [v1.3.10](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.10), with [APK](https://github.com/yaminichandrakj/bt-mouse/releases/download/v1.3.10/BT-Mouse-v1.3.10.apk) and [Windows companion](https://github.com/yaminichandrakj/bt-mouse/releases/download/v1.3.10/BT-Mouse-Companion.exe).
