@@ -1606,13 +1606,13 @@ fun PhoneCameraWebcamCard(
     coordinator: ConnectionCoordinator
 ) {
     val context = LocalContext.current
-    val isStreaming by (coordinator.isPhoneCameraStreaming ?: remember { mutableStateOf(false) }).collectAsState()
-    val localPreviewBytes by (coordinator.phoneCameraLocalPreview ?: remember { mutableStateOf<ByteArray?>(null) }).collectAsState()
-    val telemetry by (coordinator.phoneCameraStats ?: remember { mutableStateOf(PhoneCameraTelemetry()) }).collectAsState()
-    val currentLens by (coordinator.phoneCameraLens ?: remember { mutableStateOf("back") }).collectAsState()
-    val currentRes by (coordinator.phoneCameraResolution ?: remember { mutableStateOf(640 to 360) }).collectAsState()
-    val currentFps by (coordinator.phoneCameraFps ?: remember { mutableStateOf(24) }).collectAsState()
-    val statusMsg by (coordinator.phoneCameraStatusMessage ?: remember { mutableStateOf("Phone camera standby") }).collectAsState()
+    val isStreaming by coordinator.isPhoneCameraStreaming.collectAsState()
+    val localPreviewBytes by coordinator.phoneCameraLocalPreview.collectAsState()
+    val telemetry by coordinator.phoneCameraStats.collectAsState()
+    val currentLens by coordinator.phoneCameraLens.collectAsState()
+    val currentRes by coordinator.phoneCameraResolution.collectAsState()
+    val currentFps by coordinator.phoneCameraFps.collectAsState()
+    val statusMsg by coordinator.phoneCameraStatusMessage.collectAsState()
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -1628,7 +1628,8 @@ fun PhoneCameraWebcamCard(
     }
 
     val previewBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, localPreviewBytes) {
-        value = localPreviewBytes?.let { bytes ->
+        val bytes = localPreviewBytes
+        value = if (bytes != null) {
             withContext(Dispatchers.Default) {
                 try {
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
@@ -1636,7 +1637,7 @@ fun PhoneCameraWebcamCard(
                     null
                 }
             }
-        }
+        } else null
     }
 
     Card(
