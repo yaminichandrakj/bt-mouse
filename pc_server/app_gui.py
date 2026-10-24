@@ -1,6 +1,6 @@
 """
 BT Mouse & Keyboard - Windows 11 Native Qt6 Desktop Companion Application
-Built on PyQt6 (Qt6 C++ hardware-accelerated rendering) with Windows 11 DWM
+Built on PySide6 (Qt for Python, LGPL; Qt6 hardware-accelerated rendering) with Windows 11 DWM
 Dark Titlebar, DPI-independent Fluent Sidebar Navigation, Fullscreen Video
 Monitor for both Phone & PC Webcams, and separated Videos / Audios / Snapshots folders.
 """
@@ -49,9 +49,9 @@ except ImportError:
     HAS_QR = False
 
 try:
-    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRect
-    from PyQt6.QtGui import QIcon, QPixmap, QImage, QFont, QColor, QAction, QPainter, QPen, QBrush, QCursor
-    from PyQt6.QtWidgets import (
+    from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QSize, QRect
+    from PySide6.QtGui import QIcon, QPixmap, QImage, QFont, QColor, QAction, QPainter, QPen, QBrush, QCursor
+    from PySide6.QtWidgets import (
         QApplication,
         QMainWindow,
         QWidget,
@@ -359,16 +359,101 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 
 if HAS_QT:
     class _UiBridge(QObject):
-        log_signal = pyqtSignal(str)
-        client_signal = pyqtSignal(str, bool)
-        status_signal = pyqtSignal(bool)
-        packet_signal = pyqtSignal(int)
-        phone_cam_signal = pyqtSignal(bytes, int, int, str, float, float)
-        pc_cam_signal = pyqtSignal(bytes)
+        log_signal = Signal(str)
+        client_signal = Signal(str, bool)
+        status_signal = Signal(bool)
+        packet_signal = Signal(int)
+        phone_cam_signal = Signal(bytes, int, int, str, float, float)
+        pc_cam_signal = Signal(bytes)
+        # Worker threads have no Qt event loop, so QTimer.singleShot from them never fires.
+        # Emitting this signal queues the callable onto the GUI thread instead.
+        invoke_signal = Signal(object)
+
+        @Slot(object)
+        def _invoke(self, fn):
+            fn()
+
+    class RegionSelectorOverlay(QWidget):
+        """Translucent full-screen overlay for dragging out the media player preview rectangle."""
+
+        def __init__(self, on_selected):
+            super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+            self._on_selected = on_selected
+            self._origin = None
+            self._current = None
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+            screen = QApplication.primaryScreen()
+            self._dpr = screen.devicePixelRatio()
+            self.setGeometry(screen.geometry())
+
+        def paintEvent(self, event):
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.fillRect(self.rect(), QColor(11, 15, 23, 190))
+            painter.setPen(QColor("#F8FAFC"))
+            title_font = QFont("Segoe UI Variable Display", 18, QFont.Weight.DemiBold)
+            painter.setFont(title_font)
+            painter.drawText(QRect(0, 36, self.width(), 34), Qt.AlignmentFlag.AlignCenter, "Drag around the video player area  ·  Esc to cancel")
+            painter.setPen(QColor("#94A3B8"))
+            painter.setFont(QFont("Segoe UI Variable Text", 11))
+            painter.drawText(
+                QRect(0, 74, self.width(), 24),
+                Qt.AlignmentFlag.AlignCenter,
+                "Only the selected rectangle is sent to your phone while preview is enabled.",
+            )
+            if self._origin and self._current:
+                sel = QRect(self._origin, self._current).normalized()
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                painter.fillRect(sel, Qt.GlobalColor.transparent)
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                painter.fillRect(sel, QColor(56, 189, 248, 28))
+                painter.setPen(QPen(QColor("#38BDF8"), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(sel, 6, 6)
+                w_px, h_px = int(sel.width() * self._dpr), int(sel.height() * self._dpr)
+                painter.setPen(QColor("#F8FAFC"))
+                painter.drawText(sel.x(), max(18, sel.y() - 8), f"{w_px} × {h_px}")
+
+        def mousePressEvent(self, event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._origin = event.position().toPoint()
+                self._current = self._origin
+                self.update()
+
+        def mouseMoveEvent(self, event):
+            if self._origin:
+                self._current = event.position().toPoint()
+                self.update()
+
+        def mouseReleaseEvent(self, event):
+            if not self._origin or event.button() != Qt.MouseButton.LeftButton:
+                return
+            sel = QRect(self._origin, event.position().toPoint()).normalized()
+            # ImageGrab works in physical pixels (the process is per-monitor DPI aware).
+            origin = self.geometry().topLeft()
+            region = {
+                "x": int((origin.x() + sel.x()) * self._dpr),
+                "y": int((origin.y() + sel.y()) * self._dpr),
+                "width": int(sel.width() * self._dpr),
+                "height": int(sel.height() * self._dpr),
+            }
+            try:
+                self._on_selected(region)
+                self.close()
+            except ValueError as exc:
+                self._origin = self._current = None
+                self.update()
+                QMessageBox.information(self, "Select player area", str(exc))
+
+        def keyPressEvent(self, event):
+            if event.key() == Qt.Key.Key_Escape:
+                self.close()
 
     class AspectRatioVideoWidget(QLabel):
         """Responsive video surface that scales frames smoothly to fill available space and supports double-click fullscreen."""
-        double_clicked = pyqtSignal()
+        double_clicked = Signal()
 
         def __init__(self, placeholder_text="", parent=None):
             super().__init__(parent)
@@ -511,6 +596,7 @@ class CompanionApp(QMainWindow):
         self.bridge.packet_signal.connect(self._update_packet_ui)
         self.bridge.phone_cam_signal.connect(self._update_phone_cam_ui)
         self.bridge.pc_cam_signal.connect(self._update_pc_cam_ui)
+        self.bridge.invoke_signal.connect(self.bridge._invoke)
 
         self.phone_fullscreen_win = None
         self.pc_fullscreen_win = None
@@ -2207,9 +2293,14 @@ class CompanionApp(QMainWindow):
         return f"Selected area: {region['width']} × {region['height']} px at ({region['x']}, {region['y']})"
 
     def select_media_preview_region(self):
-        region = {"x": 120, "y": 120, "width": 800, "height": 450}
-        save_media_preview_region(region)
-        self.lbl_media_preview_region.setText(self._media_preview_region_description())
+        def _on_selected(region):
+            save_media_preview_region(region)
+            self.lbl_media_preview_region.setText(self._media_preview_region_description())
+
+        self._region_overlay = RegionSelectorOverlay(_on_selected)
+        self._region_overlay.show()
+        self._region_overlay.activateWindow()
+        self._region_overlay.setFocus()
 
     def refresh_quick_apps(self):
         if not self.server:
@@ -2221,7 +2312,7 @@ class CompanionApp(QMainWindow):
                 quick_apps = load_quick_apps(apps)
                 self.available_apps = apps
                 self.quick_apps = quick_apps
-                QTimer.singleShot(0, self._render_quick_apps_ui)
+                self._run_on_ui(self._render_quick_apps_ui)
             except Exception:
                 pass
 
@@ -2287,15 +2378,14 @@ class CompanionApp(QMainWindow):
                 self.bridge.pc_cam_signal.emit(raw)
                 last_path = getattr(self.server.camera_manager, "last_snapshot_path", None)
                 snap_name = os.path.basename(last_path) if last_path else "snapshot.jpg"
-                QTimer.singleShot(
-                    0,
+                self._run_on_ui(
                     lambda: (
                         self.lbl_media_status.setText(f"✓ Saved webcam snapshot to Snapshots/{snap_name}"),
                         self.refresh_recordings(),
                     ),
                 )
             else:
-                QTimer.singleShot(0, lambda: self.lbl_media_status.setText("✕ Could not access PC webcam."))
+                self._run_on_ui(lambda: self.lbl_media_status.setText("✕ Could not access PC webcam."))
 
         threading.Thread(target=_snap, daemon=True).start()
 
@@ -2308,13 +2398,12 @@ class CompanionApp(QMainWindow):
             rec_file = self.server.audio_manager.start_recording()
             if not rec_file:
                 reason = self.server.audio_manager.last_error or "Microphone unavailable."
-                QTimer.singleShot(0, lambda: self.lbl_media_status.setText(f"✕ {reason}"))
+                self._run_on_ui(lambda: self.lbl_media_status.setText(f"✕ {reason}"))
                 return
             time.sleep(3.0)
             final_file = self.server.audio_manager.stop_recording()
             if final_file and os.path.exists(final_file):
-                QTimer.singleShot(
-                    0,
+                self._run_on_ui(
                     lambda: (
                         self.lbl_media_status.setText(f"✓ Saved audio recording to Audios/{os.path.basename(final_file)}"),
                         self.refresh_recordings(),
@@ -2338,6 +2427,9 @@ class CompanionApp(QMainWindow):
     # ------------------------------------------------------------------
     # Server Callbacks & Logging
     # ------------------------------------------------------------------
+    def _run_on_ui(self, fn):
+        self.bridge.invoke_signal.emit(fn)
+
     def log(self, message):
         if hasattr(self, "bridge"):
             self.bridge.log_signal.emit(str(message))
@@ -2473,8 +2565,7 @@ class CompanionApp(QMainWindow):
             if release.get("draft") or release.get("prerelease"):
                 raise ValueError("GitHub did not return a stable release.")
             if self._version_tuple(tag_name) <= self._version_tuple(APP_VERSION):
-                QTimer.singleShot(
-                    0,
+                self._run_on_ui(
                     lambda: (
                         QMessageBox.information(self, "Companion Updates", f"You are using the latest version (v{APP_VERSION})."),
                         self.btn_update.setEnabled(True),
@@ -2501,10 +2592,9 @@ class CompanionApp(QMainWindow):
                     self.btn_update.setEnabled(True)
                     self.btn_update.setText("Check for Updates")
 
-            QTimer.singleShot(0, _ask)
+            self._run_on_ui(_ask)
         except Exception as exc:
-            QTimer.singleShot(
-                0,
+            self._run_on_ui(
                 lambda error=str(exc): (
                     QMessageBox.critical(self, "Update Failed", f"Could not check for updates.\n\n{error}"),
                     self.btn_update.setEnabled(True),
@@ -2598,10 +2688,9 @@ class CompanionApp(QMainWindow):
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
                 creationflags=flags,
             )
-            QTimer.singleShot(200, self.quit_application)
+            self._run_on_ui(lambda: QTimer.singleShot(200, self.quit_application))
         except Exception as exc:
-            QTimer.singleShot(
-                0,
+            self._run_on_ui(
                 lambda error=str(exc): (
                     QMessageBox.critical(self, "Update Failed", f"Could not install update.\n\n{error}"),
                     self.btn_update.setEnabled(True),
@@ -2631,4 +2720,4 @@ if __name__ == "__main__":
             win.show()
         sys.exit(qt_app.exec())
     else:
-        print("[!] PyQt6 is required to launch the desktop GUI. Run: pip install -r requirements.txt")
+        print("[!] PySide6 is required to launch the desktop GUI. Run: pip install -r requirements.txt")

@@ -6,7 +6,7 @@ datas = [('icon.ico', '.'), ('icon.png', '.')]
 binaries = []
 hiddenimports = []
 for package in (
-    'PyQt6', 'imageio_ffmpeg',
+    'imageio_ffmpeg',
     'sounddevice', 'cv2', 'numpy', 'pycaw', 'comtypes',
     'winrt.windows.media.control', 'winrt.windows.foundation',
     'winrt.windows.devices.bluetooth.rfcomm', 'winrt.windows.networking.sockets',

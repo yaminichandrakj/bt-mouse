@@ -802,10 +802,6 @@ class DpiAndQrRemediationTests(unittest.TestCase):
         self.assertIn('ThreadingHTTPServer(("127.0.0.1", p)', srv_source)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_media_dirs_separated_into_videos_audios_snapshots_and_migrated(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -873,11 +869,12 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
         self.assertEqual(receiver.rotate_90(), 270)
         self.assertEqual(receiver.rotate_90(), 0)
 
-    def test_pyqt6_native_companion_architecture_present(self):
+    def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
         self.assertEqual(app_gui.APP_VERSION, "1.3.17")
-        self.assertIn("PyQt6", gui_source)
+        self.assertIn("from PySide6.QtWidgets import", gui_source)
+        self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
         self.assertIn("AspectRatioVideoWidget", gui_source)
 
@@ -919,3 +916,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
         self.assertIn("steam", responses[0]["icons"])
         self.assertEqual(responses[0]["icons"]["steam"]["brand_key"], "steam")
         self.assertTrue(responses[0]["icons"]["steam"]["icon"])
+
+
+if __name__ == "__main__":
+    unittest.main()
