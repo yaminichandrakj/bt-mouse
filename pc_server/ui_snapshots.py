@@ -38,11 +38,20 @@ def main():
             raise SystemExit(f"Could not save {target}")
         print(f"saved {target}")
 
-    if win.stack.count() != len(win.nav_buttons):
-        raise SystemExit("Navigation buttons and pages are out of sync")
-    sys.stdout.flush()
-    os._exit(0)
+    print(f"pages={win.stack.count()} nav_buttons={len(win.nav_buttons)}", flush=True)
+    return 0 if win.stack.count() == len(win.nav_buttons) else 3
 
 
 if __name__ == "__main__":
-    main()
+    import faulthandler
+    import traceback
+
+    faulthandler.enable(file=sys.stdout)
+    try:
+        code = main()
+    except BaseException:
+        traceback.print_exc(file=sys.stdout)
+        code = 2
+    print(f"ui_snapshots exit code {code}", flush=True)
+    # Skip interpreter/Qt teardown: server daemon threads and the tray icon can stall or crash it.
+    os._exit(code)

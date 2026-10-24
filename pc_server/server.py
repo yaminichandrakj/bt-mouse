@@ -512,12 +512,13 @@ def extract_windows_app_icon_base64(path_or_cmd, size=44):
         except Exception:
             pass
 
-        # Strategy 2: QFileIconProvider fallback if Qt is initialized
+        # Strategy 2: QFileIconProvider fallback, only on the Qt GUI thread (QPixmap is not thread-safe)
         if not encoded:
             try:
-                from PyQt6.QtWidgets import QApplication, QFileIconProvider
-                from PyQt6.QtCore import QFileInfo, QBuffer, QIODevice
-                if QApplication.instance() is not None:
+                from PySide6.QtWidgets import QApplication, QFileIconProvider
+                from PySide6.QtCore import QFileInfo, QBuffer, QIODevice, QThread
+                qt_app = QApplication.instance()
+                if qt_app is not None and QThread.currentThread() == qt_app.thread():
                     provider = QFileIconProvider()
                     qicon = provider.icon(QFileInfo(target))
                     if not qicon.isNull():
@@ -3235,7 +3236,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.17"
+                    "version": "1.4.0"
                 }
             else:
                 self._record_auth_failure(addr)

@@ -101,7 +101,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.3.17"
+APP_VERSION = "1.4.0"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -568,6 +568,12 @@ if HAS_QT:
                 self.showMaximized()
             else:
                 self.showFullScreen()
+
+        def keyPressEvent(self, event):
+            if event.key() == Qt.Key.Key_F11:
+                self._toggle_fullscreen_state()
+            else:
+                super().keyPressEvent(event)
 
 
 class CompanionApp(QMainWindow):

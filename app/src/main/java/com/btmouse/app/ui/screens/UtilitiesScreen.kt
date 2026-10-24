@@ -60,6 +60,7 @@ import com.btmouse.app.ui.theme.AccentAmber
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
+import com.btmouse.app.ui.theme.DarkBackground
 import com.btmouse.app.ui.theme.DarkBorder
 import com.btmouse.app.ui.theme.DarkSurface
 import com.btmouse.app.ui.theme.DarkSurfaceVariant

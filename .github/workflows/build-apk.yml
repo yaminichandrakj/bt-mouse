@@ -121,6 +121,7 @@ jobs:
         run: python ui_snapshots.py ../ui-snapshots
 
       - name: Upload UI Snapshot Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: BT-Mouse-Companion-UI-Snapshots
