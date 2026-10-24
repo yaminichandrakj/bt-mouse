@@ -12,8 +12,8 @@ android {
         applicationId = "com.btmouse.app"
         minSdk = 28
         targetSdk = 34
-        versionCode = 17
-        versionName = "1.3.10"
+        versionCode = 18
+        versionName = "1.3.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

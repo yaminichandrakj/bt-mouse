@@ -1,5 +1,4 @@
-"""Hardware-free regression checks for the companion command protocol."""
-
+import asyncio
 import base64
 import json
 import os
@@ -228,6 +227,58 @@ class ServerProtocolTests(unittest.TestCase):
             self.assertFalse(old_file.exists())
             self.assertTrue(active_file.exists())
 
+    def test_recording_delete_removes_file_and_returns_updated_catalog(self):
+        srv = self.make_server()
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            test_rec = folder / "audio_20261024_120000.wav"
+            test_rec.write_bytes(b"RIFF" + b"\x00" * 100)
+            srv.audio_manager = SimpleNamespace(recordings_dir=str(folder), recording=False, current_filename=None)
+            srv.camera_manager = SimpleNamespace(streaming=False, last_recording_path=None, stream_thread=None)
+            srv.live_audio_manager = SimpleNamespace(capture_path=None, output_path=None, touch_owner=Mock())
+
+            responses = []
+            srv.handle_packet(
+                {"type": "recording_delete", "id": test_rec.name, "token": self.TOKEN},
+                self.CLIENT,
+                responses.append
+            )
+
+            self.assertFalse(test_rec.exists())
+            self.assertEqual(responses[0]["type"], "recording_delete_response")
+            self.assertTrue(responses[0]["success"])
+            self.assertEqual(responses[1]["type"], "recordings_list_response")
+            self.assertEqual(responses[1]["files"], [])
+
+    def test_snapshot_saved_to_directory_and_listed_and_deleted(self):
+        srv = self.make_server()
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td)
+            snaps_dir = folder / "Snapshots"
+            snaps_dir.mkdir()
+            test_snap = snaps_dir / "snapshot_20261024_120000.jpg"
+            test_snap.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 50)
+            srv.audio_manager = SimpleNamespace(recordings_dir=str(folder), recording=False, current_filename=None)
+            srv.camera_manager = SimpleNamespace(streaming=False, last_recording_path=None, stream_thread=None, snapshots_dir=str(snaps_dir))
+            srv.live_audio_manager = SimpleNamespace(capture_path=None, output_path=None, touch_owner=Mock())
+
+            catalog = srv._get_recordings_list()
+            self.assertEqual(len(catalog["files"]), 1)
+            self.assertEqual(catalog["files"][0]["id"], test_snap.name)
+            self.assertEqual(catalog["files"][0]["media_type"], "snapshot")
+
+            responses = []
+            srv.handle_packet(
+                {"type": "recording_delete", "id": test_snap.name, "token": self.TOKEN},
+                self.CLIENT,
+                responses.append
+            )
+
+            self.assertFalse(test_snap.exists())
+            self.assertEqual(responses[0]["type"], "recording_delete_response")
+            self.assertTrue(responses[0]["success"])
+            self.assertEqual(responses[1]["files"], [])
+
 
 class CameraLifecycleTests(unittest.TestCase):
     def test_stop_releases_capture_to_unblock_camera_read(self):
@@ -417,6 +468,87 @@ class MediaStateTests(unittest.TestCase):
         self.assertFalse(state["has_media"])
         self.assertEqual(state["status"], "NoMedia")
         self.assertEqual(state["title"], "")
+
+    def test_com_context_tolerates_rpc_e_changed_mode(self):
+        controller = object.__new__(server.MediaController)
+        err = OSError()
+        err.winerror = -2147417850  # 0x80010106 RPC_E_CHANGED_MODE
+        with patch.dict("sys.modules", {"comtypes": Mock(CoInitialize=Mock(side_effect=err), CoUninitialize=Mock())}):
+            import comtypes
+            with controller._com_context():
+                pass
+            comtypes.CoUninitialize.assert_not_called()
+
+    def test_volume_control_updates_level_and_muted(self):
+        controller = object.__new__(server.MediaController)
+        controller.has_pycaw = True
+        controller.last_state = {}
+        mock_endpoint = Mock()
+        mock_endpoint.GetMasterVolumeLevelScalar.return_value = 0.75
+        mock_endpoint.GetMute.return_value = 0
+        mock_speakers = Mock(EndpointVolume=mock_endpoint)
+        controller.audio_utilities = Mock(GetSpeakers=Mock(return_value=mock_speakers))
+        controller._com_context = Mock()
+        controller._com_context.return_value.__enter__ = Mock(return_value=None)
+        controller._com_context.return_value.__exit__ = Mock(return_value=None)
+
+        success = controller.set_volume(0.75)
+        self.assertTrue(success)
+        self.assertEqual(controller.last_state["volume"], 0.75)
+        self.assertFalse(controller.last_state["muted"])
+        self.assertTrue(controller.last_state["volume_available"])
+
+        mock_endpoint.GetMute.return_value = 1
+        success_mute = controller.set_mute(True)
+        self.assertTrue(success_mute)
+        self.assertTrue(controller.last_state["muted"])
+
+    def test_active_smtc_session_prioritizes_playing_over_paused(self):
+        controller = object.__new__(server.MediaController)
+        controller.has_winrt = True
+        session_paused = Mock()
+        session_paused.get_playback_info.return_value = Mock(playback_status=5)  # Paused
+        session_playing = Mock()
+        session_playing.get_playback_info.return_value = Mock(playback_status=4)  # Playing
+
+        mgr = Mock()
+        mgr.get_sessions.return_value = [session_paused, session_playing]
+        mgr.get_current_session.return_value = session_paused
+
+        async def _mock_req():
+            return mgr
+
+        controller.wmc = Mock(GlobalSystemMediaTransportControlsSessionManager=Mock(
+            request_async=_mock_req
+        ))
+
+        chosen = asyncio.run(controller._active_smtc_session())
+        self.assertEqual(chosen, session_playing)
+
+
+class QuickAppsTests(unittest.TestCase):
+    def test_update_quick_apps_falls_back_when_cache_empty(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = "123456"
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._query_cache_lock = threading.Lock()
+        instance._query_cache = {}
+        shortcut = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\TestApp.lnk"
+        instance._get_installed_apps = Mock(return_value=[{"name": "TestApp", "path": shortcut, "is_quick": False}])
+        responses = []
+
+        with patch("server.load_quick_apps", return_value=[]), patch("server.save_quick_apps", return_value=[{"name": "TestApp", "path": shortcut}]):
+            instance.handle_packet(
+                {"type": "update_quick_apps", "paths": [shortcut], "token": "123456"},
+                ("127.0.0.1", 9999),
+                responses.append
+            )
+
+        self.assertTrue(responses)
+        self.assertTrue(responses[0].get("success"))
+        self.assertEqual(responses[0].get("paths"), [shortcut])
 
 
 if __name__ == "__main__":

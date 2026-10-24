@@ -312,6 +312,15 @@ class BluetoothRfcommManager(
                     if (success) _installedApps.value = _installedApps.value.map { it.copy(isQuick = it.path in paths) }
                     _statusMessage.value = root.get("message")?.asString ?: "Could not update PC Quick Apps"
                 }
+                "launch_app_response" -> {
+                    val success = root.get("success")?.asBoolean ?: false
+                    val app = root.get("app")?.asString.orEmpty()
+                    _statusMessage.value = if (success) {
+                        "Launched $app"
+                    } else {
+                        "Could not launch $app. The shortcut may have been moved or removed."
+                    }
+                }
                 "camera_frame_response" -> {
                     val b64 = root.get("frame")?.asString
                     if (!b64.isNullOrEmpty()) {
@@ -582,6 +591,10 @@ class BluetoothRfcommManager(
     override fun streamRecording(id: String) = recordingTransfer.stream(id, ::sendJson)
 
     override fun stopRecordingStream() = recordingTransfer.stopStream(::sendJson)
+
+    override fun deleteRecording(id: String) = recordingTransfer.delete(id, ::sendJson)
+
+    override fun deleteSnapshot(path: String): Boolean = snapshotGallery.delete(path)
 
     override fun requestCameraSnapshot() {
         val obj = JsonObject().apply { addProperty("type", "camera_snapshot") }

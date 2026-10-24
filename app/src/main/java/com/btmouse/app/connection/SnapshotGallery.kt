@@ -1,6 +1,6 @@
 package com.btmouse.app.connection
 
-import android.content.Context
+import android.os.Environment
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -8,16 +8,53 @@ import java.io.File
 
 data class SnapshotEntry(val path: String, val capturedAt: Long)
 
-/** Small private on-device gallery for full-quality PC webcam snapshots. */
+/** Gallery for full-quality PC webcam snapshots stored in accessible Pictures directory. */
 class SnapshotGallery(context: Context) {
-    private val directory = File(context.applicationContext.filesDir, "camera_snapshots").apply { mkdirs() }
+    private val directory: File = run {
+        val external = context.applicationContext.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        val dir = if (external != null) File(external, "Snapshots") else File(context.applicationContext.filesDir, "camera_snapshots")
+        dir.apply { mkdirs() }
+    }
+
+    val directoryPath: String get() = directory.absolutePath
+
     private val _snapshots = MutableStateFlow(scan())
     val snapshots: StateFlow<List<SnapshotEntry>> = _snapshots.asStateFlow()
+
+    init {
+        try {
+            val legacy = File(context.applicationContext.filesDir, "camera_snapshots")
+            if (legacy.exists() && legacy.isDirectory && legacy.canonicalPath != directory.canonicalPath) {
+                legacy.listFiles()?.forEach { file ->
+                    if (file.isFile && file.extension.equals("jpg", ignoreCase = true)) {
+                        val dest = File(directory, file.name)
+                        if (!dest.exists()) file.renameTo(dest) else file.delete()
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+    }
 
     @Synchronized
     fun refresh(): StateFlow<List<SnapshotEntry>> {
         _snapshots.value = scan()
         return snapshots
+    }
+
+    @Synchronized
+    fun delete(path: String): Boolean {
+        return try {
+            val file = File(path)
+            if (file.exists() && file.parentFile?.canonicalPath == directory.canonicalPath) {
+                val deleted = file.delete()
+                _snapshots.value = scan()
+                deleted
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     @Synchronized

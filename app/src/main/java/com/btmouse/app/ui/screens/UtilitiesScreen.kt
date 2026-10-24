@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -49,6 +50,7 @@ import com.btmouse.app.connection.RecordingEntry
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.theme.DarkSurfaceVariant
 import com.btmouse.app.ui.theme.AccentCyan
+import com.btmouse.app.ui.theme.AccentRose
 import com.btmouse.app.ui.theme.DarkSurface
 import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextPrimary
@@ -246,14 +248,48 @@ private fun RecordingRow(
     coordinator: ConnectionCoordinator,
     onOpen: () -> Unit
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Recording", color = TextPrimary) },
+            text = { Text("Are you sure you want to delete ${recording.name}?", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        coordinator.deleteRecording(recording.id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                Button(
+                    onClick = { showDeleteConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)
+                ) { Text("Cancel") }
+            },
+            containerColor = DarkSurfaceVariant
+        )
+    }
+
     Card(colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(recording.name, color = TextPrimary, fontSize = 12.sp)
             Text("${recording.mediaType.replaceFirstChar { it.uppercase() }} · ${recording.size / (1024 * 1024)} MB",
                 color = AccentCyan, fontSize = 10.sp)
             if (recording.localPath != null) {
-                Button(onClick = onOpen, colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)) {
-                    Text("Open on phone", fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onOpen, colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)) {
+                        Text("Open on phone", fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = { showDeleteConfirm = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                    ) {
+                        Text("Delete", fontSize = 11.sp)
+                    }
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -267,6 +303,11 @@ private fun RecordingRow(
                         enabled = connected,
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                     ) { Text("Download", fontSize = 11.sp) }
+                    Button(
+                        onClick = { showDeleteConfirm = true },
+                        enabled = connected,
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                    ) { Text("Delete", fontSize = 11.sp) }
                 }
             }
         }

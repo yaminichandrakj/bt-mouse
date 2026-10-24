@@ -97,6 +97,8 @@ interface InputConnection {
     fun downloadRecording(id: String) {}
     fun streamRecording(id: String) {}
     fun stopRecordingStream() {}
+    fun deleteRecording(id: String) {}
+    fun deleteSnapshot(path: String): Boolean = false
     fun startPcLiveAudio(record: Boolean = false) {}
     fun stopPcLiveAudio() {}
     fun startPhoneLiveAudio(record: Boolean = false): Boolean = false

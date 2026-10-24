@@ -89,6 +89,27 @@ class RecordingTransferClient(context: Context) {
         _status.value = "Online playback stopped"
     }
 
+    @Synchronized fun delete(id: String, send: ((JsonObject) -> Unit)? = null) {
+        if (id.isBlank() || id.length > 255 || File(id).name != id) return
+        val local = File(directory, id)
+        var localDeleted = false
+        if (local.exists()) {
+            localDeleted = local.delete()
+        }
+        if (send != null) {
+            send(JsonObject().apply {
+                addProperty("type", "recording_delete")
+                addProperty("id", id)
+            })
+            _status.value = if (localDeleted) "Deleted local copy; deleting from PC…" else "Deleting from PC…"
+        } else {
+            if (localDeleted) {
+                _status.value = "Deleted local recording: $id"
+            }
+        }
+        publishRecordings()
+    }
+
     @Synchronized fun handleMessage(message: JsonObject, send: (JsonObject) -> Unit) {
         when (message.get("type")?.asString.orEmpty()) {
             "recordings_list_response" -> {
@@ -110,6 +131,19 @@ class RecordingTransferClient(context: Context) {
                 } ?: emptyList()
                 publishRecordings()
                 _status.value = message.get("message")?.asString.orEmpty()
+            }
+            "recording_delete_response" -> {
+                val success = message.get("success")?.asBoolean ?: false
+                val msg = message.get("message")?.asString.orEmpty()
+                _status.value = msg.ifBlank { if (success) "Recording deleted." else "Could not delete recording." }
+                val deletedId = message.get("id")?.asString.orEmpty()
+                if (deletedId.isNotBlank()) {
+                    remoteFiles = remoteFiles.filter { it.id != deletedId }
+                    publishRecordings()
+                }
+            }
+            "recording_delete_error" -> {
+                _status.value = message.get("message")?.asString ?: "Could not delete recording"
             }
             "recording_download_start" -> beginTransfer(message, send)
             "recording_download_chunk" -> receiveChunk(message, send)

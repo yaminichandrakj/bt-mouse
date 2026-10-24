@@ -328,6 +328,14 @@ class ConnectionCoordinator(
         currentInputConnection.stopRecordingStream()
     }
 
+    override fun deleteRecording(id: String) {
+        currentInputConnection.deleteRecording(id)
+    }
+
+    override fun deleteSnapshot(path: String): Boolean {
+        return currentInputConnection.deleteSnapshot(path)
+    }
+
     override fun startPcLiveAudio(record: Boolean) {
         currentInputConnection.startPcLiveAudio(record)
     }

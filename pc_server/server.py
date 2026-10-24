@@ -19,6 +19,9 @@ import secrets
 import queue
 import re
 import shutil
+import subprocess
+import datetime
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -241,6 +244,36 @@ if IS_WINDOWS:
     MOUSEEVENTF_WHEEL = 0x0800
     MOUSEEVENTF_HWHEEL = 0x1000
     MOUSEEVENTF_ABSOLUTE = 0x8000
+    MOUSEEVENTF_MOVE_NOCOALESCE = 0x2000
+    INPUT_MOUSE = 0
+
+    class _MouseInput(ctypes.Structure):
+        _fields_ = [
+            ("dx", ctypes.c_long),
+            ("dy", ctypes.c_long),
+            ("mouseData", ctypes.c_ulong),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class _InputUnion(ctypes.Union):
+        _fields_ = [("mi", _MouseInput), ("padding", ctypes.c_byte * (ctypes.sizeof(ctypes.c_size_t) * 3))]
+
+    class _Input(ctypes.Structure):
+        _anonymous_ = ("data",)
+        _fields_ = [("type", ctypes.c_ulong), ("data", _InputUnion)]
+
+    u32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(_Input), ctypes.c_int)
+    u32.SendInput.restype = ctypes.c_uint
+
+    def send_windows_mouse_event(flags, dx=0, dy=0, mouse_data=0, _extra_info=0):
+        """Insert one checked mouse event through the supported Windows input API."""
+        event = _Input()
+        event.type = INPUT_MOUSE
+        event.mi = _MouseInput(dx, dy, mouse_data & 0xFFFFFFFF, flags, 0, 0)
+        inserted = u32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_Input))
+        return inserted == 1
 
 try:
     from pynput.mouse import Controller as MouseController, Button
@@ -341,27 +374,53 @@ class MediaController:
             except Exception:
                 self.has_pycaw = False
 
+    @contextmanager
+    def _com_context(self):
+        need_uninit = False
+        try:
+            import comtypes
+            try:
+                comtypes.CoInitialize()
+                need_uninit = True
+            except OSError as e:
+                # 0x80010106: RPC_E_CHANGED_MODE. COM is already initialized in a different apartment mode.
+                if (getattr(e, "winerror", 0) & 0xFFFFFFFF) == 0x80010106:
+                    need_uninit = False
+                else:
+                    raise
+            yield
+        finally:
+            if need_uninit:
+                try:
+                    comtypes.CoUninitialize()
+                except Exception:
+                    pass
+
+    def _get_endpoint_volume(self):
+        speakers = self.audio_utilities.GetSpeakers()
+        if speakers is None:
+            raise RuntimeError("Windows has no default playback device.")
+        return speakers.EndpointVolume
+
     def get_volume(self):
         if self.has_pycaw:
-            initialized = False
             try:
-                import comtypes
-                comtypes.CoInitialize()
-                initialized = True
-                speakers = self.audio_utilities.GetSpeakers()
-                if speakers is None:
-                    raise RuntimeError("Windows has no default playback device.")
-                vol = speakers.EndpointVolume
-                level, muted = vol.GetMasterVolumeLevelScalar(), bool(vol.GetMute())
-                self.last_state["volume_available"] = True
-                self.last_state["volume_error"] = ""
-                return level, muted
+                with self._com_context():
+                    vol = self._get_endpoint_volume()
+                    level = round(vol.GetMasterVolumeLevelScalar(), 3)
+                    muted = bool(vol.GetMute())
+                    self.last_state["volume"] = level
+                    self.last_state["muted"] = muted
+                    self.last_state["is_muted"] = muted
+                    self.last_state["volume_available"] = True
+                    self.last_state["volume_error"] = ""
+                    return level, muted
             except Exception as e:
+                err_msg = str(e)
+                if "Element not found" in err_msg or (getattr(e, "hresult", 0) & 0xFFFFFFFF) == 0x80070490:
+                    err_msg = "No default Windows audio playback device is connected."
                 self.last_state["volume_available"] = False
-                self.last_state["volume_error"] = str(e)
-            finally:
-                if initialized:
-                    comtypes.CoUninitialize()
+                self.last_state["volume_error"] = err_msg
         else:
             self.last_state["volume_available"] = False
             self.last_state["volume_error"] = "Windows audio control is unavailable."
@@ -369,52 +428,53 @@ class MediaController:
 
     def set_volume(self, scalar):
         if self.has_pycaw:
-            initialized = False
             try:
-                import comtypes
-                comtypes.CoInitialize()
-                initialized = True
-                speakers = self.audio_utilities.GetSpeakers()
-                if speakers is None:
-                    raise RuntimeError("Windows has no default playback device.")
-                vol = speakers.EndpointVolume
-                val = max(0.0, min(1.0, float(scalar)))
-                vol.SetMasterVolumeLevelScalar(val, None)
-                self.last_state["volume"] = round(vol.GetMasterVolumeLevelScalar(), 3)
-                self.last_state["volume_available"] = True
-                self.last_state["volume_error"] = ""
-                return True
+                with self._com_context():
+                    vol = self._get_endpoint_volume()
+                    val = max(0.0, min(1.0, float(scalar)))
+                    vol.SetMasterVolumeLevelScalar(val, None)
+                    current_level = round(vol.GetMasterVolumeLevelScalar(), 3)
+                    is_muted = bool(vol.GetMute())
+                    self.last_state["volume"] = current_level
+                    self.last_state["muted"] = is_muted
+                    self.last_state["is_muted"] = is_muted
+                    self.last_state["volume_available"] = True
+                    self.last_state["volume_error"] = ""
+                    return True
             except Exception as e:
+                err_msg = str(e)
+                if "Element not found" in err_msg or (getattr(e, "hresult", 0) & 0xFFFFFFFF) == 0x80070490:
+                    err_msg = "No default Windows audio playback device is connected."
                 self.last_state["volume_available"] = False
-                self.last_state["volume_error"] = str(e)
-            finally:
-                if initialized:
-                    comtypes.CoUninitialize()
+                self.last_state["volume_error"] = err_msg
+        else:
+            self.last_state["volume_available"] = False
+            self.last_state["volume_error"] = "Windows audio control is unavailable."
         return False
 
     def set_mute(self, muted):
         if self.has_pycaw:
-            initialized = False
             try:
-                import comtypes
-                comtypes.CoInitialize()
-                initialized = True
-                speakers = self.audio_utilities.GetSpeakers()
-                if speakers is None:
-                    raise RuntimeError("Windows has no default playback device.")
-                vol = speakers.EndpointVolume
-                vol.SetMute(1 if muted else 0, None)
-                self.last_state["muted"] = bool(vol.GetMute())
-                self.last_state["is_muted"] = self.last_state["muted"]
-                self.last_state["volume_available"] = True
-                self.last_state["volume_error"] = ""
-                return True
+                with self._com_context():
+                    vol = self._get_endpoint_volume()
+                    vol.SetMute(1 if muted else 0, None)
+                    current_level = round(vol.GetMasterVolumeLevelScalar(), 3)
+                    is_muted = bool(vol.GetMute())
+                    self.last_state["muted"] = is_muted
+                    self.last_state["is_muted"] = is_muted
+                    self.last_state["volume"] = current_level
+                    self.last_state["volume_available"] = True
+                    self.last_state["volume_error"] = ""
+                    return True
             except Exception as e:
+                err_msg = str(e)
+                if "Element not found" in err_msg or (getattr(e, "hresult", 0) & 0xFFFFFFFF) == 0x80070490:
+                    err_msg = "No default Windows audio playback device is connected."
                 self.last_state["volume_available"] = False
-                self.last_state["volume_error"] = str(e)
-            finally:
-                if initialized:
-                    comtypes.CoUninitialize()
+                self.last_state["volume_error"] = err_msg
+        else:
+            self.last_state["volume_available"] = False
+            self.last_state["volume_error"] = "Windows audio control is unavailable."
         return False
 
     async def _get_media_artwork(self, props, cache_key, max_encoded_bytes):
@@ -475,29 +535,20 @@ class MediaController:
         if not IS_WINDOWS or not self.has_pycaw:
             return None
         browser_names = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"}
-        initialized = False
         try:
-            import comtypes
-            comtypes.CoInitialize()
-            initialized = True
-            for session in self.audio_utilities.GetAllSessions():
-                try:
-                    process = getattr(session, "Process", None)
-                    if not process or int(session.State) != 1:
+            with self._com_context():
+                for session in self.audio_utilities.GetAllSessions():
+                    try:
+                        process = getattr(session, "Process", None)
+                        if not process or int(session.State) != 1:
+                            continue
+                        process_name = process.name()
+                        if process_name and process_name.lower() in browser_names:
+                            return process_name.removesuffix(".exe"), process.pid
+                    except Exception:
                         continue
-                    process_name = process.name()
-                    if process_name and process_name.lower() in browser_names:
-                        return process_name.removesuffix(".exe"), process.pid
-                except Exception:
-                    continue
         except Exception:
             return None
-        finally:
-            if initialized:
-                try:
-                    comtypes.CoUninitialize()
-                except Exception:
-                    pass
         return None
 
     @staticmethod
@@ -654,7 +705,7 @@ class MediaController:
                     active.append((status, session))
             except Exception:
                 continue
-        return next((session for status, session in active if status == 5), active[0][1] if active else None)
+        return next((session for status, session in active if status == 4), active[0][1] if active else None)
 
     def seek(self, seconds):
         if self.has_winrt:
@@ -761,7 +812,6 @@ class MediaController:
                 self.fallback_media_func(0xB6)
                 handled = True
         return handled
-        return True
 
 
 class BluetoothRfcommServer:
@@ -916,6 +966,9 @@ class CameraManager:
         user_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         self.recordings_dir = os.path.join(user_data, "BTMouse", "Recordings")
         os.makedirs(self.recordings_dir, exist_ok=True)
+        self.snapshots_dir = os.path.join(user_data, "BTMouse", "Snapshots")
+        os.makedirs(self.snapshots_dir, exist_ok=True)
+        self.last_snapshot_path = None
         self.auto_record_enabled = False
         self.last_recording_path = None
         self.last_recording_error = ""
@@ -929,7 +982,25 @@ class CameraManager:
         except ImportError:
             pass
 
-    def get_snapshot(self, max_width=800, quality=75, max_encoded_bytes=None):
+    def _save_snapshot_to_disk(self, buffer_bytes):
+        try:
+            os.makedirs(self.snapshots_dir, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            candidate = os.path.join(self.snapshots_dir, f"snapshot_{timestamp}.jpg")
+            counter = 1
+            while os.path.exists(candidate):
+                candidate = os.path.join(self.snapshots_dir, f"snapshot_{timestamp}_{counter}.jpg")
+                counter += 1
+            with open(candidate, "wb") as f:
+                f.write(buffer_bytes)
+            self.last_snapshot_path = candidate
+            print(f"[+] Saved camera snapshot to {candidate}")
+            return candidate
+        except Exception as exc:
+            print(f"[-] Failed to save snapshot file: {exc}")
+            return None
+
+    def get_snapshot(self, max_width=800, quality=75, max_encoded_bytes=None, save_to_disk=True):
         if not self.has_cv2:
             return None
         try:
@@ -950,7 +1021,10 @@ class CameraManager:
                 encoded, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
                 if not encoded or (max_encoded_bytes and buffer.nbytes > max_encoded_bytes):
                     return None
-                return base64.b64encode(buffer).decode('utf-8')
+                raw_bytes = buffer.tobytes()
+                if save_to_disk:
+                    self._save_snapshot_to_disk(raw_bytes)
+                return base64.b64encode(raw_bytes).decode('utf-8')
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
             if not cap.isOpened():
                 cap = cv2.VideoCapture(0)
@@ -971,7 +1045,10 @@ class CameraManager:
             if ret:
                 if max_encoded_bytes and buf.nbytes > max_encoded_bytes:
                     return None
-                return base64.b64encode(buf).decode('utf-8')
+                raw_bytes = buf.tobytes()
+                if save_to_disk:
+                    self._save_snapshot_to_disk(raw_bytes)
+                return base64.b64encode(raw_bytes).decode('utf-8')
         except Exception as e:
             print(f"[-] Camera snapshot error: {e}")
         return None
@@ -2241,7 +2318,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.10"
+                    "version": "1.3.11"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2292,32 +2369,32 @@ class Server:
 
             if IS_WINDOWS:
                 if dx != 0 or dy != 0:
-                    u32.mouse_event(MOUSEEVENTF_MOVE, dx, dy, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, dx, dy, 0, 0)
 
                 if v_scroll != 0:
-                    u32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, v_scroll * 120, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_WHEEL, 0, 0, v_scroll * 120, 0)
 
                 if h_scroll != 0:
-                    u32.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, h_scroll * 120, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, h_scroll * 120, 0)
 
                 if btn != self.last_buttons:
                     # Left
                     if (btn & 1) and not (self.last_buttons & 1):
-                        u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                        send_windows_mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
                     elif not (btn & 1) and (self.last_buttons & 1):
-                        u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        send_windows_mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
                     # Right
                     if (btn & 2) and not (self.last_buttons & 2):
-                        u32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                        send_windows_mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
                     elif not (btn & 2) and (self.last_buttons & 2):
-                        u32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+                        send_windows_mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
 
                     # Middle
                     if (btn & 4) and not (self.last_buttons & 4):
-                        u32.mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
+                        send_windows_mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
                     elif not (btn & 4) and (self.last_buttons & 4):
-                        u32.mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+                        send_windows_mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
 
                     self.last_buttons = btn
             elif self.mouse:
@@ -2349,21 +2426,21 @@ class Server:
             if IS_WINDOWS:
                 # Left
                 if (btn & 1) and not (self.last_buttons & 1):
-                    u32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
                 elif not (btn & 1) and (self.last_buttons & 1):
-                    u32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
                 # Right
                 if (btn & 2) and not (self.last_buttons & 2):
-                    u32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
                 elif not (btn & 2) and (self.last_buttons & 2):
-                    u32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
 
                 # Middle
                 if (btn & 4) and not (self.last_buttons & 4):
-                    u32.mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
                 elif not (btn & 4) and (self.last_buttons & 4):
-                    u32.mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
 
                 self.last_buttons = btn
             elif self.mouse:
@@ -2401,13 +2478,13 @@ class Server:
                 btn_up = MOUSEEVENTF_RIGHTUP if is_eraser else MOUSEEVENTF_LEFTUP
 
                 if action == "down":
-                    u32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
-                    u32.mouse_event(btn_down, 0, 0, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE_NOCOALESCE, norm_x, norm_y, 0, 0)
+                    send_windows_mouse_event(btn_down, 0, 0, 0, 0)
                     self.last_pen_button = ("right" if is_eraser else "left")
                 elif action == "move":
-                    u32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
+                    send_windows_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE_NOCOALESCE, norm_x, norm_y, 0, 0)
                 elif action == "up":
-                    u32.mouse_event(btn_up, 0, 0, 0, 0)
+                    send_windows_mouse_event(btn_up, 0, 0, 0, 0)
                     self.last_pen_button = None
             elif self.mouse:
                 if action == "down":
@@ -2470,7 +2547,18 @@ class Server:
                 return
             with self._query_cache_lock:
                 cached_apps = self._query_cache.get("apps")
-                discovered_apps = cached_apps[1] if cached_apps else None
+                discovered_apps = list(cached_apps[1]) if cached_apps and cached_apps[1] else []
+            if not discovered_apps:
+                try:
+                    discovered_apps = self._get_installed_apps()
+                except Exception:
+                    discovered_apps = []
+            try:
+                for qa in load_quick_apps():
+                    if qa.get("path") and not any(os.path.normcase(os.path.realpath(a.get("path", ""))) == os.path.normcase(os.path.realpath(qa["path"])) for a in discovered_apps):
+                        discovered_apps.append(qa)
+            except Exception:
+                pass
             discovered_by_path = {
                 os.path.normcase(os.path.realpath(app.get("path", ""))): app
                 for app in (discovered_apps or [])
@@ -2599,6 +2687,21 @@ class Server:
                 if ack:
                     ack.set()
 
+        elif cmd_type == "recording_delete":
+            rec_id = str(data.get("id", ""))
+            path = self._recording_path(rec_id)
+            if path is None:
+                respond({"type": "recording_delete_error", "message": "Recording was not found"})
+            elif self._is_recording_active(path):
+                respond({"type": "recording_delete_error", "message": "Recording is still in progress"})
+            else:
+                try:
+                    path.unlink()
+                    respond({"type": "recording_delete_response", "id": rec_id, "success": True, "message": f"Deleted {rec_id}"})
+                    respond(self._get_recordings_list())
+                except OSError as exc:
+                    respond({"type": "recording_delete_error", "message": f"Could not delete recording: {exc}"})
+
         elif cmd_type == "camera_snapshot":
             # Snapshot quality is independent of the lower-resolution live
             # preview. UDP transfers are split into MTU-safe chunks and can be
@@ -2682,26 +2785,41 @@ class Server:
         return False
 
     def _get_recordings_list(self):
-        folder = Path(self.audio_manager.recordings_dir).resolve()
-        allowed_extensions = {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv"}
+        allowed_extensions = {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv", ".jpg", ".jpeg", ".png"}
         files = []
+        folders = []
+        if hasattr(self, "audio_manager") and getattr(self.audio_manager, "recordings_dir", None):
+            try:
+                folders.append(Path(self.audio_manager.recordings_dir).resolve())
+            except Exception:
+                pass
+        if hasattr(self, "camera_manager") and getattr(self.camera_manager, "snapshots_dir", None):
+            try:
+                folders.append(Path(self.camera_manager.snapshots_dir).resolve())
+            except Exception:
+                pass
         try:
-            for path in folder.iterdir():
-                if not path.is_file() or path.suffix.lower() not in allowed_extensions:
+            for folder in folders:
+                if not folder.exists():
                     continue
-                if self._is_recording_active(path):
-                    continue
-                try:
-                    stat = path.stat()
-                    files.append({
-                        "id": path.name,
-                        "name": path.name,
-                        "size": stat.st_size,
-                        "modified": int(stat.st_mtime * 1000),
-                        "media_type": "audio" if path.suffix.lower() in {".wav", ".m4a", ".mp3"} else "video",
-                    })
-                except OSError:
-                    continue
+                for path in folder.iterdir():
+                    if not path.is_file() or path.suffix.lower() not in allowed_extensions:
+                        continue
+                    if self._is_recording_active(path):
+                        continue
+                    try:
+                        stat = path.stat()
+                        is_img = path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                        media_type = "snapshot" if is_img else ("audio" if path.suffix.lower() in {".wav", ".m4a", ".mp3"} else "video")
+                        files.append({
+                            "id": path.name,
+                            "name": path.name,
+                            "size": stat.st_size,
+                            "modified": int(stat.st_mtime * 1000),
+                            "media_type": media_type,
+                        })
+                    except OSError:
+                        continue
         except OSError as exc:
             return {"type": "recordings_list_response", "files": [], "message": str(exc)}
         files.sort(key=lambda item: item["modified"], reverse=True)
@@ -2725,16 +2843,27 @@ class Server:
             return None
         if Path(recording_id).name != recording_id:
             return None
-        if Path(recording_id).suffix.lower() not in {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv"}:
+        if Path(recording_id).suffix.lower() not in {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv", ".jpg", ".jpeg", ".png"}:
             return None
-        folder = Path(self.audio_manager.recordings_dir).resolve()
-        candidate = (folder / recording_id).resolve()
-        try:
-            if os.path.commonpath((str(folder), str(candidate))) != str(folder):
-                return None
-        except (OSError, ValueError):
-            return None
-        return candidate if candidate.is_file() else None
+        folders = []
+        if hasattr(self, "audio_manager") and getattr(self.audio_manager, "recordings_dir", None):
+            try:
+                folders.append(Path(self.audio_manager.recordings_dir).resolve())
+            except Exception:
+                pass
+        if hasattr(self, "camera_manager") and getattr(self.camera_manager, "snapshots_dir", None):
+            try:
+                folders.append(Path(self.camera_manager.snapshots_dir).resolve())
+            except Exception:
+                pass
+        for folder in folders:
+            candidate = (folder / recording_id).resolve()
+            try:
+                if os.path.commonpath((str(folder), str(candidate))) == str(folder) and candidate.is_file():
+                    return candidate
+            except (OSError, ValueError):
+                continue
+        return None
 
     def _start_recording_download(self, data, addr, respond, stream_mode=False):
         prefix = "recording_stream" if stream_mode else "recording_download"
@@ -3001,7 +3130,7 @@ class Server:
         if buttons and IS_WINDOWS:
             for mask, flag in ((1, MOUSEEVENTF_LEFTUP), (2, MOUSEEVENTF_RIGHTUP), (4, MOUSEEVENTF_MIDDLEUP)):
                 if buttons & mask:
-                    u32.mouse_event(flag, 0, 0, 0, 0)
+                    send_windows_mouse_event(flag, 0, 0, 0, 0)
         elif buttons and self.mouse:
             for mask, button in ((1, Button.left), (2, Button.right), (4, Button.middle)):
                 if buttons & mask:
@@ -3015,7 +3144,7 @@ class Server:
             try:
                 if IS_WINDOWS:
                     flag = MOUSEEVENTF_RIGHTUP if self.last_pen_button == "right" else MOUSEEVENTF_LEFTUP
-                    u32.mouse_event(flag, 0, 0, 0, 0)
+                    send_windows_mouse_event(flag, 0, 0, 0, 0)
                 elif self.mouse:
                     self.mouse.release(self.last_pen_button)
             except Exception:
@@ -3211,8 +3340,13 @@ class Server:
         apps = []
         seen = set()
         quick_paths = set()
+        quick_name_by_path = {}
         if QUICK_APPS_PATH.exists():
-            quick_paths = {os.path.realpath(app["path"]).lower() for app in load_quick_apps()}
+            for app in load_quick_apps():
+                rp = os.path.realpath(app["path"]).lower()
+                quick_paths.add(rp)
+                if app.get("name"):
+                    quick_name_by_path[rp] = app["name"]
         start_paths = [
             os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
             os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs")
@@ -3235,9 +3369,16 @@ class Server:
         apps = apps[:150]
         if not QUICK_APPS_PATH.exists():
             seeded = load_quick_apps(apps)
-            quick_paths = {os.path.realpath(app["path"]).lower() for app in seeded}
+            for app in seeded:
+                rp = os.path.realpath(app["path"]).lower()
+                quick_paths.add(rp)
+                if app.get("name"):
+                    quick_name_by_path[rp] = app["name"]
         for app in apps:
-            app["is_quick"] = os.path.realpath(app["path"]).lower() in quick_paths
+            rp = os.path.realpath(app["path"]).lower()
+            app["is_quick"] = rp in quick_paths
+            if rp in quick_name_by_path:
+                app["name"] = quick_name_by_path[rp]
         return apps
 
     def _get_running_processes(self):

@@ -20,6 +20,8 @@ import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
+from datetime import datetime
+import shutil
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -55,7 +57,7 @@ from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_crea
                     save_pairing_pin, load_quick_apps, save_quick_apps,
                     load_media_preview_region, save_media_preview_region)
 
-APP_VERSION = "1.3.10"
+APP_VERSION = "1.3.11"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -92,8 +94,8 @@ class CompanionApp(tk.Tk):
         ensure_interactive_desktop()
 
         self.title("BT Mouse & Keyboard - Companion")
-        self.geometry("700x750")
-        self.minsize(640, 680)
+        self.geometry("800x780")
+        self.minsize(720, 680)
         self.configure(bg=BG_DARK)
 
         # Set window icon if available
@@ -243,10 +245,39 @@ class CompanionApp(tk.Tk):
 
         style.configure("TNotebook", background=BG_DARK, borderwidth=0)
         style.configure("TNotebook.Tab", background=CARD_BG, foreground=TEXT_MUTED,
-                        padding=[16, 8], font=("Segoe UI", 10, "bold"), borderwidth=0)
+                        padding=[12, 7], font=("Segoe UI", 9, "bold"), borderwidth=0)
         style.map("TNotebook.Tab",
                   background=[("selected", ACCENT_INDIGO)],
                   foreground=[("selected", TEXT_PRIMARY)])
+
+        # Treeview styling for recordings
+        style.configure(
+            "Recordings.Treeview",
+            background=BUTTON_BG,
+            foreground=TEXT_PRIMARY,
+            fieldbackground=BUTTON_BG,
+            rowheight=28,
+            font=("Segoe UI", 9),
+            borderwidth=0,
+        )
+        style.configure(
+            "Recordings.Treeview.Heading",
+            background=CARD_BG,
+            foreground=ACCENT_CYAN,
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padding=[8, 6],
+        )
+        style.map(
+            "Recordings.Treeview",
+            background=[("selected", ACCENT_INDIGO)],
+            foreground=[("selected", TEXT_PRIMARY)],
+        )
+        style.map(
+            "Recordings.Treeview.Heading",
+            background=[("active", CARD_BORDER)],
+            foreground=[("active", ACCENT_CYAN)],
+        )
 
     def _setup_system_tray(self):
         if not HAS_TRAY:
@@ -262,6 +293,7 @@ class CompanionApp(tk.Tk):
             item("BT Mouse Companion", lambda: None, enabled=False),
             item(lambda text: f"Status: {'Running' if self.is_server_running else 'Stopped'}", lambda: None, enabled=False),
             item("Show Window", self.show_from_tray, default=True),
+            item("Open Recordings Folder", self.open_recordings_folder),
             item("Restart Server", self.restart_server),
             item("Start Server", self.start_server),
             item("Stop Server", self.stop_server),
@@ -350,6 +382,10 @@ class CompanionApp(tk.Tk):
         self.tab_desktop = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
         self.notebook.add(self.tab_desktop, text="🚀 Desktop & Hardware")
         self._build_desktop_tab()
+
+        self.tab_recordings = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
+        self.notebook.add(self.tab_recordings, text="🎬 Recordings")
+        self._build_recordings_tab()
 
         self.tab_tablet = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
         self.notebook.add(self.tab_tablet, text="✍️ Tablet Writing Pad")
@@ -604,9 +640,30 @@ class CompanionApp(tk.Tk):
         self.generate_wan_qr()
 
     def _build_desktop_tab(self):
-        card = tk.Frame(self.tab_desktop, bg=CARD_BG, padx=18, pady=16, relief="flat",
-                        highlightbackground=CARD_BORDER, highlightthickness=1)
-        card.pack(fill="both", expand=True)
+        canvas = tk.Canvas(self.tab_desktop, bg=CARD_BG, highlightthickness=0, borderwidth=0)
+        v_scroll = ttk.Scrollbar(self.tab_desktop, orient="vertical", command=canvas.yview)
+        card = tk.Frame(canvas, bg=CARD_BG, padx=18, pady=16, relief="flat")
+        card_window = canvas.create_window((0, 0), window=card, anchor="nw")
+
+        def _on_card_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(card_window, width=event.width)
+
+        card.bind("<Configure>", _on_card_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+        canvas.configure(yscrollcommand=v_scroll.set)
+
+        def _on_mousewheel(event):
+            if canvas.winfo_height() < card.winfo_height():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        canvas.pack(side="left", fill="both", expand=True)
+        v_scroll.pack(side="right", fill="y")
 
         lbl_title = tk.Label(card, text="Desktop Controls, Camera & Mic Diagnostics",
                              font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
@@ -738,6 +795,11 @@ class CompanionApp(tk.Tk):
                             command=self.test_camera_snapshot)
         btn_cam.pack(side="left", padx=(0, 8))
 
+        btn_snaps = tk.Button(media_frame, text="📷 Snapshots Folder", font=("Segoe UI", 9, "bold"),
+                              bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6, cursor="hand2",
+                              command=self.open_snapshots_folder)
+        btn_snaps.pack(side="left", padx=(0, 8))
+
         btn_mic = tk.Button(media_frame, text="🎙️ Test Mic (3-sec Record)", font=("Segoe UI", 9, "bold"),
                             bg=BUTTON_BG, fg=ACCENT_GREEN, relief="flat", padx=10, pady=6, cursor="hand2",
                             command=self.test_mic_record)
@@ -751,27 +813,74 @@ class CompanionApp(tk.Tk):
         self.lbl_media_status.pack(anchor="w", pady=4)
 
         recordings = tk.LabelFrame(card, text=" Recordings on this PC ", font=("Segoe UI", 10, "bold"),
-                                   bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=8)
-        recordings.pack(fill="both", expand=True, pady=(8, 0))
-        self.list_recordings = tk.Listbox(recordings, height=5, font=("Segoe UI", 9), bg=BUTTON_BG,
-                                          fg=TEXT_PRIMARY, selectbackground=ACCENT_INDIGO,
-                                          borderwidth=0, highlightthickness=0, activestyle="none")
-        self.list_recordings.pack(fill="both", expand=True, pady=(0, 6))
+                                   bg=CARD_BG, fg=ACCENT_CYAN, padx=12, pady=10)
+        recordings.pack(fill="x", pady=(12, 0))
+
+        rec_header = tk.Frame(recordings, bg=CARD_BG)
+        rec_header.pack(fill="x", pady=(0, 8))
+
+        self.lbl_desktop_recordings_summary = tk.Label(
+            rec_header, text="Loading recordings...", font=("Segoe UI", 9, "bold"),
+            bg=CARD_BG, fg=TEXT_PRIMARY, anchor="w"
+        )
+        self.lbl_desktop_recordings_summary.pack(side="left", fill="x", expand=True)
+
+        tk.Button(
+            rec_header, text="📁 Open Recordings", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=5, cursor="hand2",
+            command=self.open_recordings_folder
+        ).pack(side="right", padx=(6, 0))
+
+        tk.Button(
+            rec_header, text="📷 Open Snapshots", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER,
+            relief="flat", padx=8, pady=5, cursor="hand2",
+            command=self.open_snapshots_folder
+        ).pack(side="right", padx=(6, 0))
+
+        tk.Button(
+            rec_header, text="🎬 Full Manager ➔", font=("Segoe UI", 9, "bold"),
+            bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=5, cursor="hand2",
+            command=self.switch_to_recordings_tab
+        ).pack(side="right")
+
+        rec_list_frame = tk.Frame(recordings, bg=CARD_BG)
+        rec_list_frame.pack(fill="x", pady=(0, 8))
+
+        self.list_recordings = tk.Listbox(
+            rec_list_frame, height=5, font=("Segoe UI", 9), bg=BUTTON_BG,
+            fg=TEXT_PRIMARY, selectbackground=ACCENT_INDIGO,
+            borderwidth=0, highlightthickness=0, activestyle="none"
+        )
+        rec_scroll = ttk.Scrollbar(rec_list_frame, orient="vertical", command=self.list_recordings.yview)
+        self.list_recordings.config(yscrollcommand=rec_scroll.set)
+        self.list_recordings.pack(side="left", fill="x", expand=True)
+        rec_scroll.pack(side="right", fill="y")
         self.list_recordings.bind("<Double-Button-1>", lambda _event: self.open_selected_recording())
+
         recording_actions = tk.Frame(recordings, bg=CARD_BG)
         recording_actions.pack(fill="x")
-        tk.Button(recording_actions, text="Open selected", font=("Segoe UI", 9), bg=BUTTON_BG,
-                  fg=TEXT_PRIMARY, relief="flat", padx=8, pady=5,
-                  command=self.open_selected_recording).pack(side="left", padx=(0, 5))
-        tk.Button(recording_actions, text="Open folder", font=("Segoe UI", 9), bg=BUTTON_BG,
-                  fg=ACCENT_CYAN, relief="flat", padx=8, pady=5,
-                  command=self.open_recordings_folder).pack(side="left", padx=5)
-        tk.Button(recording_actions, text="Refresh", font=("Segoe UI", 9), bg=BUTTON_BG,
-                  fg=TEXT_PRIMARY, relief="flat", padx=8, pady=5,
-                  command=self.refresh_recordings).pack(side="left", padx=5)
+        tk.Button(recording_actions, text="▶️ Open selected", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
+                  fg=ACCENT_GREEN, relief="flat", padx=10, pady=5, cursor="hand2",
+                  command=self.open_selected_recording).pack(side="left", padx=(0, 6))
+        tk.Button(recording_actions, text="🔍 Show in Explorer", font=("Segoe UI", 9), bg=BUTTON_BG,
+                  fg=TEXT_PRIMARY, relief="flat", padx=10, pady=5, cursor="hand2",
+                  command=self.show_selected_in_explorer).pack(side="left", padx=4)
+        tk.Button(recording_actions, text="📁 Open in File Explorer", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
+                  fg=ACCENT_CYAN, relief="flat", padx=10, pady=5, cursor="hand2",
+                  command=self.open_recordings_folder).pack(side="left", padx=4)
+        tk.Button(recording_actions, text="🗑️ Delete", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
+                  fg=ACCENT_RED, relief="flat", padx=10, pady=5, cursor="hand2",
+                  command=self.delete_selected_recording).pack(side="left", padx=4)
+        tk.Button(recording_actions, text="🔄 Refresh", font=("Segoe UI", 9), bg=BUTTON_BG,
+                  fg=TEXT_PRIMARY, relief="flat", padx=10, pady=5, cursor="hand2",
+                  command=self.refresh_recordings).pack(side="left", padx=4)
+
         self.lbl_recordings_path = tk.Label(recordings, text="", font=("Segoe UI", 8), bg=CARD_BG,
                                             fg=TEXT_MUTED, anchor="w")
-        self.lbl_recordings_path.pack(fill="x", pady=(5, 0))
+        self.lbl_recordings_path.pack(fill="x", pady=(6, 0))
         self.refresh_recordings()
 
     def _media_preview_region_description(self):
@@ -869,28 +978,273 @@ class CompanionApp(tk.Tk):
         user_data = os.environ.get("LOCALAPPDATA") or str(Path.home())
         return Path(user_data) / "BTMouse" / "Recordings"
 
+    def _snapshots_dir(self):
+        if self.server and hasattr(self.server, "camera_manager") and getattr(self.server.camera_manager, "snapshots_dir", None):
+            return Path(self.server.camera_manager.snapshots_dir)
+        user_data = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(user_data) / "BTMouse" / "Snapshots"
+
     def refresh_recordings(self):
-        if not hasattr(self, "list_recordings"):
-            return
         folder = self._recordings_dir()
         folder.mkdir(parents=True, exist_ok=True)
-        self.list_recordings.delete(0, "end")
-        self._recording_paths = []
+        allowed_extensions = {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv"}
+        recordings = []
+        total_bytes = 0
+
         for path in sorted((p for p in folder.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True):
+            ext = path.suffix.lower()
+            if ext not in allowed_extensions:
+                continue
             if self.server and self.server.camera_manager.streaming and self.server.camera_manager.last_recording_path == str(path):
                 continue
             if self.server and self.server.audio_manager.recording and self.server.audio_manager.current_filename == str(path):
                 continue
-            self._recording_paths.append(path)
-            size_mb = path.stat().st_size / (1024 * 1024)
-            self.list_recordings.insert("end", f"{path.name}  ·  {size_mb:.1f} MB")
-        self.lbl_recordings_path.config(text=str(folder))
+            try:
+                stat = path.stat()
+                total_bytes += stat.st_size
+                is_audio = ext in {".wav", ".m4a", ".mp3"}
+                type_name = "Audio" if is_audio else "Video"
+                type_icon = "🎙️" if is_audio else "📹"
+                dt = datetime.fromtimestamp(stat.st_mtime)
+                date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
+                if stat.st_size < 1024 * 1024:
+                    size_str = f"{stat.st_size / 1024:.1f} KB"
+                else:
+                    size_str = f"{stat.st_size / (1024 * 1024):.1f} MB"
+
+                recordings.append({
+                    "path": path,
+                    "name": path.name,
+                    "size": stat.st_size,
+                    "size_str": size_str,
+                    "mtime": stat.st_mtime,
+                    "date_str": date_str,
+                    "is_audio": is_audio,
+                    "is_snapshot": False,
+                    "type_name": type_name,
+                    "type_icon": type_icon,
+                    "ext": ext,
+                })
+            except OSError:
+                continue
+
+        snap_folder = self._snapshots_dir()
+        snap_folder.mkdir(parents=True, exist_ok=True)
+        try:
+            for path in snap_folder.iterdir():
+                if not path.is_file():
+                    continue
+                ext = path.suffix.lower()
+                if ext not in {".jpg", ".jpeg", ".png"}:
+                    continue
+                try:
+                    stat = path.stat()
+                    total_bytes += stat.st_size
+                    dt = datetime.fromtimestamp(stat.st_mtime)
+                    date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
+                    if stat.st_size < 1024 * 1024:
+                        size_str = f"{stat.st_size / 1024:.1f} KB"
+                    else:
+                        size_str = f"{stat.st_size / (1024 * 1024):.1f} MB"
+
+                    recordings.append({
+                        "path": path,
+                        "name": path.name,
+                        "size": stat.st_size,
+                        "size_str": size_str,
+                        "mtime": stat.st_mtime,
+                        "date_str": date_str,
+                        "is_audio": False,
+                        "is_snapshot": True,
+                        "type_name": "Snapshot",
+                        "type_icon": "📷",
+                        "ext": ext,
+                    })
+                except OSError:
+                    continue
+        except Exception:
+            pass
+
+        recordings.sort(key=lambda item: item["mtime"], reverse=True)
+
+        fingerprint = tuple((r["path"], r["size"], r["mtime"]) for r in recordings)
+        changed = getattr(self, "_recordings_fingerprint", None) != fingerprint
+        self._recordings_fingerprint = fingerprint
+        self._all_recordings = recordings
+        self._total_recordings_bytes = total_bytes
+
+        # Update Desktop tab listbox
+        if hasattr(self, "list_recordings"):
+            self.list_recordings.delete(0, "end")
+            self._recording_paths = []
+            for item in recordings:
+                self._recording_paths.append(item["path"])
+                self.list_recordings.insert("end", f"{item['type_icon']}  {item['name']}  ·  {item['size_str']}")
+
+            if hasattr(self, "lbl_recordings_path"):
+                self.lbl_recordings_path.config(text=str(folder))
+            if hasattr(self, "lbl_desktop_recordings_summary"):
+                total_mb = total_bytes / (1024 * 1024)
+                count = len(recordings)
+                self.lbl_desktop_recordings_summary.config(
+                    text=f"Total: {count} recording{'s' if count != 1 else ''}  ·  {total_mb:.1f} MB stored"
+                )
+
+        # Update dedicated Recordings tab
+        if hasattr(self, "tree_recordings"):
+            if changed or not getattr(self, "_tree_rendered_once", False):
+                self._tree_rendered_once = True
+                self._filter_and_render_recordings()
 
     def _refresh_recordings_loop(self):
         if not self.winfo_exists():
             return
         self.refresh_recordings()
         self.after(4000, self._refresh_recordings_loop)
+
+    def _filter_and_render_recordings(self):
+        if not hasattr(self, "tree_recordings"):
+            return
+
+        search_query = self.ent_recording_search.get().strip().lower() if hasattr(self, "ent_recording_search") else ""
+        filter_type = self.recording_filter_type.get() if hasattr(self, "recording_filter_type") else "all"
+        sort_mode = self.combo_recording_sort.get() if hasattr(self, "combo_recording_sort") else "Newest First"
+
+        items = list(getattr(self, "_all_recordings", []))
+
+        # Filter by type
+        if filter_type == "audio":
+            items = [x for x in items if x.get("is_audio")]
+        elif filter_type == "video":
+            items = [x for x in items if not x.get("is_audio") and not x.get("is_snapshot")]
+        elif filter_type == "snapshot":
+            items = [x for x in items if x.get("is_snapshot")]
+
+        # Filter by search
+        if search_query:
+            items = [x for x in items if search_query in x["name"].lower() or search_query in x["date_str"].lower()]
+
+        # Sort
+        if sort_mode == "Newest First":
+            items.sort(key=lambda x: x["mtime"], reverse=True)
+        elif sort_mode == "Oldest First":
+            items.sort(key=lambda x: x["mtime"])
+        elif sort_mode == "Name (A-Z)":
+            items.sort(key=lambda x: x["name"].lower())
+        elif sort_mode == "Size (Largest)":
+            items.sort(key=lambda x: x["size"], reverse=True)
+        elif sort_mode == "Size (Smallest)":
+            items.sort(key=lambda x: x["size"])
+
+        # Preserve selection if item is still present
+        prev_selection_path = None
+        current_sel = self.tree_recordings.selection()
+        if current_sel and current_sel[0] in getattr(self, "_tree_item_map", {}):
+            prev_selection_path = self._tree_item_map[current_sel[0]]["path"]
+
+        self.tree_recordings.delete(*self.tree_recordings.get_children())
+        self._tree_item_map = {}
+
+        to_select = None
+        for item in items:
+            iid = f"rec_{hash(str(item['path']))}"
+            type_display = f"{item['type_icon']} {item['type_name']} ({item['ext'][1:].upper()})"
+            self.tree_recordings.insert(
+                "", "end", iid=iid, text=item["name"],
+                values=(f"{item['type_icon']}  {item['name']}", type_display, item["date_str"], item["size_str"])
+            )
+            self._tree_item_map[iid] = item
+            if prev_selection_path and item["path"] == prev_selection_path:
+                to_select = iid
+
+        if to_select:
+            self.tree_recordings.selection_set(to_select)
+        elif items:
+            first_iid = self.tree_recordings.get_children()[0]
+            self.tree_recordings.selection_set(first_iid)
+            self._on_tree_recording_selected()
+        else:
+            self._on_tree_recording_selected()
+
+        # Update stats bar
+        folder = self._recordings_dir()
+        total_mb = getattr(self, "_total_recordings_bytes", 0) / (1024 * 1024)
+        count_all = len(getattr(self, "_all_recordings", []))
+        showing_str = f"Showing {len(items)} of {count_all}" if len(items) != count_all else f"{count_all} recordings"
+        if hasattr(self, "lbl_recordings_stats"):
+            self.lbl_recordings_stats.config(
+                text=f"📊 {showing_str}  ·  {total_mb:.1f} MB total library"
+            )
+
+        if hasattr(self, "lbl_disk_free"):
+            try:
+                free_bytes = shutil.disk_usage(folder).free
+                free_gb = free_bytes / (1024 * 1024 * 1024)
+                self.lbl_disk_free.config(text=f"💾 Free Disk: {free_gb:.1f} GB")
+            except Exception:
+                self.lbl_disk_free.config(text="")
+
+        if hasattr(self, "lbl_mgr_folder_path"):
+            self.lbl_mgr_folder_path.config(text=str(folder))
+
+        count_audio = sum(1 for x in getattr(self, "_all_recordings", []) if x.get("is_audio"))
+        count_video = sum(1 for x in getattr(self, "_all_recordings", []) if not x.get("is_audio") and not x.get("is_snapshot"))
+        count_snaps = sum(1 for x in getattr(self, "_all_recordings", []) if x.get("is_snapshot"))
+        if hasattr(self, "btn_filter_all"):
+            self.btn_filter_all.config(text=f"All ({count_all})")
+        if hasattr(self, "btn_filter_audio"):
+            self.btn_filter_audio.config(text=f"🎙️ Audio ({count_audio})")
+        if hasattr(self, "btn_filter_video"):
+            self.btn_filter_video.config(text=f"📹 Video ({count_video})")
+        if hasattr(self, "btn_filter_snapshot"):
+            self.btn_filter_snapshot.config(text=f"📷 Snapshots ({count_snaps})")
+
+    def _update_filter_button_styles(self):
+        ft = self.recording_filter_type.get() if hasattr(self, "recording_filter_type") else "all"
+        if hasattr(self, "btn_filter_all"):
+            self.btn_filter_all.config(bg=ACCENT_INDIGO if ft == "all" else BUTTON_BG)
+        if hasattr(self, "btn_filter_audio"):
+            self.btn_filter_audio.config(bg=ACCENT_INDIGO if ft == "audio" else BUTTON_BG)
+        if hasattr(self, "btn_filter_video"):
+            self.btn_filter_video.config(bg=ACCENT_INDIGO if ft == "video" else BUTTON_BG)
+        if hasattr(self, "btn_filter_snapshot"):
+            self.btn_filter_snapshot.config(bg=ACCENT_INDIGO if ft == "snapshot" else BUTTON_BG)
+
+    def _on_tree_recording_selected(self, _event=None):
+        if not hasattr(self, "tree_recordings") or not hasattr(self, "lbl_selected_recording_info"):
+            return
+        sel = self.tree_recordings.selection()
+        if not sel or sel[0] not in getattr(self, "_tree_item_map", {}):
+            self.lbl_selected_recording_info.config(text="Select a recording to play or inspect.", fg=TEXT_MUTED)
+            return
+        item = self._tree_item_map[sel[0]]
+        self.lbl_selected_recording_info.config(
+            text=f"Selected: {item['name']}  ·  {item['size_str']}  ·  {item['date_str']}",
+            fg=TEXT_PRIMARY
+        )
+
+    def _on_tree_context_menu(self, event):
+        row_id = self.tree_recordings.identify_row(event.y)
+        if row_id:
+            self.tree_recordings.selection_set(row_id)
+            self._on_tree_recording_selected()
+        if hasattr(self, "rec_context_menu"):
+            self.rec_context_menu.tk_popup(event.x_root, event.y_root)
+
+    def _get_selected_recording_path(self):
+        # Dedicated recordings tree takes priority if item selected
+        if hasattr(self, "tree_recordings") and hasattr(self, "_tree_item_map"):
+            tree_sel = self.tree_recordings.selection()
+            if tree_sel and tree_sel[0] in self._tree_item_map:
+                return self._tree_item_map[tree_sel[0]]["path"]
+
+        # Then check desktop tab listbox
+        if hasattr(self, "list_recordings") and hasattr(self, "_recording_paths"):
+            list_sel = self.list_recordings.curselection()
+            if list_sel and list_sel[0] < len(self._recording_paths):
+                return self._recording_paths[list_sel[0]]
+
+        return None
 
     def open_recordings_folder(self):
         folder = self._recordings_dir()
@@ -902,18 +1256,314 @@ class CompanionApp(tk.Tk):
                 subprocess.Popen(["open", str(folder)])
             else:
                 subprocess.Popen(["xdg-open", str(folder)])
-        except Exception as exc:
-            messagebox.showerror("Recordings", f"Could not open the recordings folder.\n\n{exc}")
+        except Exception:
+            try:
+                subprocess.Popen(["explorer.exe", str(folder.resolve())])
+            except Exception as exc:
+                messagebox.showerror("Recordings", f"Could not open recordings folder in File Explorer.\n\n{exc}")
 
-    def open_selected_recording(self):
-        selection = self.list_recordings.curselection() if hasattr(self, "list_recordings") else ()
-        if not selection:
-            return
-        path = self._recording_paths[selection[0]]
+    def open_snapshots_folder(self):
+        folder = self._snapshots_dir()
+        folder.mkdir(parents=True, exist_ok=True)
         try:
-            os.startfile(str(path)) if os.name == "nt" else subprocess.Popen(["xdg-open", str(path)])
+            if os.name == "nt":
+                os.startfile(str(folder))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception:
+            try:
+                subprocess.Popen(["explorer.exe", str(folder.resolve())])
+            except Exception as exc:
+                messagebox.showerror("Snapshots", f"Could not open snapshots folder in File Explorer.\n\n{exc}")
+
+    def show_selected_in_explorer(self, target_path=None):
+        path = target_path or self._get_selected_recording_path()
+        if not path or not Path(path).is_file():
+            self.open_recordings_folder()
+            return
+        path = Path(path)
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["explorer.exe", f"/select,{str(path.resolve())}"])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", str(path.resolve())])
+            else:
+                subprocess.Popen(["xdg-open", str(path.parent.resolve())])
+        except Exception as exc:
+            messagebox.showerror("Recordings", f"Could not reveal {path.name} in File Explorer.\n\n{exc}")
+
+    def open_selected_recording(self, target_path=None):
+        path = target_path or self._get_selected_recording_path()
+        if not path or not Path(path).is_file():
+            messagebox.showinfo("Recordings", "Please select a recording to open.")
+            return
+        path = Path(path)
+        try:
+            if os.name == "nt":
+                os.startfile(str(path))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
         except Exception as exc:
             messagebox.showerror("Recordings", f"Could not open {path.name}.\n\n{exc}")
+
+    def delete_selected_recording(self, target_path=None):
+        path = target_path or self._get_selected_recording_path()
+        if not path or not Path(path).is_file():
+            messagebox.showinfo("Delete Recording", "Please select a recording to delete.")
+            return
+        path = Path(path)
+        size_mb = path.stat().st_size / (1024 * 1024)
+        confirm = messagebox.askyesno(
+            "Delete Recording",
+            f"Are you sure you want to permanently delete this recording?\n\n{path.name} ({size_mb:.1f} MB)\n\nThis cannot be undone."
+        )
+        if confirm:
+            try:
+                path.unlink()
+                self._tree_rendered_once = False
+                self.refresh_recordings()
+            except OSError as exc:
+                messagebox.showerror("Delete Recording", f"Could not delete recording.\n\n{exc}")
+
+    def copy_selected_recording_path(self, target_path=None):
+        path = target_path or self._get_selected_recording_path()
+        if not path:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(str(Path(path).resolve()))
+
+    def switch_to_recordings_tab(self):
+        if hasattr(self, "notebook") and hasattr(self, "tab_recordings"):
+            self.notebook.select(self.tab_recordings)
+
+    def _build_recordings_tab(self):
+        container = tk.Frame(self.tab_recordings, bg=BG_DARK)
+        container.pack(fill="both", expand=True)
+
+        card = tk.Frame(container, bg=CARD_BG, padx=18, pady=16, relief="flat",
+                        highlightbackground=CARD_BORDER, highlightthickness=1)
+        card.pack(fill="both", expand=True)
+
+        # Header Frame
+        header = tk.Frame(card, bg=CARD_BG)
+        header.pack(fill="x", pady=(0, 10))
+
+        header_text = tk.Frame(header, bg=CARD_BG)
+        header_text.pack(side="left", fill="y")
+
+        lbl_title = tk.Label(header_text, text="Session & Hardware Recordings",
+                             font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
+        lbl_title.pack(anchor="w")
+
+        lbl_sub = tk.Label(header_text, text="Browse, preview, filter, and manage audio & webcam recordings saved on this PC.",
+                           font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_sub.pack(anchor="w")
+
+        header_buttons = tk.Frame(header, bg=CARD_BG)
+        header_buttons.pack(side="right", fill="y")
+
+        btn_open_exp = tk.Button(
+            header_buttons, text="📁 Open Recordings", font=("Segoe UI", 10, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER, activeforeground=TEXT_PRIMARY,
+            relief="flat", padx=14, pady=6, cursor="hand2",
+            command=self.open_recordings_folder
+        )
+        btn_open_exp.pack(side="left", padx=(0, 8))
+
+        btn_open_snaps = tk.Button(
+            header_buttons, text="📷 Open Snapshots", font=("Segoe UI", 10, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER, activeforeground=TEXT_PRIMARY,
+            relief="flat", padx=14, pady=6, cursor="hand2",
+            command=self.open_snapshots_folder
+        )
+        btn_open_snaps.pack(side="left", padx=(0, 8))
+
+        btn_refresh = tk.Button(
+            header_buttons, text="🔄 Refresh", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+            relief="flat", padx=12, pady=6, cursor="hand2",
+            command=self.refresh_recordings
+        )
+        btn_refresh.pack(side="left")
+
+        # Stats & Storage bar
+        stats_bar = tk.Frame(card, bg=BUTTON_BG, padx=12, pady=8, relief="flat")
+        stats_bar.pack(fill="x", pady=(0, 10))
+
+        stats_left = tk.Frame(stats_bar, bg=BUTTON_BG)
+        stats_left.pack(side="left")
+
+        self.lbl_recordings_stats = tk.Label(
+            stats_left, text="📊 Loading recordings...", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY
+        )
+        self.lbl_recordings_stats.pack(side="left", padx=(0, 12))
+
+        self.lbl_disk_free = tk.Label(
+            stats_left, text="", font=("Segoe UI", 9),
+            bg=BUTTON_BG, fg=ACCENT_GREEN
+        )
+        self.lbl_disk_free.pack(side="left")
+
+        self.lbl_mgr_folder_path = tk.Label(
+            stats_bar, text="", font=("Segoe UI", 8),
+            bg=BUTTON_BG, fg=TEXT_MUTED, anchor="e"
+        )
+        self.lbl_mgr_folder_path.pack(side="right")
+
+        # Filter & Search Controls bar
+        filter_bar = tk.Frame(card, bg=CARD_BG)
+        filter_bar.pack(fill="x", pady=(0, 10))
+
+        tk.Label(filter_bar, text="🔍 Search:", font=("Segoe UI", 9, "bold"),
+                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(0, 6))
+
+        self.ent_recording_search = tk.Entry(
+            filter_bar, font=("Segoe UI", 9), bg=BUTTON_BG, fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY, relief="flat", width=22
+        )
+        self.ent_recording_search.pack(side="left", ipady=3, padx=(0, 12))
+        self.ent_recording_search.bind("<KeyRelease>", lambda _e: self._filter_and_render_recordings())
+
+        filter_btn_frame = tk.Frame(filter_bar, bg=CARD_BG)
+        filter_btn_frame.pack(side="left", padx=(0, 12))
+
+        self.recording_filter_type = tk.StringVar(value="all")
+
+        def _select_filter(ft):
+            self.recording_filter_type.set(ft)
+            self._update_filter_button_styles()
+            self._filter_and_render_recordings()
+
+        self.btn_filter_all = tk.Button(
+            filter_btn_frame, text="All", font=("Segoe UI", 9, "bold"),
+            bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
+            cursor="hand2", command=lambda: _select_filter("all")
+        )
+        self.btn_filter_all.pack(side="left", padx=(0, 4))
+
+        self.btn_filter_audio = tk.Button(
+            filter_btn_frame, text="🎙️ Audio", font=("Segoe UI", 9),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
+            cursor="hand2", command=lambda: _select_filter("audio")
+        )
+        self.btn_filter_audio.pack(side="left", padx=4)
+
+        self.btn_filter_video = tk.Button(
+            filter_btn_frame, text="📹 Video", font=("Segoe UI", 9),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
+            cursor="hand2", command=lambda: _select_filter("video")
+        )
+        self.btn_filter_video.pack(side="left", padx=4)
+
+        self.btn_filter_snapshot = tk.Button(
+            filter_btn_frame, text="📷 Snapshots", font=("Segoe UI", 9),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
+            cursor="hand2", command=lambda: _select_filter("snapshot")
+        )
+        self.btn_filter_snapshot.pack(side="left", padx=4)
+
+        # Sort Dropdown
+        sort_frame = tk.Frame(filter_bar, bg=CARD_BG)
+        sort_frame.pack(side="right")
+
+        tk.Label(sort_frame, text="Sort by:", font=("Segoe UI", 9, "bold"),
+                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(0, 6))
+
+        self.combo_recording_sort = ttk.Combobox(
+            sort_frame, state="readonly", width=14, font=("Segoe UI", 9),
+            values=["Newest First", "Oldest First", "Name (A-Z)", "Size (Largest)", "Size (Smallest)"]
+        )
+        self.combo_recording_sort.set("Newest First")
+        self.combo_recording_sort.pack(side="left")
+        self.combo_recording_sort.bind("<<ComboboxSelected>>", lambda _e: self._filter_and_render_recordings())
+
+        # Main Recordings Treeview
+        tree_frame = tk.Frame(card, bg=CARD_BG)
+        tree_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        columns = ("name", "type", "date", "size")
+        self.tree_recordings = ttk.Treeview(
+            tree_frame, columns=columns, show="headings",
+            style="Recordings.Treeview", selectmode="browse"
+        )
+
+        self.tree_recordings.heading("name", text="File Name", anchor="w")
+        self.tree_recordings.heading("type", text="Type", anchor="center")
+        self.tree_recordings.heading("date", text="Recorded On", anchor="center")
+        self.tree_recordings.heading("size", text="Size", anchor="e")
+
+        self.tree_recordings.column("name", width=290, minwidth=200, anchor="w")
+        self.tree_recordings.column("type", width=110, minwidth=80, anchor="center")
+        self.tree_recordings.column("date", width=170, minwidth=140, anchor="center")
+        self.tree_recordings.column("size", width=90, minwidth=70, anchor="e")
+
+        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_recordings.yview)
+        self.tree_recordings.configure(yscrollcommand=tree_scroll.set)
+        self.tree_recordings.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+
+        self.tree_recordings.bind("<Double-Button-1>", lambda _e: self.open_selected_recording())
+        self.tree_recordings.bind("<<TreeviewSelect>>", self._on_tree_recording_selected)
+        self.tree_recordings.bind("<Return>", lambda _e: self.open_selected_recording())
+        self.tree_recordings.bind("<Delete>", lambda _e: self.delete_selected_recording())
+        self.tree_recordings.bind("<Button-3>", self._on_tree_context_menu)
+        self.tree_recordings.bind("<Button-2>", self._on_tree_context_menu)
+
+        # Right click context menu
+        self.rec_context_menu = tk.Menu(self, tearoff=0, bg=CARD_BG, fg=TEXT_PRIMARY,
+                                        activebackground=ACCENT_INDIGO, activeforeground=TEXT_PRIMARY)
+        self.rec_context_menu.add_command(label="▶️  Play / Open", command=self.open_selected_recording)
+        self.rec_context_menu.add_command(label="🔍  Show in File Explorer", command=self.show_selected_in_explorer)
+        self.rec_context_menu.add_command(label="📁  Open Recordings Folder", command=self.open_recordings_folder)
+        self.rec_context_menu.add_separator()
+        self.rec_context_menu.add_command(label="📋  Copy File Path", command=self.copy_selected_recording_path)
+        self.rec_context_menu.add_command(label="🗑️  Delete Recording", command=self.delete_selected_recording)
+
+        # Bottom Action Bar & Details
+        action_bar = tk.Frame(card, bg=CARD_BG)
+        action_bar.pack(fill="x")
+
+        self.lbl_selected_recording_info = tk.Label(
+            action_bar, text="Select a recording to play or inspect.",
+            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
+        )
+        self.lbl_selected_recording_info.pack(side="left", fill="x", expand=True)
+
+        action_buttons = tk.Frame(action_bar, bg=CARD_BG)
+        action_buttons.pack(side="right")
+
+        tk.Button(
+            action_buttons, text="▶️ Play / Open", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER,
+            relief="flat", padx=12, pady=6, cursor="hand2",
+            command=self.open_selected_recording
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            action_buttons, text="🔍 Show in Explorer", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+            relief="flat", padx=12, pady=6, cursor="hand2",
+            command=self.show_selected_in_explorer
+        ).pack(side="left", padx=4)
+
+        tk.Button(
+            action_buttons, text="📁 Open in File Explorer", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
+            relief="flat", padx=12, pady=6, cursor="hand2",
+            command=self.open_recordings_folder
+        ).pack(side="left", padx=4)
+
+        tk.Button(
+            action_buttons, text="🗑️ Delete", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_RED, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=6, cursor="hand2",
+            command=self.delete_selected_recording
+        ).pack(side="left", padx=(4, 0))
 
     def _build_logs_tab(self):
         container = tk.Frame(self.tab_logs, bg=BG_DARK)
@@ -1456,10 +2106,13 @@ class CompanionApp(tk.Tk):
                 img = Image.open(io.BytesIO(raw))
                 img = img.resize((240, 180), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
+                last_path = getattr(self.server.camera_manager, "last_snapshot_path", None)
+                snap_name = os.path.basename(last_path) if last_path else "snapshot.jpg"
                 def _update_ui():
                     self.cam_photo = photo
                     self.lbl_cam_preview.config(image=self.cam_photo)
-                    self.lbl_media_status.config(text="✓ Camera snapshot captured successfully!", fg=ACCENT_GREEN)
+                    self.lbl_media_status.config(text=f"✓ Camera snapshot captured & saved: {snap_name}", fg=ACCENT_GREEN)
+                    self.refresh_recordings()
                 self.after(0, _update_ui)
             else:
                 self.after(0, lambda: self.lbl_media_status.config(text="✕ Could not access camera.", fg=ACCENT_RED))
@@ -1481,6 +2134,7 @@ class CompanionApp(tk.Tk):
                 sz = os.path.getsize(final_file)
                 self.after(0, lambda: self.lbl_media_status.config(
                     text=f"✓ Recorded {os.path.basename(final_file)} ({sz} bytes)", fg=ACCENT_GREEN))
+                self.after(0, self.refresh_recordings)
             else:
                 reason = self.server.audio_manager.last_error or "Microphone recording stopped without a file."
                 self.after(0, lambda: self.lbl_media_status.config(text=f"✕ {reason}", fg=ACCENT_RED))

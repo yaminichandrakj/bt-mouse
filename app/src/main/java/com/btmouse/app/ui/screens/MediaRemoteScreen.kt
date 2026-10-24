@@ -62,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -104,11 +105,12 @@ fun MediaRemoteScreen(
     }
 
     // Periodically poll PC media state while on this screen
-    LaunchedEffect(isConnected, videoPreviewEnabled) {
+    LaunchedEffect(isConnected, videoPreviewEnabled, mediaStatus.title, mediaStatus.artworkBase64) {
         while (true) {
             if (isConnected) {
+                val needArtwork = mediaStatus.hasMedia && mediaStatus.artworkBase64.isBlank()
                 coordinator.queryMedia(
-                    includePreview = false,
+                    includePreview = needArtwork,
                     includeVideoPreview = videoPreviewEnabled
                 )
             }
@@ -197,6 +199,14 @@ fun MediaRemoteScreen(
                         "firefox" in playerName -> "F"
                         else -> mediaStatus.playerName.take(3).uppercase()
                     }
+                    val artworkBitmap = remember(mediaStatus.artworkBase64) {
+                        runCatching {
+                            if (mediaStatus.artworkBase64.isNotBlank()) {
+                                val bytes = Base64.decode(mediaStatus.artworkBase64, Base64.DEFAULT)
+                                if (bytes.isNotEmpty()) BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() else null
+                            } else null
+                        }.getOrNull()
+                    }
                     Box(
                         modifier = Modifier
                             .size(54.dp)
@@ -208,7 +218,14 @@ fun MediaRemoteScreen(
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (playerMark.isNotBlank()) {
+                        if (artworkBitmap != null) {
+                            Image(
+                                bitmap = artworkBitmap,
+                                contentDescription = "Album Artwork",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else if (playerMark.isNotBlank()) {
                             Text(playerMark, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
                         } else {
                             Icon(

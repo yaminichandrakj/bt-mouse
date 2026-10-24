@@ -1,7 +1,10 @@
 package com.btmouse.app.ui.screens
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.BitmapFactory
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -598,9 +601,8 @@ fun QuickAppsSection(
     val quickApps = installedApps.filter { it.isQuick }
 
     LaunchedEffect(isConnected) {
-        while (true) {
-            if (isConnected) coordinator.queryInstalledApps()
-            delay(5000)
+        if (isConnected) {
+            coordinator.queryInstalledApps()
         }
     }
 
@@ -1252,17 +1254,90 @@ fun CameraAndRecorderSection(
     val snapshotEntries by coordinator.cameraSnapshots.collectAsState()
     val cameraRecording by coordinator.isCameraRecording.collectAsState()
     var cameraStreamMessage by remember { mutableStateOf("") }
+    val context = LocalContext.current
     var selectedSnapshot by remember { mutableStateOf<String?>(null) }
+    var showSnapshotDeleteConfirm by remember { mutableStateOf(false) }
     val selectedSnapshotBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, selectedSnapshot) {
         value = selectedSnapshot?.let { path -> withContext(Dispatchers.IO) {
             try { BitmapFactory.decodeFile(path)?.asImageBitmap() } catch (_: Exception) { null }
         } }
     }
-    if (selectedSnapshotBitmap != null) {
+    if (selectedSnapshotBitmap != null && selectedSnapshot != null) {
+        val currentSnapPath = selectedSnapshot!!
+        val snapName = File(currentSnapPath).name
         AlertDialog(
-            onDismissRequest = { selectedSnapshot = null },
-            confirmButton = { TextButton(onClick = { selectedSnapshot = null }) { Text("Close") } },
-            text = { Image(bitmap = selectedSnapshotBitmap!!, contentDescription = "Saved webcam snapshot", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.Fit) },
+            onDismissRequest = {
+                selectedSnapshot = null
+                showSnapshotDeleteConfirm = false
+            },
+            title = {
+                Text(snapName, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Image(
+                        bitmap = selectedSnapshotBitmap!!,
+                        contentDescription = "Saved webcam snapshot",
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Text("Saved in Pictures/Snapshots directory", color = AccentCyan, fontSize = 11.sp)
+                    if (showSnapshotDeleteConfirm) {
+                        Text("Permanently delete this snapshot from this phone?", color = AccentRose, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (showSnapshotDeleteConfirm) {
+                        Button(
+                            onClick = {
+                                showSnapshotDeleteConfirm = false
+                                selectedSnapshot = null
+                                coordinator.deleteSnapshot(currentSnapPath)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                        ) {
+                            Text("Confirm Delete", fontSize = 11.sp)
+                        }
+                        Button(
+                            onClick = { showSnapshotDeleteConfirm = false },
+                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
+                        ) {
+                            Text("Cancel", fontSize = 11.sp)
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                try {
+                                    val file = File(currentSnapPath)
+                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(uri, "image/jpeg")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(intent, "Open Snapshot"))
+                                } catch (_: Exception) {}
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
+                        ) {
+                            Text("Open", fontSize = 11.sp)
+                        }
+                        Button(
+                            onClick = { showSnapshotDeleteConfirm = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                        ) {
+                            Text("Delete", fontSize = 11.sp)
+                        }
+                        Button(
+                            onClick = { selectedSnapshot = null },
+                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
+                        ) {
+                            Text("Close", fontSize = 11.sp)
+                        }
+                    }
+                }
+            },
             containerColor = DarkSurface
         )
     }
@@ -1421,9 +1496,16 @@ fun CameraAndRecorderSection(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Snapshot Gallery · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Snapshot Gallery · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Pictures/Snapshots", color = AccentCyan, fontSize = 10.sp)
+                }
                 if (snapshotEntries.isEmpty()) {
-                    Text("Snapshots captured from the PC are stored on this phone and appear here.", color = TextSecondary, fontSize = 11.sp)
+                    Text("Snapshots captured from the PC are saved to the phone's Pictures/Snapshots directory.", color = TextSecondary, fontSize = 11.sp)
                 } else {
                     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         snapshotEntries.forEach { entry ->

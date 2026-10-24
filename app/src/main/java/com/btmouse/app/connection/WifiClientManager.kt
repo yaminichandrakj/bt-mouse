@@ -283,6 +283,15 @@ class WifiClientManager(
                     if (success) _installedApps.value = _installedApps.value.map { it.copy(isQuick = it.path in paths) }
                     _statusMessage.value = json.get("message")?.asString ?: "Could not update PC Quick Apps"
                 }
+                "launch_app_response" -> {
+                    val success = json.get("success")?.asBoolean ?: false
+                    val app = json.get("app")?.asString.orEmpty()
+                    _statusMessage.value = if (success) {
+                        "Launched $app"
+                    } else {
+                        "Could not launch $app. The shortcut may have been moved or removed."
+                    }
+                }
                 "camera_frame_response" -> {
                     val b64 = json.get("frame")?.asString
                     if (!b64.isNullOrEmpty()) {
@@ -810,6 +819,12 @@ class WifiClientManager(
         sendPacket(mapOf("type" to obj.get("type").asString, "id" to (obj.get("id")?.asString ?: ""),
             "transfer_id" to (obj.get("transfer_id")?.asString ?: "")))
     }
+
+    override fun deleteRecording(id: String) = recordingTransfer.delete(id) { obj ->
+        sendPacket(mapOf("type" to obj.get("type").asString, "id" to (obj.get("id")?.asString ?: "")))
+    }
+
+    override fun deleteSnapshot(path: String): Boolean = snapshotGallery.delete(path)
 
     override fun requestCameraSnapshot() {
         snapshotRetryJob?.cancel()
