@@ -69,13 +69,41 @@ def set_windows_dpi_awareness():
         return
     try:
         import ctypes
+        # Per-Monitor V2 DPI awareness context (-4)
         ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
     except Exception:
         try:
             import ctypes
+            # Per-Monitor DPI aware fallback
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
-            pass
+            try:
+                import ctypes
+                # System DPI aware fallback
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
+
+def get_windows_dpi_scale():
+    if not IS_WINDOWS:
+        return 1.0, 96
+    try:
+        import ctypes
+        if hasattr(ctypes.windll.user32, "GetDpiForSystem"):
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+            if dpi and dpi > 0:
+                return dpi / 96.0, dpi
+        hdc = ctypes.windll.user32.GetDC(0)
+        if hdc:
+            LOGPIXELSX = 88
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, LOGPIXELSX)
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+            if dpi and dpi > 0:
+                return dpi / 96.0, dpi
+    except Exception:
+        pass
+    return 1.0, 96
 
 # Color Theme
 BG_DARK = "#0E1118"
@@ -95,8 +123,28 @@ class CompanionApp(tk.Tk):
         ensure_interactive_desktop()
 
         self.title("BT Mouse & Keyboard - Companion")
-        self.geometry("800x780")
-        self.minsize(720, 680)
+
+        # Apply high-DPI scaling factor to Tkinter font engine
+        self.dpi_scale, self.system_dpi = get_windows_dpi_scale()
+        if self.dpi_scale > 1.0:
+            try:
+                self.tk.call('tk', 'scaling', self.system_dpi / 72.0)
+            except Exception:
+                pass
+
+        base_w = int(800 * self.dpi_scale)
+        base_h = int(780 * self.dpi_scale)
+        min_w = int(720 * self.dpi_scale)
+        min_h = int(680 * self.dpi_scale)
+
+        # Center window on primary monitor
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        pos_x = max(0, (screen_w - base_w) // 2)
+        pos_y = max(0, (screen_h - base_h) // 2)
+
+        self.geometry(f"{base_w}x{base_h}+{pos_x}+{pos_y}")
+        self.minsize(min_w, min_h)
         self.configure(bg=BG_DARK)
 
         # Set window icon if available

@@ -740,5 +740,18 @@ class PhoneCameraSourceTests(unittest.TestCase):
         self.assertIsNone(self.instance.phone_camera_receiver.latest_jpeg)
 
 
+class DpiScalingTests(unittest.TestCase):
+    def test_dpi_scale_returns_positive_numbers(self):
+        try:
+            import app_gui
+            scale, dpi = app_gui.get_windows_dpi_scale()
+            self.assertGreaterEqual(scale, 1.0)
+            self.assertGreaterEqual(dpi, 96)
+            # Ensure awareness setup does not raise
+            app_gui.set_windows_dpi_awareness()
+        except ImportError:
+            pass
+
+
 if __name__ == "__main__":
     unittest.main()

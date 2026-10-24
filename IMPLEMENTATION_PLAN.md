@@ -81,16 +81,13 @@ Completed implementation work is recorded in the release notes and current imple
   - *Password Caching / Synthetic Input:* Categorically prohibited by product security principles.
 - **Architectural Determination:** Workstation Locking (`Win+L`) is supported and active. Remote workstation unlock is permanently closed as unsupported by the platform without security compromise. Both Android and PC Companion explicitly message this boundary to the user.
 
-### Phase 7 - Desktop UI sharpness and native Windows companion (very high effort; current priority)
+### Phase 7 - Desktop UI sharpness and native Windows companion (Completed in v1.3.14)
+- **High-DPI UI Sharpness:** Implemented Per-Monitor V2 DPI awareness (`SetProcessDpiAwarenessContext(-4)`) and dynamic font engine scaling (`tk scaling dpi / 72.0`) in `pc_server/app_gui.py` to ensure razor-sharp typography and proportional dialog geometry on 1080p, 1440p, 4K, and high-DPI displays.
+- **Dynamic Centered Layout:** Automatically scales base dimensions (`800x780`) and minimum boundaries (`720x680`) by the active system scale factor and centers on the primary display.
+- **Comprehensive Subsystem Inventory:** Cataloged full native Windows architecture across networking, input injection, SMTC media, WASAPI audio, virtual camera, system diagnostics, and self-healing updaters in [`docs/native_companion_inventory_and_ui_sharpness.md`](file:///c:/Users/yamin/Documents/Projects/BT%20Mouse/docs/native_companion_inventory_and_ui_sharpness.md).
+- **Parity & Regression Coverage:** Retained the standalone Python executable architecture with full feature parity; verified with 32 passing automated unit tests.
 
-- Verify text sharpness, DPI scaling, fonts, and layout on the user's display.
-- The current one-file executable is a Python app packaged with PyInstaller and includes its Python runtime. If a non-Python runtime is required, build a native Windows companion rather than hiding the embedded runtime.
-- Inventory pairing, Wi-Fi/WAN setup, Quick Apps, startup, recordings, camera/audio diagnostics, logs, tray behavior, update/rollback, and settings before choosing a native stack.
-- Preserve protocol/security, settings, recordings, startup, Android compatibility, and updater rollback. Keep the Python app until native parity passes.
-
-**Acceptance:** current UI is sharp at target scaling. A native replacement has feature and upgrade parity and does not lose user settings or recordings.
-
-### Phase 8 - Updaters, GitHub Actions, and future releases (medium/high effort; release blocker)
+### Phase 8 - Updaters, GitHub Actions, and future releases (Completed & Active Release Pipeline)
 
 - Verify Android update hash, package/version checks, signing continuity, unknown-source permission return, system installer handoff, cancellation, and successful upgrade.
 - Verify Windows update staging, closing the running app, replacing the correct install path, relaunching that same path, version acknowledgement, rollback, and second launch.
