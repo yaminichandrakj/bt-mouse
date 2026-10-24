@@ -119,6 +119,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout Release Notes
+        uses: actions/checkout@v4
+
       - name: Create Output Directory
         run: mkdir -p release-assets
 
@@ -134,6 +137,10 @@ jobs:
           name: BT-Mouse-Companion-EXE
           path: release-assets
 
+      - name: Verify Versioned Release Notes
+        shell: bash
+        run: test -f "release-notes/${GITHUB_REF_NAME}.md"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -143,4 +150,5 @@ jobs:
           prerelease: false
           files: |
             release-assets/*
-          generate_release_notes: true
+          body_path: release-notes/${{ github.ref_name }}.md
+          generate_release_notes: false

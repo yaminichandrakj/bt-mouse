@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
 **Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.8
-**Owner:** Codex | **Release:** [v1.3.8 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8)
+**Owner:** Codex | **Release:** [v1.3.8 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8) · [feature notes](release-notes/v1.3.8.md)
 
 ## Product objective
 
@@ -41,11 +41,11 @@ Phases are ordered from integration and verification toward larger platform work
 
 ### Phase 0 - Integrate and verify the current source (low/medium effort; immediate)
 
-1. Review server command paths, Kotlin protocol signatures, and loading/error UI for the current working-tree changes.
-2. Build Android and Windows companion from the same version; fix compile, packaging, and protocol mismatches before adding more features.
-3. Run Python security/protocol and camera/telemetry checks, Android build checks, release-version consistency, and diff review. CI passed for v1.3.8; continue physical-device checks for the remaining integration gaps.
+1. ~~Review server command paths, Kotlin protocol signatures, and loading/error UI for the current working-tree changes.~~
+2. ~~Build Android and Windows companion from the same version; fix compile, packaging, and protocol mismatches before adding more features. v1.3.8 builds passed in Actions.~~
+3. ~~Run companion regression checks, Android build checks, and release-version consistency. v1.3.8 passed all 17 Python tests and both CI builds.~~
 4. Smoke-test Bluetooth HID without the companion and each companion transport independently.
-5. Version 1.3.8 is published after version, regression, Android build, and Windows packaging gates passed.
+5. ~~Publish v1.3.8 after version, regression, Android build, and Windows packaging gates pass.~~
 
 **Acceptance:** CI platform builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
 
@@ -55,16 +55,17 @@ Phases are ordered from integration and verification toward larger platform work
 - Preserve the opt-in/auto-record setting for live PC webcam sessions and the separate option to include PC microphone audio.
 - Show recording state and errors. Ensure stop, disconnect, camera failure, and app shutdown finalize or safely discard partial files.
 - Preserve source resolution in the recording even if live preview frames are downscaled. Keep high-quality snapshots independent of preview compression.
-- A configurable age/size retention policy and minimum free-space floor are implemented in source. Verify that cleanup only removes expired/oldest inactive files and never touches active recordings.
+- ~~Implement configurable age/size retention and minimum free-space settings; add regression coverage proving expired inactive files are removed while protected recordings remain.~~
+- Verify cleanup behavior and recording quality on the target PC, including low-disk-space handling during a real webcam session.
 
 **Phone recordings experience**
-- Verify authenticated catalog listing, bounded chunk transfer, retry/acknowledgement, SHA-256 verification, download, local open, and online playback using actual webcam recordings.
+- ~~Implement authenticated catalog listing, bounded chunk transfer, SHA-256 verification, download, local open, and online-playback support.~~ Verify listing, transfer, playback, and recording integrity using actual webcam recordings on the phone.
 - Add transfer progress, cancellation, retry/error status, and cleanup after navigation/disconnect.
 - Check produced AVI/WAV formats on supported Android versions. Report unsupported formats clearly; verify seek/cancel behavior and throughput on Bluetooth, Wi-Fi, and WAN.
 - Add optional phone-local retention and distinguish PC recordings from local copies.
 
 **Selected-area browser video preview**
-- Build and verify the PC drag-selection UI and independent phone toggle. Capture only the selected rectangle while the phone requests preview; stop on toggle-off, navigation, or disconnect.
+- ~~Implement PC selected-region capture and the independent phone preview toggle, with bounded streaming and stop handling.~~ Verify privacy boundaries, coordinate scaling, and stop behavior on the target PC and phone.
 - Keep frame size/rate bounded and preview work off control/input paths. Show no-selection/capture-error states.
 - Test Windows DPI scaling and multiple monitors; add display selection/coordinate conversion if needed.
 - Explain that selected-page surroundings can be visible and protected surfaces may be black. Never label album art as video.
@@ -75,14 +76,12 @@ Phases are ordered from integration and verification toward larger platform work
 
 **Quick Apps**
 - Verify async discovery returns pinned/cached entries immediately and completes with the installed list without leaving a permanent loading state.
-- Phone-side add/remove of discovered PC Quick Apps is implemented in source, including removal of preloaded entries. Verify it over every transport. Phone-side renaming remains optional; names can currently be edited in the PC companion.
+- ~~Implement phone-side add/remove of discovered PC Quick Apps, including preloaded entries.~~ Verify add/remove over every transport. Phone-side renaming remains optional; names can currently be edited in the PC companion.
 - Refresh on entry and after edits without rescanning for every tap. Explain missing/removed shortcuts.
 
 **Tasks and live stats**
-- Confirm process and stats requests do not block behind startup prefetch and that the UI refreshes while visible.
-- Surface freshness, loading, empty, and failure states.
-- Keep storage capacity used separate from disk active time. Compare disk activity and integrated/discrete GPU readings with Task Manager on the target PC.
-- Preserve per-adapter GPU labels. Show NPU as unavailable unless a documented and tested source exists; do not fabricate a percentage.
+- ~~Return cached/default process and stats data promptly while background refresh runs; keep storage capacity separate from disk activity, report per-adapter GPU metrics, and show NPU as unavailable without a supported counter.~~
+- Verify loading/freshness states and compare disk activity and GPU readings with Task Manager on the target PC.
 
 **Volume and media controls**
 - Reproduce and fix the reported PC master-volume bug. Show acknowledged PC values or an explicit unavailable/error result; test drag behavior and mute on every transport.
@@ -93,8 +92,8 @@ Phases are ordered from integration and verification toward larger platform work
 
 ### Phase 3 - Two-way live audio (medium/high effort)
 
-- Test PC microphone to phone and phone microphone to PC as independent, explicit sessions.
-- Tie Android microphone permission to user action. Provide persistent active state, mute/stop, and reliable cleanup after navigation, disconnect, or device loss.
+- ~~Implement separate PC-microphone-to-phone and phone-microphone-to-PC sessions with user-started Android permission, foreground playback/recording, and stop/disconnect cleanup.~~
+- Test persistent active state, mute/stop, cleanup, latency, buffering, jitter, sample rates, device changes, and interruption recovery on each transport.
 - Measure latency, buffering, jitter, sample rates, device changes, and interruption recovery on each transport.
 - Verify optional PC-side WAV recording finalizes cleanly and enters the library only after close.
 - Add device selection and feedback/echo guidance; investigate echo cancellation where available.
@@ -154,7 +153,8 @@ Phases are ordered from integration and verification toward larger platform work
 - On Windows, verify packaged update staging, closing the running app, replacing the exact install path, relaunching that same path, version acknowledgement, rollback, and second launch.
 - Compare the displayed running EXE path with the user's shortcut to diagnose the stale-version report.
 - Keep Android versionName/versionCode, PC version, release tag, workflow checks, and asset names consistent.
-- **Implemented and verified in v1.3.8:** Actions version check, 17 Python regression tests, signed Android APK build, Windows companion EXE packaging, gated release publication, and asset verification. Release: [v1.3.8](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8).
+- Require a versioned `release-notes/vX.Y.Z.md` feature list for every release and publish it as the GitHub Release description, alongside only the APK and EXE downloads.
+- ~~Actions version check, 17 Python regression tests, signed Android APK build, Windows companion EXE packaging, gated release publication, and asset verification.~~ Release: [v1.3.8](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8).
 - **Still open:** validate Android and Windows in-app updater installation, relaunch, rollback, and installed-version acknowledgement on target devices. Move signing material to protected CI secrets while preserving the existing Android key.
 
 **Acceptance:** release artifacts match the versioned source and both CI builds pass. Full updater acceptance remains pending real installation and rollback checks.
@@ -172,13 +172,13 @@ Phases are ordered from integration and verification toward larger platform work
 ## Release checklist
 
 - [ ] Review working-tree changes and preserve unrelated user edits.
-- [x] Build Android and Windows companion from the same source version in GitHub Actions.
-- [x] Run companion protocol regression checks and release-version consistency in Actions (17 tests passed).
+- [x] ~~Build Android and Windows companion from the same source version in GitHub Actions.~~
+- [x] ~~Run companion protocol regression checks and release-version consistency in Actions (17 tests passed).~~
 - [ ] Check Quick Apps, tasks/stats, volume/media, webcam snapshot/live/recording, audio, and recordings library on target PC and phone.
 - [ ] Check BT, Wi-Fi, and WAN independently; use TLS for Internet access.
 - [ ] Check selected-region preview privacy and stop behavior.
 - [ ] Check both updater flows, rollback, and correct relaunch path.
 - [ ] Check startup/reconnect without auto-starting capture.
 - [ ] Compare disk/GPU readings with Task Manager.
-- [x] Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.8.
-- [x] Publish v1.3.8 after both CI builds passed; hardware checks unavailable in CI remain open.
+- [x] ~~Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.8.~~ Keep adding explicit feature notes to future releases.
+- [x] ~~Publish v1.3.8 after both CI builds passed; hardware checks unavailable in CI remain open.~~
