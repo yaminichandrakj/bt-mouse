@@ -2823,12 +2823,64 @@ class CompanionApp(QMainWindow):
         sys.exit(0)
 
 
+SINGLE_INSTANCE_NAME = "BTMouseCompanion"
+_single_instance_mutex = None
+
+
+def acquire_single_instance_lock():
+    """Hold a per-session named mutex for the process lifetime; False if another companion owns it."""
+    global _single_instance_mutex
+    if not IS_WINDOWS:
+        return True
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    _single_instance_mutex = kernel32.CreateMutexW(None, False, f"Local\\{SINGLE_INSTANCE_NAME}")
+    ERROR_ALREADY_EXISTS = 183
+    return not (_single_instance_mutex and ctypes.get_last_error() == ERROR_ALREADY_EXISTS)
+
+
+def ask_running_instance_to_show():
+    from PySide6.QtNetwork import QLocalSocket
+
+    sock = QLocalSocket()
+    sock.connectToServer(SINGLE_INSTANCE_NAME)
+    if sock.waitForConnected(1000):
+        sock.write(b"show")
+        sock.waitForBytesWritten(1000)
+        sock.disconnectFromServer()
+
+
+def listen_for_show_requests(window):
+    from PySide6.QtNetwork import QLocalServer
+
+    server = QLocalServer(window)
+    QLocalServer.removeServer(SINGLE_INSTANCE_NAME)
+
+    def _on_connection():
+        conn = server.nextPendingConnection()
+        if conn:
+            conn.readyRead.connect(lambda: (conn.readAll(), window.show_from_tray()))
+            conn.disconnected.connect(conn.deleteLater)
+
+    server.newConnection.connect(_on_connection)
+    server.listen(SINGLE_INSTANCE_NAME)
+    return server
+
+
 if __name__ == "__main__":
     set_windows_dpi_awareness()
     if HAS_QT:
         qt_app = QApplication(sys.argv)
+        if not acquire_single_instance_lock():
+            # Another companion (and its server) is already running: bring it forward instead.
+            if "--minimized" not in sys.argv:
+                ask_running_instance_to_show()
+            sys.exit(0)
         qt_app.setQuitOnLastWindowClosed(False)
         win = CompanionApp()
+        instance_server = listen_for_show_requests(win)
         if "--minimized" not in sys.argv:
             win.show()
         sys.exit(qt_app.exec())

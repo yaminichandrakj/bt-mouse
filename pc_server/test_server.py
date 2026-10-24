@@ -918,5 +918,26 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
         self.assertTrue(responses[0]["icons"]["steam"]["icon"])
 
 
+class SingleInstanceTests(unittest.TestCase):
+    def test_exclusive_bind_prefers_windows_exclusive_option(self):
+        sock = Mock()
+        with patch.object(server.socket, "SO_EXCLUSIVEADDRUSE", -5, create=True):
+            server.set_exclusive_bind(sock)
+        sock.setsockopt.assert_called_once_with(server.socket.SOL_SOCKET, -5, 1)
+
+    def test_exclusive_bind_falls_back_to_reuseaddr_elsewhere(self):
+        sock = Mock()
+        real_socket = server.socket
+        fake_socket = Mock(spec=["SOL_SOCKET", "SO_REUSEADDR"], SOL_SOCKET=real_socket.SOL_SOCKET, SO_REUSEADDR=real_socket.SO_REUSEADDR)
+        with patch.object(server, "socket", fake_socket):
+            server.set_exclusive_bind(sock)
+        sock.setsockopt.assert_called_once_with(real_socket.SOL_SOCKET, real_socket.SO_REUSEADDR, 1)
+
+    def test_companion_entry_point_guards_against_second_instance(self):
+        gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("if not acquire_single_instance_lock():", gui_source)
+        self.assertIn('f"Local\\\\{SINGLE_INSTANCE_NAME}"', gui_source)
+
+
 if __name__ == "__main__":
     unittest.main()

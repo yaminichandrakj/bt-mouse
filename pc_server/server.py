@@ -539,6 +539,18 @@ def extract_windows_app_icon_base64(path_or_cmd, size=44):
     return ""
 
 
+def set_exclusive_bind(sock):
+    """Stop a second companion from silently sharing our UDP ports.
+
+    On Windows SO_REUSEADDR lets another process bind the same port, so two servers
+    would both run; SO_EXCLUSIVEADDRUSE makes the second bind fail instead.
+    """
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+
 def save_quick_apps(apps):
     """Persist curated Start Menu shortcuts; arbitrary commands are never accepted."""
     roots = [
@@ -3142,7 +3154,7 @@ class Server:
         def listen_discovery():
             self.discovery_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
-                self.discovery_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                set_exclusive_bind(self.discovery_sock)
             except Exception:
                 pass
             try:
@@ -4880,7 +4892,7 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            set_exclusive_bind(self.sock)
         except Exception:
             pass
         try:

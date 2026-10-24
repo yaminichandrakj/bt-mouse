@@ -120,6 +120,20 @@ jobs:
           QT_SCALE_FACTOR: "1.5"
         run: python ui_snapshots.py ../ui-snapshots
 
+      - name: Verify only one companion instance can run
+        working-directory: pc_server
+        timeout-minutes: 3
+        run: |
+          $first = Start-Process python -ArgumentList "app_gui.py", "--minimized" -PassThru
+          Start-Sleep -Seconds 10
+          if ($first.HasExited) { throw "First companion exited early with code $($first.ExitCode)" }
+          $second = Start-Process python -ArgumentList "app_gui.py", "--minimized" -PassThru
+          if (-not $second.WaitForExit(30000)) { Stop-Process -Id $second.Id -Force; throw "Second companion kept running" }
+          if ($second.ExitCode -ne 0) { throw "Second companion exited with code $($second.ExitCode)" }
+          if ($first.HasExited) { throw "First companion stopped when the second launched" }
+          Stop-Process -Id $first.Id -Force
+          Write-Host "Second launch exited cleanly; first instance kept running."
+
       - name: Upload UI Snapshot Artifact
         if: always()
         uses: actions/upload-artifact@v4

@@ -22,3 +22,4 @@ app/build/
 *.jks
 pc_server/build/
 pc_server/dist/
+*.zip
