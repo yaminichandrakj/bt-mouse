@@ -31,7 +31,7 @@ class BtMouseApplication : Application() {
         )
         airMouseManager = AirMouseManager(
             context = applicationContext,
-            connection = connectionCoordinator,
+            coordinator = connectionCoordinator,
             settings = settingsRepository
         )
         // Always initialize coordinator at startup so Bluetooth, Wi-Fi, and WAN
