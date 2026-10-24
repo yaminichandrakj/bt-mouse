@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
 **Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.9
-**Owner:** Codex | **Release:** v1.3.9 prepared; CI and publication pending · [feature notes](release-notes/v1.3.9.md)
+**Owner:** Codex | **Release:** [v1.3.9 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.9) · [feature notes](release-notes/v1.3.9.md)
 
 ## Product objective
 
@@ -44,8 +44,8 @@ Phases are ordered from integration and verification toward larger platform work
 1. ~~Review and isolate slow media, camera, snapshot, and live-audio work from the command paths that carry input and heartbeats.~~
 2. ~~Disable Pen/touch navigation while preserving its source for later work.~~
 3. ~~Correct media playback-state mapping and preserve state across transient media-session errors.~~
-4. Build Android and Windows companion at v1.3.9; fix compile, packaging, or protocol mismatches reported by CI.
-5. Run existing companion regression checks, Android build checks, and release-version consistency in GitHub Actions for v1.3.9.
+4. ~~Build Android and Windows companion at v1.3.9; both GitHub Actions builds passed.~~
+5. ~~Run existing companion regression checks, Android build checks, and release-version consistency in GitHub Actions for v1.3.9; all passed.~~
 6. Smoke-test Bluetooth HID without the companion and each companion transport independently.
 
 **Acceptance:** v1.3.9 CI builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
@@ -181,5 +181,5 @@ Phases are ordered from integration and verification toward larger platform work
 - [ ] Check both updater flows, rollback, and correct relaunch path.
 - [ ] Check startup/reconnect without auto-starting capture.
 - [ ] Compare disk/GPU readings with Task Manager.
-- [ ] Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.9.
-- [ ] Publish v1.3.9 after both CI builds pass; hardware checks unavailable in CI remain open.
+- [x] ~~Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.9.~~
+- [x] ~~Publish v1.3.9 after both CI builds pass; hardware checks unavailable in CI remain open.~~
