@@ -57,7 +57,7 @@ from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_crea
                     save_pairing_pin, load_quick_apps, save_quick_apps,
                     load_media_preview_region, save_media_preview_region)
 
-APP_VERSION = "1.3.12"
+APP_VERSION = "1.3.13"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"

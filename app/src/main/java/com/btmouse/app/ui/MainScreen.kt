@@ -92,6 +92,7 @@ fun MainScreen(
     var showSettings by remember { mutableStateOf(false) }
     val isConnected by coordinator.isConnected.collectAsState()
     val reconnectStatus by coordinator.reconnectStatus.collectAsState()
+    val activeTransportLabel by coordinator.activeTransportLabel.collectAsState()
 
     Scaffold(
         topBar = {
@@ -112,20 +113,30 @@ fun MainScreen(
                                 .background(if (isConnected) AccentEmerald else AccentRose)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (showSettings) "SETTINGS & UPDATES" else when (selectedTabIndex) {
-                                0 -> "BT MOUSE & TRACKPAD"
-                                1 -> "KEYBOARD & SHORTCUTS"
-                                2 -> "PEN & TOUCHSCREEN"
-                                3 -> "MEDIA & VOLUME REMOTE"
-                                4 -> "PC UTILITIES"
-                                5 -> "CONNECTION & QR"
-                                else -> "BT MOUSE"
-                            },
-                            color = TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Column {
+                            Text(
+                                text = if (showSettings) "SETTINGS & UPDATES" else when (selectedTabIndex) {
+                                    0 -> "BT MOUSE & TRACKPAD"
+                                    1 -> "KEYBOARD & SHORTCUTS"
+                                    2 -> "PEN & TOUCHSCREEN"
+                                    3 -> "MEDIA & VOLUME REMOTE"
+                                    4 -> "PC UTILITIES"
+                                    5 -> "CONNECTION & QR"
+                                    else -> "BT MOUSE"
+                                },
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (isConnected && activeTransportLabel != "Disconnected") {
+                                Text(
+                                    text = activeTransportLabel,
+                                    color = AccentCyan,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
 
                     IconButton(

@@ -16,6 +16,14 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+enum class ActiveTransport {
+    WIFI,
+    BLUETOOTH_RFCOMM,
+    BLUETOOTH_HID,
+    REMOTE_WAN,
+    NONE
+}
+
 class ConnectionCoordinator(
     private val context: Context,
     val settings: SettingsRepository,
@@ -27,63 +35,178 @@ class ConnectionCoordinator(
     val wifiClientManager = WifiClientManager(context.applicationContext, settings, scope)
     val remoteWanManager = RemoteWanManager(context.applicationContext, settings, scope)
 
+    val clientSessionId: String = java.util.UUID.randomUUID().toString()
+    private val commandSequence = java.util.concurrent.atomic.AtomicLong(1L)
+
     val activeMode: StateFlow<ConnectionMode> = settings.connectionMode
 
-    override val isConnected: StateFlow<Boolean> = combine(
-        settings.connectionMode,
-        bluetoothRfcommManager.isConnected,
-        bluetoothHidManager.isConnected,
+    private val wifiState = combine(
         wifiClientManager.isConnected,
-        remoteWanManager.isConnected
-    ) { mode, btRfcommConnected, btHidConnected, wifiConnected, wanConnected ->
-        when (mode) {
-            ConnectionMode.BLUETOOTH -> btRfcommConnected || btHidConnected
-            ConnectionMode.WIFI -> wifiConnected
-            ConnectionMode.REMOTE_WAN -> wanConnected
+        wifiClientManager.isConnectionHealthy
+    ) { connected, healthy ->
+        connected to healthy
+    }
+
+    private val btState = combine(
+        bluetoothRfcommManager.isConnected,
+        bluetoothRfcommManager.isConnectionHealthy,
+        bluetoothHidManager.isConnected
+    ) { rfcommConn, rfcommHealthy, hidConn ->
+        Triple(rfcommConn, rfcommHealthy, hidConn)
+    }
+
+    private val wanState = combine(
+        remoteWanManager.isConnected,
+        remoteWanManager.isConnectionHealthy
+    ) { connected, healthy ->
+        connected to healthy
+    }
+
+    val activeTransport: StateFlow<ActiveTransport> = combine(
+        settings.failoverEnabled,
+        settings.connectionMode,
+        wifiState,
+        btState,
+        wanState
+    ) { failover, mode, (wifiConn, wifiHealthy), (btRfcommConn, btRfcommHealthy, btHidConn), (wanConn, wanHealthy) ->
+        if (failover) {
+            when {
+                wifiConn && wifiHealthy -> ActiveTransport.WIFI
+                btRfcommConn && btRfcommHealthy -> ActiveTransport.BLUETOOTH_RFCOMM
+                btHidConn -> ActiveTransport.BLUETOOTH_HID
+                wanConn && wanHealthy -> ActiveTransport.REMOTE_WAN
+                wifiConn -> ActiveTransport.WIFI
+                btRfcommConn -> ActiveTransport.BLUETOOTH_RFCOMM
+                wanConn -> ActiveTransport.REMOTE_WAN
+                else -> ActiveTransport.NONE
+            }
+        } else {
+            when (mode) {
+                ConnectionMode.BLUETOOTH -> {
+                    if (btRfcommConn) ActiveTransport.BLUETOOTH_RFCOMM
+                    else if (btHidConn) ActiveTransport.BLUETOOTH_HID
+                    else ActiveTransport.NONE
+                }
+                ConnectionMode.WIFI -> if (wifiConn) ActiveTransport.WIFI else ActiveTransport.NONE
+                ConnectionMode.REMOTE_WAN -> if (wanConn) ActiveTransport.REMOTE_WAN else ActiveTransport.NONE
+            }
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, ActiveTransport.NONE)
+
+    override val isConnected: StateFlow<Boolean> = combine(
+        settings.failoverEnabled,
+        settings.connectionMode,
+        wifiState,
+        btState,
+        wanState
+    ) { failover, mode, (wifiConn, _), (btRfcommConn, _, btHidConn), (wanConn, _) ->
+        if (failover) {
+            wifiConn || btRfcommConn || btHidConn || wanConn
+        } else {
+            when (mode) {
+                ConnectionMode.BLUETOOTH -> btRfcommConn || btHidConn
+                ConnectionMode.WIFI -> wifiConn
+                ConnectionMode.REMOTE_WAN -> wanConn
+            }
         }
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
+    override val measuredLatencyMs: StateFlow<Long?> = combine(
+        activeTransport,
+        wifiClientManager.measuredLatencyMs,
+        bluetoothRfcommManager.measuredLatencyMs,
+        remoteWanManager.measuredLatencyMs
+    ) { transport, wifiLat, btLat, wanLat ->
+        when (transport) {
+            ActiveTransport.WIFI -> wifiLat
+            ActiveTransport.BLUETOOTH_RFCOMM -> btLat
+            ActiveTransport.REMOTE_WAN -> wanLat
+            else -> null
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    override val isConnectionHealthy: StateFlow<Boolean> = combine(
+        activeTransport,
+        wifiClientManager.isConnectionHealthy,
+        bluetoothRfcommManager.isConnectionHealthy,
+        remoteWanManager.isConnectionHealthy
+    ) { transport, wifiH, btH, wanH ->
+        when (transport) {
+            ActiveTransport.WIFI -> wifiH
+            ActiveTransport.BLUETOOTH_RFCOMM -> btH
+            ActiveTransport.REMOTE_WAN -> wanH
+            ActiveTransport.BLUETOOTH_HID -> true
+            ActiveTransport.NONE -> true
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, true)
+
+    val activeTransportLabel: StateFlow<String> = combine(
+        activeTransport,
+        measuredLatencyMs,
+        isConnectionHealthy
+    ) { transport, latency, healthy ->
+        val suffix = if (latency != null) " • ${latency}ms" else ""
+        val warning = if (!healthy) " (High Jitter)" else ""
+        when (transport) {
+            ActiveTransport.WIFI -> "Wi-Fi$suffix$warning"
+            ActiveTransport.BLUETOOTH_RFCOMM -> "Bluetooth RFCOMM$suffix$warning"
+            ActiveTransport.BLUETOOTH_HID -> "Bluetooth HID (Direct)"
+            ActiveTransport.REMOTE_WAN -> "Remote WAN$suffix$warning"
+            ActiveTransport.NONE -> "Disconnected"
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, "Disconnected")
+
     override val statusMessage: StateFlow<String> = combine(
-        settings.connectionMode,
+        activeTransport,
         bluetoothRfcommManager.statusMessage,
         bluetoothHidManager.statusMessage,
         wifiClientManager.statusMessage,
         remoteWanManager.statusMessage
-    ) { mode, btRfcommStatus, btHidStatus, wifiStatus, wanStatus ->
-        when (mode) {
-            ConnectionMode.BLUETOOTH -> {
-                if (bluetoothRfcommManager.isConnected.value) btRfcommStatus
-                else if (bluetoothHidManager.isConnected.value) btHidStatus
-                else btRfcommStatus
+    ) { transport, btRfcommStatus, btHidStatus, wifiStatus, wanStatus ->
+        when (transport) {
+            ActiveTransport.WIFI -> wifiStatus
+            ActiveTransport.BLUETOOTH_RFCOMM -> btRfcommStatus
+            ActiveTransport.BLUETOOTH_HID -> btHidStatus
+            ActiveTransport.REMOTE_WAN -> wanStatus
+            ActiveTransport.NONE -> when (settings.connectionMode.value) {
+                ConnectionMode.BLUETOOTH -> btRfcommStatus
+                ConnectionMode.WIFI -> wifiStatus
+                ConnectionMode.REMOTE_WAN -> wanStatus
             }
-            ConnectionMode.WIFI -> wifiStatus
-            ConnectionMode.REMOTE_WAN -> wanStatus
         }
     }.stateIn(scope, SharingStarted.Eagerly, "Initializing...")
 
     override val connectedDeviceName: StateFlow<String?> = combine(
-        settings.connectionMode,
+        activeTransport,
         bluetoothRfcommManager.connectedDeviceName,
         bluetoothHidManager.connectedDeviceName,
         wifiClientManager.connectedDeviceName,
         remoteWanManager.connectedDeviceName
-    ) { mode, btRfcommName, btHidName, wifiName, wanName ->
-        when (mode) {
-            ConnectionMode.BLUETOOTH -> btRfcommName ?: btHidName
-            ConnectionMode.WIFI -> wifiName
-            ConnectionMode.REMOTE_WAN -> wanName
+    ) { transport, btRfcommName, btHidName, wifiName, wanName ->
+        when (transport) {
+            ActiveTransport.WIFI -> wifiName
+            ActiveTransport.BLUETOOTH_RFCOMM -> btRfcommName
+            ActiveTransport.BLUETOOTH_HID -> btHidName
+            ActiveTransport.REMOTE_WAN -> wanName
+            ActiveTransport.NONE -> null
         }
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
     private val currentInputConnection: InputConnection
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.BLUETOOTH -> {
-                if (bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager
-                else if (bluetoothHidManager.isConnected.value) bluetoothHidManager
-                else bluetoothRfcommManager
+        get() = when (activeTransport.value) {
+            ActiveTransport.WIFI -> wifiClientManager
+            ActiveTransport.BLUETOOTH_RFCOMM -> bluetoothRfcommManager
+            ActiveTransport.BLUETOOTH_HID -> bluetoothHidManager
+            ActiveTransport.REMOTE_WAN -> remoteWanManager
+            ActiveTransport.NONE -> when (settings.connectionMode.value) {
+                ConnectionMode.BLUETOOTH -> {
+                    if (bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager
+                    else if (bluetoothHidManager.isConnected.value) bluetoothHidManager
+                    else bluetoothRfcommManager
+                }
+                ConnectionMode.WIFI -> wifiClientManager
+                ConnectionMode.REMOTE_WAN -> remoteWanManager
             }
-            ConnectionMode.WIFI -> wifiClientManager
-            ConnectionMode.REMOTE_WAN -> remoteWanManager
         }
 
     private val _reconnectStatus = MutableStateFlow<String?>(null)
@@ -92,15 +215,48 @@ class ConnectionCoordinator(
     private var reconnectJob: Job? = null
     private var sessionMonitorJob: Job? = null
     private var supervisionJob: Job? = null
+    private var transportTransitionJob: Job? = null
+    private var lastObservedTransport: ActiveTransport = ActiveTransport.NONE
     @Volatile private var wasConnected: Boolean = false
     @Volatile private var intentionalDisconnect: Boolean = false
 
     fun initialize() {
         activeInstance = this
+        wifiClientManager.clientSessionId = clientSessionId
+        wifiClientManager.nextSeqSupplier = { commandSequence.getAndIncrement() }
+        bluetoothRfcommManager.clientSessionId = clientSessionId
+        bluetoothRfcommManager.nextSeqSupplier = { commandSequence.getAndIncrement() }
+        remoteWanManager.clientSessionId = clientSessionId
+        remoteWanManager.nextSeqSupplier = { commandSequence.getAndIncrement() }
+
         bluetoothHidManager.initialize()
         bluetoothRfcommManager.refreshPairedDevices()
+        monitorTransportTransitions()
         monitorSessionAndMedia()
         monitorConnectionSupervision()
+    }
+
+    private fun monitorTransportTransitions() {
+        transportTransitionJob?.cancel()
+        transportTransitionJob = scope.launch {
+            activeTransport.collect { newTransport ->
+                val oldTransport = lastObservedTransport
+                if (oldTransport != ActiveTransport.NONE && oldTransport != newTransport) {
+                    getTransportConnection(oldTransport)?.sendMouseButton(0)
+                    getTransportConnection(newTransport)?.notifyPathSwitch()
+                    getTransportConnection(newTransport)?.queryMedia()
+                }
+                lastObservedTransport = newTransport
+            }
+        }
+    }
+
+    private fun getTransportConnection(transport: ActiveTransport): InputConnection? = when (transport) {
+        ActiveTransport.WIFI -> wifiClientManager
+        ActiveTransport.BLUETOOTH_RFCOMM -> bluetoothRfcommManager
+        ActiveTransport.BLUETOOTH_HID -> bluetoothHidManager
+        ActiveTransport.REMOTE_WAN -> remoteWanManager
+        ActiveTransport.NONE -> null
     }
 
     fun setMode(mode: ConnectionMode) {
@@ -298,13 +454,7 @@ class ConnectionCoordinator(
     }
 
     override val mediaStatus: StateFlow<MediaStatus>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.mediaStatus
-            // Direct HID has no return channel for PC media metadata. Keep its idle state
-            // isolated instead of displaying data from a previously used Wi-Fi connection.
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.mediaStatus
-            ConnectionMode.WIFI -> wifiClientManager.mediaStatus
-        }
+        get() = currentInputConnection.mediaStatus ?: bluetoothRfcommManager.mediaStatus
 
     override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
         currentInputConnection.queryMedia(includePreview, includeVideoPreview)
@@ -362,88 +512,40 @@ class ConnectionCoordinator(
 
     // Rich Desktop, Hardware & Process queries
     override val systemStats: StateFlow<SystemStats?>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.systemStats
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.systemStats
-            ConnectionMode.WIFI -> wifiClientManager.systemStats
-        }
+        get() = currentInputConnection.systemStats ?: bluetoothRfcommManager.systemStats
 
     override val runningProcesses: StateFlow<List<ProcessInfo>>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.runningProcesses
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.runningProcesses
-            ConnectionMode.WIFI -> wifiClientManager.runningProcesses
-        }
+        get() = currentInputConnection.runningProcesses ?: bluetoothRfcommManager.runningProcesses
 
     override val installedApps: StateFlow<List<AppInfo>>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.installedApps
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.installedApps
-            ConnectionMode.WIFI -> wifiClientManager.installedApps
-        }
+        get() = currentInputConnection.installedApps ?: bluetoothRfcommManager.installedApps
 
     override val latestCameraFrame: StateFlow<ByteArray?>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.latestCameraFrame
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.latestCameraFrame
-            ConnectionMode.WIFI -> wifiClientManager.latestCameraFrame
-        }
+        get() = currentInputConnection.latestCameraFrame ?: bluetoothRfcommManager.latestCameraFrame
 
     override val cameraSnapshots: StateFlow<List<SnapshotEntry>>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.cameraSnapshots
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.cameraSnapshots
-            ConnectionMode.WIFI -> wifiClientManager.cameraSnapshots
-        }
+        get() = currentInputConnection.cameraSnapshots ?: bluetoothRfcommManager.cameraSnapshots
 
     override val isCameraStreaming: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isCameraStreaming
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isCameraStreaming
-            ConnectionMode.WIFI -> wifiClientManager.isCameraStreaming
-        }
+        get() = currentInputConnection.isCameraStreaming ?: bluetoothRfcommManager.isCameraStreaming
 
     override val isCameraRecording: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isCameraRecording
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isCameraRecording
-            ConnectionMode.WIFI -> wifiClientManager.isCameraRecording
-        }
+        get() = currentInputConnection.isCameraRecording ?: bluetoothRfcommManager.isCameraRecording
 
     override val isAudioRecording: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isAudioRecording
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isAudioRecording
-            ConnectionMode.WIFI -> wifiClientManager.isAudioRecording
-        }
+        get() = currentInputConnection.isAudioRecording ?: bluetoothRfcommManager.isAudioRecording
 
     override val isPcLiveAudioActive: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPcLiveAudioActive
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPcLiveAudioActive
-            ConnectionMode.WIFI -> wifiClientManager.isPcLiveAudioActive
-        }
+        get() = currentInputConnection.isPcLiveAudioActive ?: bluetoothRfcommManager.isPcLiveAudioActive
 
     override val isPhoneLiveAudioActive: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPhoneLiveAudioActive
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPhoneLiveAudioActive
-            ConnectionMode.WIFI -> wifiClientManager.isPhoneLiveAudioActive
-        }
+        get() = currentInputConnection.isPhoneLiveAudioActive ?: bluetoothRfcommManager.isPhoneLiveAudioActive
 
     override val isPcLiveAudioRecording: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPcLiveAudioRecording
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPcLiveAudioRecording
-            ConnectionMode.WIFI -> wifiClientManager.isPcLiveAudioRecording
-        }
+        get() = currentInputConnection.isPcLiveAudioRecording ?: bluetoothRfcommManager.isPcLiveAudioRecording
 
     override val isPhoneLiveAudioRecording: StateFlow<Boolean>
-        get() = when (settings.connectionMode.value) {
-            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPhoneLiveAudioRecording
-            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPhoneLiveAudioRecording
-            ConnectionMode.WIFI -> wifiClientManager.isPhoneLiveAudioRecording
-        }
+        get() = currentInputConnection.isPhoneLiveAudioRecording ?: bluetoothRfcommManager.isPhoneLiveAudioRecording
 
     override fun querySystemStats() {
         currentInputConnection.querySystemStats()
@@ -535,6 +637,7 @@ class ConnectionCoordinator(
             activeInstance = null
         }
         cancelReconnect()
+        transportTransitionJob?.cancel()
         sessionMonitorJob?.cancel()
         supervisionJob?.cancel()
         CompanionSessionService.stop(context)

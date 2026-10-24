@@ -46,6 +46,15 @@ class WifiClientManager(
     private val _connectedDeviceName = MutableStateFlow<String?>(null)
     override val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
 
+    private val _measuredLatencyMs = MutableStateFlow<Long?>(null)
+    override val measuredLatencyMs: StateFlow<Long?> = _measuredLatencyMs.asStateFlow()
+
+    private val _isConnectionHealthy = MutableStateFlow(true)
+    override val isConnectionHealthy: StateFlow<Boolean> = _isConnectionHealthy.asStateFlow()
+
+    var clientSessionId: String = ""
+    var nextSeqSupplier: (() -> Long)? = null
+
     private val _mediaStatus = MutableStateFlow(MediaStatus())
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
 
@@ -174,7 +183,20 @@ class WifiClientManager(
             }
             val type = json.get("type")?.asString ?: ""
             when (type) {
-                "pong" -> lastPongAtMs = android.os.SystemClock.elapsedRealtime()
+                "pong" -> {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    lastPongAtMs = now
+                    val clientTime = json.get("client_time")?.asLong
+                    if (clientTime != null && clientTime > 0) {
+                        val rtt = now - clientTime
+                        if (rtt >= 0) {
+                            _measuredLatencyMs.value = rtt
+                            _isConnectionHealthy.value = rtt < 1200L
+                        }
+                    } else {
+                        _isConnectionHealthy.value = true
+                    }
+                }
                 "connect_ack" -> {
                     val pending = pendingConnect
                     if (pending != null && pending.address == sourceAddress && pending.port == sourcePort) {
@@ -462,14 +484,18 @@ class WifiClientManager(
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 if (_isConnected.value) {
-                    if (android.os.SystemClock.elapsedRealtime() - lastPongAtMs > 30_000L) {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (lastPongAtMs > 0 && now - lastPongAtMs > 4500L) {
+                        _isConnectionHealthy.value = false
+                    }
+                    if (now - lastPongAtMs > 30_000L) {
                         _isConnected.value = false
                         _connectedDeviceName.value = null
                         clearSessionState()
                         _statusMessage.value = "PC server has not responded for 30 seconds"
                         break
                     }
-                    sendPacket(mapOf("type" to "ping"))
+                    sendPacket(mapOf("type" to "ping", "client_time" to now))
                 }
                 delay(1500)
             }
@@ -618,6 +644,13 @@ class WifiClientManager(
         liveAudioRecorder.stop()
         _isPhoneLiveAudioActive.value = false
         _isPhoneLiveAudioRecording.value = false
+        _measuredLatencyMs.value = null
+        _isConnectionHealthy.value = true
+    }
+
+    override fun notifyPathSwitch() {
+        sendMouseButton(0)
+        sendPacket(mapOf("type" to "path_switch"))
     }
 
     private fun sendPacket(
@@ -632,7 +665,14 @@ class WifiClientManager(
         if (targetHost.isEmpty() || targetPort <= 0) return
 
         try {
-            val authenticatedData = data + ("token" to settings.serverPin.value.trim())
+            val extra = mutableMapOf<String, Any?>("token" to settings.serverPin.value.trim())
+            if (clientSessionId.isNotEmpty()) {
+                extra["client_session"] = clientSessionId
+            }
+            nextSeqSupplier?.invoke()?.let { seq ->
+                if (seq > 0) extra["seq"] = seq
+            }
+            val authenticatedData = data + extra
             val json = gson.toJson(authenticatedData)
             val bytes = json.toByteArray()
             val address = InetAddress.getByName(targetHost)

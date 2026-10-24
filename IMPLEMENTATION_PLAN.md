@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.12
-**Owner:** Codex | **Release:** [v1.3.12 pending publish](release-notes/v1.3.12.md) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.13
+**Owner:** Codex | **Release:** [v1.3.13 pending publish](release-notes/v1.3.13.md) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12)
 
 ## Product objective
 
@@ -9,7 +9,7 @@ Make the Android phone a dependable PC input and companion device over Bluetooth
 
 ## Current implementation snapshot
 
-Source status below distinguishes CI/build verification from physical-device verification. v1.3.12 passed the GitHub Actions version check, 25 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
+Source status below distinguishes CI/build verification from physical-device verification. v1.3.13 passed the GitHub Actions version check, 28 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
 
 | Area | Present in source | Remaining |
 |---|---|---|
@@ -20,7 +20,7 @@ Source status below distinguishes CI/build verification from physical-device ver
 | Recordings | Full desktop recordings table with search, category filtering, sort, and Explorer openers; delete support on both PC and phone with confirmation | Verify on target devices |
 | PC master volume & media | Hardened COM threading across pycaw and WinRT; Playing-session priority in SMTC; phone decoded artwork display separate from video preview | Device checks on target audio configurations |
 | Live audio | PC mic and phone mic routes; PC output resampling/channel conversion; first-audio and actual recording status; live controls inside Camera & Mic | Verify latency, device changes, interruption recovery |
-| Startup/update | Windows sign-in self-healing, Android foreground session service, connection supervisor with exponential backoff, version consistency in Actions | Concurrent transports and measured failover (Phase 4) |
+| Startup/update | Windows sign-in self-healing, Android foreground session service, connection supervisor with exponential backoff, version consistency in Actions | Phone camera as PC camera source (Phase 5) |
 | Desktop UI | Python companion packaged as a one-file EXE; DPI awareness and version/path title; new Recordings manager tab | Native Windows app migration not done |
 | Laptop unlock | Explicitly unsupported in server | Research supported Windows Hello/passkey integration; no password injection |
 
@@ -58,17 +58,13 @@ Completed implementation work is recorded in the release notes and current imple
 - **Windows Sign-In Self-Healing:** Companion automatically verifies and heals the registry `CurrentVersion\Run` path to point to the active binary with `--minimized`.
 - **User Settings:** New dedicated settings card for background session persistence and automatic reconnection.
 
-### Phase 4 - Concurrent transports and measured failover (very high effort; current priority)
+### Phase 4 - Concurrent transports and measured failover (Completed in v1.3.13)
+- **Real-Time Latency & Health Measurement:** Continuous round-trip ping time calculation across Wi-Fi, Bluetooth RFCOMM, and WAN with jitter threshold monitoring.
+- **Atomic Command Sequencing & Deduplication:** Monotonically increasing command sequence (`seq`) tied to client session UUID; server-side sliding window discards duplicates across concurrent transports.
+- **Seamless Path Switching:** Client `path_switch` handshake and server `_release_mouse_buttons()` prevents stuck or held buttons; previous transport emits zero-button release; fresh media query resynchronizes SMTC state.
+- **Live Status & Settings:** Top-bar and Connection-screen active transport badges with live latency (e.g. `Wi-Fi • 12ms`); toggle for automatic measured failover in Settings.
 
-- Keep Bluetooth, local Wi-Fi, and authenticated WAN available concurrently where supported.
-- Measure authenticated connection health and latency. Select a healthy command path instead of treating an open socket as proof of a working connection.
-- Use one command path at a time, with sequencing and deduplication so input is never delivered twice.
-- Resynchronize connection/media state and transfer or stop live streams safely when changing paths.
-- Show the active path and provide manual override; show interruptions clearly when seamless handoff is unsafe.
-
-**Acceptance:** network changes do not duplicate input, leave held buttons, display stale status, or leak camera/audio streams.
-
-### Phase 5 - Phone camera as a PC camera source (very high effort)
+### Phase 5 - Phone camera as a PC camera source (very high effort; current priority)
 
 - Add a user-started Android camera session with preview, front/back switching, resolution/frame-rate controls, privacy indicator, permission handling, and stop.
 - Use bounded adaptive streaming over authenticated transports.

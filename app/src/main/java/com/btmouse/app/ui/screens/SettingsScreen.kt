@@ -109,6 +109,7 @@ fun SettingsScreen(
     val isGyroSupported by airMouseManager.isSupported.collectAsState()
     val backgroundSessionEnabled by settings.backgroundSessionEnabled.collectAsState()
     val autoReconnect by settings.autoReconnect.collectAsState()
+    val failoverEnabled by settings.failoverEnabled.collectAsState()
 
     val scrollState = rememberScrollState()
 
@@ -279,6 +280,23 @@ fun SettingsScreen(
                     Switch(
                         checked = autoReconnect,
                         onCheckedChange = { settings.setAutoReconnect(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                    )
+                }
+
+                // Automatic Measured Failover Switch
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                        Text("Automatic Measured Failover", color = TextPrimary, fontSize = 14.sp)
+                        Text("Measure ping latency across Wi-Fi, Bluetooth, and WAN, seamlessly routing commands over the healthiest path with zero duplicate inputs", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = failoverEnabled,
+                        onCheckedChange = { settings.setFailoverEnabled(it) },
                         colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
                     )
                 }

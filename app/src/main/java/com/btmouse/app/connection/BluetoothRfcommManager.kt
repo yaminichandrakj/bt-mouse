@@ -50,6 +50,18 @@ class BluetoothRfcommManager(
     private val _connectedDeviceName = MutableStateFlow<String?>(null)
     override val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
 
+    private val _measuredLatencyMs = MutableStateFlow<Long?>(null)
+    override val measuredLatencyMs: StateFlow<Long?> = _measuredLatencyMs.asStateFlow()
+
+    private val _isConnectionHealthy = MutableStateFlow(true)
+    override val isConnectionHealthy: StateFlow<Boolean> = _isConnectionHealthy.asStateFlow()
+
+    var clientSessionId: String = ""
+    var nextSeqSupplier: (() -> Long)? = null
+
+    private var heartbeatJob: Job? = null
+    @Volatile private var lastPongAtMs: Long = 0L
+
     private val _pairedDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val pairedDevices: StateFlow<List<BluetoothDevice>> = _pairedDevices.asStateFlow()
 
@@ -168,6 +180,7 @@ class BluetoothRfcommManager(
                 }
                 sendJson(handshake)
                 queryMedia()
+                startHeartbeat()
 
                 // Start receiver loop for responses
                 val inputStream = btSocket.inputStream
@@ -187,7 +200,30 @@ class BluetoothRfcommManager(
         }
     }
 
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        lastPongAtMs = android.os.SystemClock.elapsedRealtime()
+        heartbeatJob = scope.launch(Dispatchers.IO) {
+            while (isActive && _isConnected.value) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (lastPongAtMs > 0 && now - lastPongAtMs > 6000L) {
+                    _isConnectionHealthy.value = false
+                }
+                val ping = JsonObject().apply {
+                    addProperty("type", "ping")
+                    addProperty("client_time", now)
+                }
+                sendJson(ping)
+                delay(2500L)
+            }
+        }
+    }
+
     fun disconnect() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+        _measuredLatencyMs.value = null
+        _isConnectionHealthy.value = true
         recordingTransfer.cancel()
         try {
             if (_isConnected.value) sendJson(JsonObject().apply { addProperty("type", "disconnect") })
@@ -218,12 +254,31 @@ class BluetoothRfcommManager(
         _statusMessage.value = "Bluetooth disconnected"
     }
 
+    override fun notifyPathSwitch() {
+        sendMouseButton(0)
+        sendJson(JsonObject().apply { addProperty("type", "path_switch") })
+    }
+
     private fun processIncomingPacket(line: String) {
         try {
             val root = gson.fromJson(line, JsonObject::class.java) ?: return
             recordingTransfer.handleMessage(root, ::sendJson)
             val type = root.get("type")?.asString ?: ""
             when (type) {
+                "pong" -> {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    lastPongAtMs = now
+                    val clientTime = root.get("client_time")?.asLong
+                    if (clientTime != null && clientTime > 0) {
+                        val rtt = now - clientTime
+                        if (rtt >= 0) {
+                            _measuredLatencyMs.value = rtt
+                            _isConnectionHealthy.value = rtt < 1500L
+                        }
+                    } else {
+                        _isConnectionHealthy.value = true
+                    }
+                }
                 "media_status" -> {
                     val hasMedia = root.get("has_media")?.asBoolean ?: false
                     val title = root.get("title")?.asString ?: ""
@@ -402,6 +457,14 @@ class BluetoothRfcommManager(
     }
 
     private fun sendJson(obj: JsonObject) {
+        if (clientSessionId.isNotEmpty() && !obj.has("client_session")) {
+            obj.addProperty("client_session", clientSessionId)
+        }
+        nextSeqSupplier?.invoke()?.let { seq ->
+            if (seq > 0 && !obj.has("seq")) {
+                obj.addProperty("seq", seq)
+            }
+        }
         sendQueue.trySend(obj.toString())
     }
 

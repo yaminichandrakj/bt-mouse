@@ -588,5 +588,84 @@ class StartupSelfHealingTests(unittest.TestCase):
         mock_winreg.SetValueEx.assert_not_called()
 
 
+class ConcurrentTransportFailoverTests(unittest.TestCase):
+    def test_ping_echoes_client_time(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = "123456"
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._camera_stream_owner_lock = threading.Lock()
+        instance.live_audio_manager = Mock()
+        responses = []
+
+        instance.handle_packet(
+            {"type": "ping", "client_time": 987654, "token": "123456"},
+            ("127.0.0.1", 9999),
+            responses.append
+        )
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["type"], "pong")
+        self.assertEqual(responses[0]["client_time"], 987654)
+
+    def test_sequence_deduplication_drops_duplicate_commands(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = "123456"
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._camera_stream_owner_lock = threading.Lock()
+        instance.live_audio_manager = Mock()
+        instance._cmd_seq_lock = threading.Lock()
+        instance._last_cmd_seq = {}
+        instance.last_buttons = 0
+        instance.last_pen_button = None
+        instance.pressed_keys = set()
+        instance.last_input_at = 0
+        instance.mouse = Mock()
+
+        # First command with seq 5
+        instance.handle_packet(
+            {"type": "mouse", "dx": 10, "dy": 0, "seq": 5, "client_session": "sess-1", "token": "123456"},
+            ("127.0.0.1", 9999),
+            lambda resp: None
+        )
+        self.assertEqual(instance._last_cmd_seq.get("sess-1"), 5)
+
+        # Duplicate command with seq 5 (e.g. delivered via overlapping transport)
+        instance.handle_packet(
+            {"type": "mouse", "dx": 10, "dy": 0, "seq": 5, "client_session": "sess-1", "token": "123456"},
+            ("192.168.1.50", 8888),
+            lambda resp: None
+        )
+        # Should remain 5 and not update or execute
+        self.assertEqual(instance._last_cmd_seq.get("sess-1"), 5)
+
+    def test_path_switch_releases_mouse_buttons(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = "123456"
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._camera_stream_owner_lock = threading.Lock()
+        instance.live_audio_manager = Mock()
+        instance._cmd_seq_lock = threading.Lock()
+        instance._last_cmd_seq = {}
+        instance.last_buttons = 1
+        instance.last_pen_button = None
+        instance.pressed_keys = set()
+        instance.mouse = Mock()
+        instance.keyboard = None
+        responses = []
+
+        instance.handle_packet(
+            {"type": "path_switch", "token": "123456"},
+            ("127.0.0.1", 9999),
+            responses.append
+        )
+        self.assertEqual(instance.last_buttons, 0)
+        self.assertEqual(responses, [{"type": "path_switch_ack", "success": True}])
+
+
 if __name__ == "__main__":
     unittest.main()

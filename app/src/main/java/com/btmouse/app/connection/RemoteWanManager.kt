@@ -48,6 +48,16 @@ class RemoteWanManager(
     private val _connectedDeviceName = MutableStateFlow<String?>(null)
     override val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
 
+    private val _measuredLatencyMs = MutableStateFlow<Long?>(null)
+    override val measuredLatencyMs: StateFlow<Long?> = _measuredLatencyMs.asStateFlow()
+
+    private val _isConnectionHealthy = MutableStateFlow(true)
+    override val isConnectionHealthy: StateFlow<Boolean> = _isConnectionHealthy.asStateFlow()
+
+    var clientSessionId: String = ""
+    var nextSeqSupplier: (() -> Long)? = null
+    @Volatile private var lastPongAtMs: Long = 0L
+
     private val _mediaStatus = MutableStateFlow(MediaStatus())
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
 
@@ -189,6 +199,13 @@ class RemoteWanManager(
         _runningProcesses.value = emptyList()
         _installedApps.value = emptyList()
         _latestCameraFrame.value = null
+        _measuredLatencyMs.value = null
+        _isConnectionHealthy.value = true
+    }
+
+    override fun notifyPathSwitch() {
+        sendMouseButton(0)
+        sendPacket(mapOf("type" to "path_switch"))
     }
 
     private fun handleIncomingMessage(text: String, source: WebSocket) {
@@ -198,6 +215,20 @@ class RemoteWanManager(
             if (_isConnected.value) recordingTransfer.handleMessage(root, ::sendJson)
 
             when (type) {
+                "pong" -> {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    lastPongAtMs = now
+                    val clientTime = root.get("client_time")?.asLong
+                    if (clientTime != null && clientTime > 0) {
+                        val rtt = now - clientTime
+                        if (rtt >= 0) {
+                            _measuredLatencyMs.value = rtt
+                            _isConnectionHealthy.value = rtt < 2500L
+                        }
+                    } else {
+                        _isConnectionHealthy.value = true
+                    }
+                }
                 "auth_response" -> {
                     val authOk = root.get("authenticated")?.asBoolean ?: false
                     val msg = root.get("message")?.asString ?: ""
@@ -396,12 +427,17 @@ class RemoteWanManager(
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
+        lastPongAtMs = android.os.SystemClock.elapsedRealtime()
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 if (_isConnected.value) {
-                    sendPacket(mapOf("type" to "ping"))
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (lastPongAtMs > 0 && now - lastPongAtMs > 10_000L) {
+                        _isConnectionHealthy.value = false
+                    }
+                    sendPacket(mapOf("type" to "ping", "client_time" to now))
                 }
-                delay(15_000)
+                delay(3000L)
             }
         }
     }
@@ -409,6 +445,14 @@ class RemoteWanManager(
     private fun sendJson(obj: JsonObject) {
         if (!_isConnected.value) return
         val socket = webSocket ?: return
+        if (clientSessionId.isNotEmpty() && !obj.has("client_session")) {
+            obj.addProperty("client_session", clientSessionId)
+        }
+        nextSeqSupplier?.invoke()?.let { seq ->
+            if (seq > 0 && !obj.has("seq")) {
+                obj.addProperty("seq", seq)
+            }
+        }
         if (!socket.send(obj.toString())) {
             Log.w(tag, "WebSocket rejected an outgoing packet")
         }

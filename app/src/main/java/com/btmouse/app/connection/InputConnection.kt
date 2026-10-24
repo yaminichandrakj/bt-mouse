@@ -44,6 +44,9 @@ interface InputConnection {
     val isConnected: StateFlow<Boolean>
     val statusMessage: StateFlow<String>
     val connectedDeviceName: StateFlow<String?>
+    val measuredLatencyMs: StateFlow<Long?>? get() = null
+    val isConnectionHealthy: StateFlow<Boolean>? get() = null
+    fun notifyPathSwitch() {}
 
     fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int = 0, hScroll: Int = 0)
     fun sendMouseButton(buttons: Int)

@@ -101,6 +101,8 @@ fun ConnectionScreen(
     val statusMessage by coordinator.statusMessage.collectAsState()
     val connectedDevice by coordinator.connectedDeviceName.collectAsState()
     val reconnectStatus by coordinator.reconnectStatus.collectAsState()
+    val activeTransportLabel by coordinator.activeTransportLabel.collectAsState()
+    val failoverEnabled by settings.failoverEnabled.collectAsState()
 
     val pairedDevices by coordinator.bluetoothRfcommManager.pairedDevices.collectAsState()
 
@@ -317,8 +319,12 @@ fun ConnectionScreen(
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                         Text(
-                            text = statusMessage,
-                            color = TextSecondary,
+                            text = if (isConnected && activeTransportLabel != "Disconnected") {
+                                if (failoverEnabled) "Failover Active • $activeTransportLabel" else activeTransportLabel
+                            } else {
+                                statusMessage
+                            },
+                            color = if (isConnected) AccentCyan else TextSecondary,
                             fontSize = 12.sp,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis

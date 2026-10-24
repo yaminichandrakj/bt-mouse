@@ -1943,6 +1943,8 @@ class Server:
         self.last_log_time = 0
         self.connected_client = None
         self.auth_failures = {}
+        self._cmd_seq_lock = threading.Lock()
+        self._last_cmd_seq = {}
         self._process_cpu_samples = {}
         self._query_cache = {}
         self._query_cache_lock = threading.Lock()
@@ -2051,14 +2053,17 @@ class Server:
             return ("wan", None)
         return ("wifi", tuple(addr))
 
-    def _refresh_camera_stream_lease(self, addr):
+    def _refresh_camera_stream_lease(self, addr, data=None):
         key = self._camera_client_key(addr)
+        client_session = data.get("client_session") if isinstance(data, dict) else None
         owner_lock = getattr(self, "_camera_stream_owner_lock", None)
         if owner_lock is not None:
             with owner_lock:
                 owner = getattr(self, "_camera_stream_owner", None)
-                if owner and owner.get("key") == key:
+                if owner and (owner.get("key") == key or (client_session and owner.get("client_session") == client_session)):
                     owner["last_seen"] = time.monotonic()
+                    if client_session and owner.get("key") != key:
+                        owner["key"] = key
         if hasattr(self, "live_audio_manager"):
             self.live_audio_manager.touch_owner(key)
 
@@ -2318,7 +2323,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.12"
+                    "version": "1.3.13"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2335,14 +2340,21 @@ class Server:
                 respond({"type": "auth_error", "message": "Pairing PIN required or invalid"})
             return
 
-        self._refresh_camera_stream_lease(addr)
+        self._refresh_camera_stream_lease(addr, data)
 
         if cmd_type == "ping":
-            respond({"type": "pong", "time": time.time()})
+            client_time = data.get("client_time")
+            payload = {"type": "pong", "time": time.time()}
+            if client_time is not None:
+                payload["client_time"] = client_time
+            respond(payload)
             return
 
-        if cmd_type == "disconnect":
+        if cmd_type in ("disconnect", "path_switch"):
             self._release_mouse_buttons()
+            if cmd_type == "path_switch":
+                respond({"type": "path_switch_ack", "success": True})
+                return
             owner_key = self._camera_client_key(addr)
             self._stop_camera_stream_for_client(owner_key)
             self.live_audio_manager.stop_pc_to_phone(owner_key)
@@ -2352,6 +2364,17 @@ class Server:
                 self.on_client_callback(self.connected_client, False)
             self.connected_client = None
             return
+
+        # Sequence deduplication
+        seq = data.get("seq")
+        if seq is not None and isinstance(seq, int) and seq > 0:
+            client_session = str(data.get("client_session") or self._camera_client_key(addr))
+            with self._cmd_seq_lock:
+                last_seq = self._last_cmd_seq.get(client_session, 0)
+                if 0 < seq <= last_seq and (last_seq - seq) < 100_000:
+                    # Drop duplicate or out-of-order packet
+                    return
+                self._last_cmd_seq[client_session] = seq
 
         if self.on_packet_callback:
             try:
@@ -3151,13 +3174,15 @@ class Server:
                 pass
             self.last_pen_button = None
 
-        if self.keyboard and self.pressed_keys:
-            for key in tuple(self.pressed_keys):
+        keyboard = getattr(self, "keyboard", None)
+        pressed_keys = getattr(self, "pressed_keys", None)
+        if keyboard and pressed_keys:
+            for key in tuple(pressed_keys):
                 try:
-                    self.keyboard.release(key)
+                    keyboard.release(key)
                 except Exception:
                     pass
-            self.pressed_keys.clear()
+            pressed_keys.clear()
 
     def _release_stale_inputs(self):
         if (self.last_buttons or self.last_pen_button is not None or self.pressed_keys) and time.monotonic() - self.last_input_at >= 30.0:

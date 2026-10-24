@@ -76,6 +76,9 @@ class SettingsRepository(context: Context) {
     private val _backgroundSessionEnabled = MutableStateFlow(prefs.getBoolean(KEY_BACKGROUND_SESSION_ENABLED, true))
     val backgroundSessionEnabled: StateFlow<Boolean> = _backgroundSessionEnabled.asStateFlow()
 
+    private val _failoverEnabled = MutableStateFlow(prefs.getBoolean(KEY_FAILOVER_ENABLED, true))
+    val failoverEnabled: StateFlow<Boolean> = _failoverEnabled.asStateFlow()
+
     fun setAutoReconnect(enabled: Boolean) {
         _autoReconnect.value = enabled
         prefs.edit().putBoolean(KEY_AUTO_RECONNECT, enabled).apply()
@@ -84,6 +87,11 @@ class SettingsRepository(context: Context) {
     fun setBackgroundSessionEnabled(enabled: Boolean) {
         _backgroundSessionEnabled.value = enabled
         prefs.edit().putBoolean(KEY_BACKGROUND_SESSION_ENABLED, enabled).apply()
+    }
+
+    fun setFailoverEnabled(enabled: Boolean) {
+        _failoverEnabled.value = enabled
+        prefs.edit().putBoolean(KEY_FAILOVER_ENABLED, enabled).apply()
     }
 
     fun setPointerSpeed(value: Float) {
@@ -183,5 +191,6 @@ class SettingsRepository(context: Context) {
         private const val KEY_CONNECTION_MODE = "connection_mode"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_BACKGROUND_SESSION_ENABLED = "background_session_enabled"
+        private const val KEY_FAILOVER_ENABLED = "failover_enabled"
     }
 }
