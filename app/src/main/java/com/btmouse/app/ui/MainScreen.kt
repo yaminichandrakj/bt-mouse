@@ -1,6 +1,9 @@
 package com.btmouse.app.ui
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,12 +12,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Build
@@ -24,6 +29,7 @@ import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
@@ -54,23 +60,26 @@ import com.btmouse.app.ui.screens.MediaRemoteScreen
 import com.btmouse.app.ui.screens.SettingsScreen
 import com.btmouse.app.ui.screens.TouchpadScreen
 import com.btmouse.app.ui.screens.UtilitiesScreen
+import com.btmouse.app.ui.screens.WritingPadScreen
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
 import com.btmouse.app.ui.theme.DarkBackground
-import com.btmouse.app.ui.theme.DarkSurface
+import com.btmouse.app.ui.theme.DarkBorder
+import com.btmouse.app.ui.theme.DarkHeaderSurface
 import com.btmouse.app.ui.theme.DarkSurfaceVariant
 import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
+import com.btmouse.app.ui.theme.TextSecondary
 
-sealed class NavigationTab(val title: String, val icon: ImageVector) {
-    object Touchpad : NavigationTab("Mouse", Icons.Default.Mouse)
-    object Keyboard : NavigationTab("Keys", Icons.Default.Keyboard)
-    object WritingPad : NavigationTab("Pen", Icons.Default.Draw)
-    object Media : NavigationTab("Media", Icons.Default.PlayCircle)
-    object Utilities : NavigationTab("Tools", Icons.Default.Build)
-    object Connect : NavigationTab("Connect", Icons.Default.Wifi)
+sealed class NavigationTab(val title: String, val subtitle: String, val icon: ImageVector) {
+    object Touchpad : NavigationTab("Mouse", "Precision Trackpad & Air Mouse", Icons.Default.Mouse)
+    object Keyboard : NavigationTab("Keys", "Keyboard, Shortcuts & Numpad", Icons.Default.Keyboard)
+    object WritingPad : NavigationTab("Pen", "Graphics Slate & Handwriting", Icons.Default.Draw)
+    object Media : NavigationTab("Media", "SMTC Player & Master Volume", Icons.Default.PlayCircle)
+    object Utilities : NavigationTab("Tools", "Quick Apps, Camera, Audio & Tasks", Icons.Default.Build)
+    object Connect : NavigationTab("Connect", "Wi-Fi QR, Bluetooth & Remote WAN", Icons.Default.Wifi)
 }
 
 @Composable
@@ -93,10 +102,11 @@ fun MainScreen(
     val isConnected by coordinator.isConnected.collectAsState()
     val reconnectStatus by coordinator.reconnectStatus.collectAsState()
     val activeTransportLabel by coordinator.activeTransportLabel.collectAsState()
+    val currentTab = tabs.getOrElse(selectedTabIndex) { NavigationTab.Touchpad }
 
     Scaffold(
         topBar = {
-            Column(modifier = Modifier.fillMaxWidth().background(DarkSurface)) {
+            Column(modifier = Modifier.fillMaxWidth().background(DarkHeaderSurface)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -105,49 +115,99 @@ fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Box(
                             modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(if (isConnected) AccentEmerald else AccentRose)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = if (showSettings) "SETTINGS & UPDATES" else when (selectedTabIndex) {
-                                    0 -> "BT MOUSE & TRACKPAD"
-                                    1 -> "KEYBOARD & SHORTCUTS"
-                                    2 -> "PEN & TOUCHSCREEN"
-                                    3 -> "MEDIA & VOLUME REMOTE"
-                                    4 -> "PC UTILITIES"
-                                    5 -> "CONNECTION & QR"
-                                    else -> "BT MOUSE"
-                                },
-                                color = TextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(DarkSurfaceVariant)
+                                .border(1.dp, DarkBorder, RoundedCornerShape(10.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (showSettings) Icons.Default.Settings else currentTab.icon,
+                                contentDescription = null,
+                                tint = AccentCyan,
+                                modifier = Modifier.size(18.dp)
                             )
-                            if (isConnected && activeTransportLabel != "Disconnected") {
-                                Text(
-                                    text = activeTransportLabel,
-                                    color = AccentCyan,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (showSettings) "Settings & Updates" else currentTab.title,
+                                color = TextPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = if (showSettings) "Preferences, failover & release updater" else currentTab.subtitle,
+                                color = TextMuted,
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
                         }
                     }
 
-                    IconButton(
-                        onClick = { showSettings = !showSettings },
-                        modifier = Modifier.size(36.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            imageVector = if (showSettings) Icons.Default.ArrowBack else Icons.Default.Settings,
-                            contentDescription = if (showSettings) "Back" else "Settings",
-                            tint = if (showSettings) AccentCyan else TextMuted
-                        )
+                        // Interactive Fluent Transport Pill (tapping jumps to Connect tab)
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(DarkSurfaceVariant)
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isConnected) AccentEmerald.copy(alpha = 0.55f) else DarkBorder,
+                                    shape = RoundedCornerShape(20.dp)
+                                )
+                                .clickable {
+                                    showSettings = false
+                                    selectedTabIndex = 5
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isConnected) AccentEmerald else AccentRose)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isConnected && activeTransportLabel != "Disconnected") {
+                                    activeTransportLabel
+                                } else {
+                                    "Connect"
+                                },
+                                color = if (isConnected) AccentCyan else TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { showSettings = !showSettings },
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (showSettings) PrimaryIndigo.copy(alpha = 0.25f) else DarkSurfaceVariant)
+                                .border(1.dp, if (showSettings) AccentCyan else DarkBorder, RoundedCornerShape(10.dp))
+                        ) {
+                            Icon(
+                                imageVector = if (showSettings) Icons.Default.ArrowBack else Icons.Default.Settings,
+                                contentDescription = if (showSettings) "Back" else "Settings",
+                                tint = if (showSettings) AccentCyan else TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
 
@@ -191,42 +251,51 @@ fun MainScreen(
                         }
                     }
                 }
+
+                HorizontalDivider(color = DarkBorder, thickness = 1.dp)
             }
         },
         bottomBar = {
-            NavigationBar(
-                modifier = Modifier.navigationBarsPadding(),
-                containerColor = DarkSurface,
-                tonalElevation = 8.dp
-            ) {
-                tabs.forEachIndexed { index, tab ->
-                    NavigationBarItem(
-                        selected = selectedTabIndex == index,
-                        onClick = { if (tab != NavigationTab.WritingPad) selectedTabIndex = index },
-                        enabled = tab != NavigationTab.WritingPad,
-                        icon = {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = if (tab == NavigationTab.WritingPad) "Pen and touch controls, temporarily disabled" else tab.title,
-                                modifier = Modifier.size(20.dp)
+            Column(modifier = Modifier.fillMaxWidth().background(DarkHeaderSurface)) {
+                HorizontalDivider(color = DarkBorder, thickness = 1.dp)
+                NavigationBar(
+                    modifier = Modifier.navigationBarsPadding().height(68.dp),
+                    containerColor = DarkHeaderSurface,
+                    tonalElevation = 0.dp
+                ) {
+                    tabs.forEachIndexed { index, tab ->
+                        val isSelected = !showSettings && selectedTabIndex == index
+                        NavigationBarItem(
+                            selected = isSelected,
+                            onClick = {
+                                showSettings = false
+                                selectedTabIndex = index
+                            },
+                            icon = {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.title,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = tab.title,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = AccentCyan,
+                                selectedTextColor = AccentCyan,
+                                indicatorColor = PrimaryIndigo.copy(alpha = 0.28f),
+                                unselectedIconColor = TextMuted,
+                                unselectedTextColor = TextMuted
                             )
-                        },
-                        label = {
-                            Text(
-                                text = tab.title,
-                                fontSize = 10.sp,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AccentCyan,
-                            selectedTextColor = AccentCyan,
-                            indicatorColor = PrimaryIndigo.copy(alpha = 0.25f),
-                            unselectedIconColor = TextMuted,
-                            unselectedTextColor = TextMuted
                         )
-                    )
+                    }
                 }
             }
         }
@@ -237,17 +306,21 @@ fun MainScreen(
                 .background(DarkBackground)
                 .padding(innerPadding)
         ) {
-            if (showSettings) {
-                SettingsScreen(settings, airMouseManager, onClose = { showSettings = false })
-            } else when (selectedTabIndex) {
-                0 -> TouchpadScreen(coordinator, airMouseManager, settings)
-                1 -> KeyboardScreen(coordinator, settings)
-                2 -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Pen and touch controls are temporarily disabled while this feature is rebuilt.")
+            val screenState = if (showSettings) -1 else selectedTabIndex
+            Crossfade(
+                targetState = screenState,
+                animationSpec = tween(durationMillis = 180),
+                label = "MainScreenCrossfade"
+            ) { state ->
+                when (state) {
+                    -1 -> SettingsScreen(settings, airMouseManager, onClose = { showSettings = false })
+                    0 -> TouchpadScreen(coordinator, airMouseManager, settings)
+                    1 -> KeyboardScreen(coordinator, settings)
+                    2 -> WritingPadScreen(coordinator, settings)
+                    3 -> MediaRemoteScreen(coordinator, settings)
+                    4 -> UtilitiesScreen(coordinator, settings)
+                    5 -> ConnectionScreen(coordinator, settings)
                 }
-                3 -> MediaRemoteScreen(coordinator, settings)
-                4 -> UtilitiesScreen(coordinator, settings)
-                5 -> ConnectionScreen(coordinator, settings)
             }
         }
     }

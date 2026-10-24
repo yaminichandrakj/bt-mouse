@@ -277,6 +277,7 @@ class ServerProtocolTests(unittest.TestCase):
             self.assertFalse(test_snap.exists())
             self.assertEqual(responses[0]["type"], "recording_delete_response")
             self.assertTrue(responses[0]["success"])
+            self.assertEqual(responses[1]["type"], "recordings_list_response")
             self.assertEqual(responses[1]["files"], [])
 
 
@@ -641,6 +642,44 @@ class ConcurrentTransportFailoverTests(unittest.TestCase):
         # Should remain 5 and not update or execute
         self.assertEqual(instance._last_cmd_seq.get("sess-1"), 5)
 
+    def test_out_of_order_udp_packets_are_accepted_while_duplicates_are_dropped(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = "123456"
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._camera_stream_owner_lock = threading.Lock()
+        instance.live_audio_manager = Mock()
+        instance._cmd_seq_lock = threading.Lock()
+        instance._last_cmd_seq = {}
+        instance.last_buttons = 0
+        instance.last_pen_button = None
+        instance.pressed_keys = set()
+        instance.last_input_at = 0
+        instance.mouse = Mock()
+
+        with patch.object(server, "IS_WINDOWS", False):
+            # Packet seq 10 arrives first
+            instance.handle_packet(
+                {"type": "mouse", "dx": 5, "dy": 0, "seq": 10, "client_session": "sess-2", "token": "123456"},
+                ("127.0.0.1", 9999),
+                lambda resp: None
+            )
+            # Slightly delayed UDP packet seq 9 arrives out-of-order -> must still execute!
+            instance.handle_packet(
+                {"type": "mouse", "dx": 3, "dy": 0, "seq": 9, "client_session": "sess-2", "token": "123456"},
+                ("127.0.0.1", 9999),
+                lambda resp: None
+            )
+            # Duplicate seq 9 arrives again -> must be dropped!
+            instance.handle_packet(
+                {"type": "mouse", "dx": 3, "dy": 0, "seq": 9, "client_session": "sess-2", "token": "123456"},
+                ("127.0.0.1", 9999),
+                lambda resp: None
+            )
+
+        self.assertEqual(instance.mouse.move.call_count, 2)
+
     def test_path_switch_releases_mouse_buttons(self):
         instance = object.__new__(server.Server)
         instance.auth_token = "123456"
@@ -695,11 +734,17 @@ class PhoneCameraSourceTests(unittest.TestCase):
         resp = responses[0]
         self.assertEqual(resp["type"], "phone_cam_start_ack")
         self.assertTrue(resp["success"])
-        self.assertIn("8766/phone_cam/mjpeg", resp["mjpeg_url"])
+        self.assertIn("127.0.0.1:8766/phone_cam/mjpeg", resp["mjpeg_url"])
         self.assertTrue(self.instance.phone_camera_receiver.is_active)
         self.assertEqual(self.instance.phone_camera_receiver.lens, "front")
         self.assertEqual(self.instance.phone_camera_receiver.width, 1280)
         self.assertEqual(self.instance.phone_camera_receiver.height, 720)
+
+    def test_phone_cam_restart_releases_existing_virtual_cam(self):
+        existing_vcam = Mock()
+        self.instance.phone_camera_receiver.virtual_cam = existing_vcam
+        self.instance.phone_camera_receiver.start("front", 640, 360)
+        existing_vcam.close.assert_called_once_with()
 
     def test_phone_cam_frame_updates_receiver_and_dispatches_callback(self):
         dispatched = []
@@ -740,17 +785,21 @@ class PhoneCameraSourceTests(unittest.TestCase):
         self.assertIsNone(self.instance.phone_camera_receiver.latest_jpeg)
 
 
-class DpiScalingTests(unittest.TestCase):
+class DpiAndQrRemediationTests(unittest.TestCase):
     def test_dpi_scale_returns_positive_numbers(self):
-        try:
-            import app_gui
-            scale, dpi = app_gui.get_windows_dpi_scale()
-            self.assertGreaterEqual(scale, 1.0)
-            self.assertGreaterEqual(dpi, 96)
-            # Ensure awareness setup does not raise
-            app_gui.set_windows_dpi_awareness()
-        except ImportError:
-            pass
+        import app_gui
+        scale, dpi = app_gui.get_windows_dpi_scale()
+        self.assertGreaterEqual(scale, 1.0)
+        self.assertGreaterEqual(dpi, 96)
+        app_gui.set_windows_dpi_awareness()
+
+    def test_qr_payloads_include_pairing_pin_and_udp_buffer_is_65507(self):
+        gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        srv_source = (Path(__file__).parent / "server.py").read_text(encoding="utf-8")
+        self.assertIn('"pin": self.auth_token', gui_source)
+        self.assertIn('"token": self.auth_token', gui_source)
+        self.assertIn("self.sock.recvfrom(65507)", srv_source)
+        self.assertIn('ThreadingHTTPServer(("127.0.0.1", p)', srv_source)
 
 
 if __name__ == "__main__":

@@ -127,7 +127,6 @@ class RemoteWanManager(
                 if (webSocket !== ws) return
                 Log.d(tag, "WebSocket opened, sending authentication token")
                 _statusMessage.value = "Authenticating with server..."
-                // Send authentication handshake
                 val authPacket = JsonObject().apply {
                     addProperty("type", "auth")
                     addProperty("token", token)
@@ -205,14 +204,14 @@ class RemoteWanManager(
 
     override fun notifyPathSwitch() {
         sendMouseButton(0)
-        sendPacket(mapOf("type" to "path_switch"))
+        sendPacket(mapOf("type" to "path_switch"), includeSeq = false)
     }
 
     private fun handleIncomingMessage(text: String, source: WebSocket) {
         try {
             val root = gson.fromJson(text, JsonObject::class.java) ?: return
             val type = root.get("type")?.asString ?: ""
-            if (_isConnected.value) recordingTransfer.handleMessage(root, ::sendJson)
+            if (_isConnected.value) recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
 
             when (type) {
                 "pong" -> {
@@ -435,22 +434,24 @@ class RemoteWanManager(
                     if (lastPongAtMs > 0 && now - lastPongAtMs > 10_000L) {
                         _isConnectionHealthy.value = false
                     }
-                    sendPacket(mapOf("type" to "ping", "client_time" to now))
+                    sendPacket(mapOf("type" to "ping", "client_time" to now), includeSeq = false)
                 }
                 delay(3000L)
             }
         }
     }
 
-    private fun sendJson(obj: JsonObject) {
+    private fun sendJson(obj: JsonObject, includeSeq: Boolean = true) {
         if (!_isConnected.value) return
         val socket = webSocket ?: return
         if (clientSessionId.isNotEmpty() && !obj.has("client_session")) {
             obj.addProperty("client_session", clientSessionId)
         }
-        nextSeqSupplier?.invoke()?.let { seq ->
-            if (seq > 0 && !obj.has("seq")) {
-                obj.addProperty("seq", seq)
+        if (includeSeq) {
+            nextSeqSupplier?.invoke()?.let { seq ->
+                if (seq > 0 && !obj.has("seq")) {
+                    obj.addProperty("seq", seq)
+                }
             }
         }
         if (!socket.send(obj.toString())) {
@@ -472,7 +473,7 @@ class RemoteWanManager(
         return normalized == "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe80:")
     }
 
-    private fun sendPacket(data: Map<String, Any?>) {
+    private fun sendPacket(data: Map<String, Any?>, includeSeq: Boolean = true) {
         val obj = JsonObject()
         data.forEach { (k, v) ->
             when (v) {
@@ -481,7 +482,7 @@ class RemoteWanManager(
                 is Boolean -> obj.addProperty(k, v)
             }
         }
-        sendJson(obj)
+        sendJson(obj, includeSeq = includeSeq)
     }
 
     override fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int, hScroll: Int) {
@@ -565,7 +566,7 @@ class RemoteWanManager(
             addProperty("include_preview", includePreview)
             addProperty("include_video_preview", includeVideoPreview)
         }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun sendMediaSeek(position: Float) {
@@ -625,12 +626,12 @@ class RemoteWanManager(
 
     override fun querySystemStats() {
         val obj = JsonObject().apply { addProperty("type", "query_stats") }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun queryRunningProcesses() {
         val obj = JsonObject().apply { addProperty("type", "query_processes") }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun killProcess(pid: Int) {
@@ -643,7 +644,7 @@ class RemoteWanManager(
 
     override fun queryInstalledApps() {
         val obj = JsonObject().apply { addProperty("type", "query_apps") }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun updateQuickApps(paths: List<String>) {
@@ -655,7 +656,7 @@ class RemoteWanManager(
     }
 
     override fun queryRecordings() {
-        sendJson(JsonObject().apply { addProperty("type", "recordings_list") })
+        sendJson(JsonObject().apply { addProperty("type", "recordings_list") }, includeSeq = false)
     }
 
     override fun downloadRecording(id: String) {
@@ -665,9 +666,9 @@ class RemoteWanManager(
         })
     }
 
-    override fun streamRecording(id: String) = recordingTransfer.stream(id, ::sendJson)
+    override fun streamRecording(id: String) = recordingTransfer.stream(id) { obj -> sendJson(obj, includeSeq = false) }
 
-    override fun stopRecordingStream() = recordingTransfer.stopStream(::sendJson)
+    override fun stopRecordingStream() = recordingTransfer.stopStream { obj -> sendJson(obj, includeSeq = false) }
 
     override fun deleteRecording(id: String) = recordingTransfer.delete(id, ::sendJson)
 
@@ -743,7 +744,7 @@ class RemoteWanManager(
         sendJson(JsonObject().apply {
             addProperty("type", "phone_audio_frame")
             addProperty("data", Base64.encodeToString(pcm, Base64.NO_WRAP))
-        })
+        }, includeSeq = false)
     }
 
     override fun startPhoneCameraStream(lens: String, width: Int, height: Int, fps: Int) {
@@ -770,6 +771,6 @@ class RemoteWanManager(
             addProperty("w", width)
             addProperty("h", height)
             addProperty("frame", Base64.encodeToString(data, Base64.NO_WRAP))
-        })
+        }, includeSeq = false)
     }
 }

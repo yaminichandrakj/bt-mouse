@@ -1,11 +1,38 @@
 """
 BT Mouse & Keyboard - PC Companion Application
-Modern Desktop GUI with System Tray minimization, background icon,
-instant QR Code generation, and tablet writing pad support.
+Modern Windows 11 Fluent-Styled Desktop GUI with DWM Dark Titlebar,
+Sidebar Navigation, System Tray integration, instant QR Code pairing,
+and zero heavy third-party UI dependencies.
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    HAS_TK = True
+except ImportError:
+    HAS_TK = False
+
+    class _DummyTkModule:
+        Tk = object
+        Toplevel = object
+        Frame = object
+        Label = object
+        Button = object
+        Entry = object
+        Text = object
+        Canvas = object
+        Listbox = object
+        Checkbutton = object
+        LabelFrame = object
+        Menu = object
+        BooleanVar = object
+        StringVar = object
+        END = "end"
+
+    tk = _DummyTkModule()
+    ttk = None
+    messagebox = None
+
 import threading
 import socket
 import json
@@ -30,8 +57,9 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
+
 def get_asset_path(filename):
-    if hasattr(sys, '_MEIPASS'):
+    if hasattr(sys, "_MEIPASS"):
         p = os.path.join(sys._MEIPASS, filename)
         if os.path.exists(p):
             return p
@@ -39,6 +67,7 @@ def get_asset_path(filename):
     if os.path.exists(local_p):
         return local_p
     return filename
+
 
 try:
     import qrcode
@@ -54,11 +83,19 @@ try:
 except ImportError:
     HAS_TRAY = False
 
-from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_create_pairing_pin,
-                    save_pairing_pin, load_quick_apps, save_quick_apps,
-                    load_media_preview_region, save_media_preview_region)
+from server import (
+    Server,
+    ensure_interactive_desktop,
+    IS_WINDOWS,
+    load_or_create_pairing_pin,
+    save_pairing_pin,
+    load_quick_apps,
+    save_quick_apps,
+    load_media_preview_region,
+    save_media_preview_region,
+)
 
-APP_VERSION = "1.3.15"
+APP_VERSION = "1.3.16"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -105,37 +142,89 @@ def get_windows_dpi_scale():
         pass
     return 1.0, 96
 
-# Color Theme
-BG_DARK = "#0E1118"
-CARD_BG = "#181C26"
-CARD_BORDER = "#283042"
-ACCENT_CYAN = "#00D2FF"
+
+def apply_windows_dwm_styling(widget):
+    """Apply native Windows 11 DWM immersive dark titlebar, rounded corners, and caption colors."""
+    if not IS_WINDOWS:
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id()) or widget.winfo_id()
+        dwmapi = ctypes.windll.dwmapi
+
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (fallback 19 on older Win10 builds)
+        dark_mode = ctypes.c_int(1)
+        if dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)) != 0:
+            dwmapi.DwmSetWindowAttribute(hwnd, 19, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode))
+
+        # DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
+        corner_pref = ctypes.c_int(2)
+        dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner_pref), ctypes.sizeof(corner_pref))
+
+        # DWMWA_CAPTION_COLOR = 35 (COLORREF 0x00BBGGRR matching #111622)
+        caption_color = ctypes.c_int(0x00221611)
+        dwmapi.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(caption_color), ctypes.sizeof(caption_color))
+
+        # DWMWA_TEXT_COLOR = 36 (COLORREF 0x00BBGGRR matching #F8FAFC)
+        text_color = ctypes.c_int(0x00FCF8F8)
+        dwmapi.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(text_color), ctypes.sizeof(text_color))
+    except Exception:
+        pass
+
+
+# Windows 11 Fluent Dark Palette
+BG_DARK = "#0B0F17"
+SIDEBAR_BG = "#111622"
+SIDEBAR_HOVER = "#1A2234"
+SIDEBAR_ACTIVE = "#1E293B"
+CARD_BG = "#151C28"
+CARD_SURFACE = "#1C2536"
+CARD_BORDER = "#263248"
+ACCENT_CYAN = "#38BDF8"
+ACCENT_CYAN_HOVER = "#0EA5E9"
 ACCENT_INDIGO = "#6366F1"
+ACCENT_INDIGO_HOVER = "#4F46E5"
 ACCENT_GREEN = "#10B981"
 ACCENT_RED = "#F43F5E"
+ACCENT_AMBER = "#F59E0B"
 TEXT_PRIMARY = "#F8FAFC"
+TEXT_SECONDARY = "#CBD5E1"
 TEXT_MUTED = "#94A3B8"
-BUTTON_BG = "#222736"
+BUTTON_BG = "#1E293B"
+BUTTON_HOVER = "#2B3A55"
+
+UI_FONT = "Segoe UI"
+
+
+class _NotebookCompatibilityShim:
+    """Provides .select(tab_frame) compatibility while using a modern Fluent sidebar stack."""
+
+    def __init__(self, app):
+        self._app = app
+        self._tabs = []
+
+    def add(self, frame, text=""):
+        self._tabs.append((frame, text))
+
+    def select(self, target_frame):
+        self._app._select_page(target_frame)
+
 
 class CompanionApp(tk.Tk):
     def __init__(self):
         super().__init__()
         ensure_interactive_desktop()
 
-        self.title("BT Mouse & Keyboard - Companion")
+        self.title("BT Mouse & Keyboard — Windows Companion")
 
-        # Apply high-DPI scaling factor to Tkinter font engine
+        # Calibrate window geometry for high-DPI displays without double-scaling fonts
         self.dpi_scale, self.system_dpi = get_windows_dpi_scale()
-        if self.dpi_scale > 1.0:
-            try:
-                self.tk.call('tk', 'scaling', self.system_dpi / 72.0)
-            except Exception:
-                pass
+        effective_scale = min(max(self.dpi_scale, 1.0), 1.65)
 
-        base_w = int(800 * self.dpi_scale)
-        base_h = int(780 * self.dpi_scale)
-        min_w = int(720 * self.dpi_scale)
-        min_h = int(680 * self.dpi_scale)
+        base_w = int(980 * effective_scale)
+        base_h = int(760 * effective_scale)
+        min_w = int(860 * effective_scale)
+        min_h = int(660 * effective_scale)
 
         # Center window on primary monitor
         screen_w = self.winfo_screenwidth()
@@ -146,6 +235,10 @@ class CompanionApp(tk.Tk):
         self.geometry(f"{base_w}x{base_h}+{pos_x}+{pos_y}")
         self.minsize(min_w, min_h)
         self.configure(bg=BG_DARK)
+
+        # Apply Windows 11 native DWM dark titlebar & rounded window corners
+        self.update_idletasks()
+        apply_windows_dwm_styling(self)
 
         # Set window icon if available
         self.icon_path = get_asset_path("icon.ico")
@@ -173,10 +266,11 @@ class CompanionApp(tk.Tk):
         # Setup styling
         self._setup_styles()
 
-        # Build UI
+        # Build Fluent Desktop Shell
         self._build_header()
         self._build_notebook()
         self._build_statusbar()
+
         executable_path = Path(sys.executable).resolve()
         self.title(f"BT Mouse Companion v{APP_VERSION} — {executable_path}")
         self.after(500, self._show_update_recovery_notice)
@@ -200,6 +294,67 @@ class CompanionApp(tk.Tk):
         self._heal_startup_path_if_registered()
         if "--minimized" in sys.argv:
             self.after(700, self.hide_to_tray if self.tray_icon else self.iconify)
+
+    @staticmethod
+    def _bind_hover(widget, normal_bg, hover_bg, normal_fg=None, hover_fg=None):
+        """Attach smooth mouse-hover color transitions to a Tkinter widget."""
+        def _on_enter(_event):
+            try:
+                if str(widget.cget("state")) != "disabled":
+                    widget.configure(bg=hover_bg)
+                    if hover_fg:
+                        widget.configure(fg=hover_fg)
+            except Exception:
+                pass
+
+        def _on_leave(_event):
+            try:
+                if str(widget.cget("state")) != "disabled":
+                    widget.configure(bg=normal_bg)
+                    if normal_fg:
+                        widget.configure(fg=normal_fg)
+            except Exception:
+                pass
+
+        widget.bind("<Enter>", _on_enter, add="+")
+        widget.bind("<Leave>", _on_leave, add="+")
+
+    def _make_button(self, parent, text, command, bg=BUTTON_BG, fg=TEXT_PRIMARY,
+                     hover_bg=BUTTON_HOVER, font_size=9, bold=True, padx=12, pady=6):
+        weight = "bold" if bold else "normal"
+        btn = tk.Button(
+            parent,
+            text=text,
+            font=(UI_FONT, font_size, weight),
+            bg=bg,
+            fg=fg,
+            activebackground=hover_bg,
+            activeforeground=TEXT_PRIMARY,
+            disabledforeground=TEXT_MUTED,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=CARD_BORDER,
+            highlightcolor=ACCENT_CYAN,
+            padx=padx,
+            pady=pady,
+            command=command,
+            cursor="hand2",
+        )
+        self._bind_hover(btn, bg, hover_bg, fg, TEXT_PRIMARY if bg in (ACCENT_INDIGO, ACCENT_CYAN) else fg)
+        return btn
+
+    def _make_card(self, parent, padx=18, pady=16, bg=CARD_BG):
+        return tk.Frame(
+            parent,
+            bg=bg,
+            padx=padx,
+            pady=pady,
+            relief="flat",
+            bd=0,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+        )
 
     @staticmethod
     def _write_update_ready_marker():
@@ -276,8 +431,6 @@ class CompanionApp(tk.Tk):
     def _init_server(self):
         """Initializes a clean Server instance with bound callbacks"""
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
-        # Installed-app discovery walks the Start Menu and can be slow on some
-        # machines. Keep it out of the updater's startup acknowledgement path.
         self.available_apps = []
         self.quick_apps = []
         self.adapters = self.server.get_all_ips()
@@ -287,11 +440,13 @@ class CompanionApp(tk.Tk):
             preferences = json.loads(self.recording_settings_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             preferences = {}
+
         def _preference_int(name, default, maximum):
             try:
                 return min(maximum, max(0, int(preferences.get(name, default) or 0)))
             except (TypeError, ValueError):
                 return default
+
         self.auto_record_video = bool(preferences.get("auto_record_video", True))
         self.auto_record_audio = bool(preferences.get("auto_record_audio", False))
         self.recording_retention_days = _preference_int("recording_retention_days", 0, 3650)
@@ -316,30 +471,69 @@ class CompanionApp(tk.Tk):
         style = ttk.Style(self)
         style.theme_use("clam")
 
-        style.configure("TNotebook", background=BG_DARK, borderwidth=0)
-        style.configure("TNotebook.Tab", background=CARD_BG, foreground=TEXT_MUTED,
-                        padding=[12, 7], font=("Segoe UI", 9, "bold"), borderwidth=0)
-        style.map("TNotebook.Tab",
-                  background=[("selected", ACCENT_INDIGO)],
-                  foreground=[("selected", TEXT_PRIMARY)])
+        # Combobox & Spinbox dark theme
+        self.option_add("*TCombobox*Listbox.background", CARD_SURFACE)
+        self.option_add("*TCombobox*Listbox.foreground", TEXT_PRIMARY)
+        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT_INDIGO)
+        self.option_add("*TCombobox*Listbox.selectForeground", TEXT_PRIMARY)
+        self.option_add("*TCombobox*Listbox.font", (UI_FONT, 9))
+
+        style.configure(
+            "TCombobox",
+            fieldbackground=BUTTON_BG,
+            background=CARD_SURFACE,
+            foreground=TEXT_PRIMARY,
+            arrowcolor=ACCENT_CYAN,
+            bordercolor=CARD_BORDER,
+            lightcolor=CARD_BORDER,
+            darkcolor=CARD_BORDER,
+            padding=5,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", BUTTON_BG)],
+            selectbackground=[("readonly", BUTTON_BG)],
+            selectforeground=[("readonly", TEXT_PRIMARY)],
+            foreground=[("readonly", TEXT_PRIMARY)],
+        )
+
+        style.configure(
+            "TSpinbox",
+            fieldbackground=BUTTON_BG,
+            background=CARD_SURFACE,
+            foreground=TEXT_PRIMARY,
+            arrowcolor=ACCENT_CYAN,
+            bordercolor=CARD_BORDER,
+            padding=4,
+        )
+
+        style.configure(
+            "Vertical.TScrollbar",
+            background=CARD_SURFACE,
+            troughcolor=BG_DARK,
+            bordercolor=BG_DARK,
+            arrowcolor=TEXT_MUTED,
+            relief="flat",
+        )
+        style.map("Vertical.TScrollbar", background=[("active", CARD_BORDER)])
 
         # Treeview styling for recordings
         style.configure(
             "Recordings.Treeview",
-            background=BUTTON_BG,
+            background=CARD_BG,
             foreground=TEXT_PRIMARY,
-            fieldbackground=BUTTON_BG,
-            rowheight=28,
-            font=("Segoe UI", 9),
+            fieldbackground=CARD_BG,
+            rowheight=32,
+            font=(UI_FONT, 9),
             borderwidth=0,
         )
         style.configure(
             "Recordings.Treeview.Heading",
-            background=CARD_BG,
+            background=SIDEBAR_BG,
             foreground=ACCENT_CYAN,
-            font=("Segoe UI", 9, "bold"),
+            font=(UI_FONT, 9, "bold"),
             relief="flat",
-            padding=[8, 6],
+            padding=[10, 8],
         )
         style.map(
             "Recordings.Treeview",
@@ -348,7 +542,7 @@ class CompanionApp(tk.Tk):
         )
         style.map(
             "Recordings.Treeview.Heading",
-            background=[("active", CARD_BORDER)],
+            background=[("active", CARD_SURFACE)],
             foreground=[("active", ACCENT_CYAN)],
         )
 
@@ -356,7 +550,6 @@ class CompanionApp(tk.Tk):
         if not HAS_TRAY:
             return
 
-        # Load or generate tray icon image
         if os.path.exists(self.icon_png_path):
             tray_img = Image.open(self.icon_png_path)
         else:
@@ -372,7 +565,7 @@ class CompanionApp(tk.Tk):
             item("Stop Server", self.stop_server),
             item("Copy Wi-Fi IP", self.copy_ip),
             item("Bluetooth Settings", self.open_windows_bt_settings),
-            item("Exit Application", self.quit_application)
+            item("Exit Application", self.quit_application),
         )
 
         self.tray_icon = pystray.Icon("bt_mouse_companion", tray_img, "BT Mouse & Keyboard Companion", menu)
@@ -397,226 +590,501 @@ class CompanionApp(tk.Tk):
         self.focus_force()
 
     def _build_header(self):
-        header_frame = tk.Frame(self, bg=CARD_BG, height=80, padx=20, pady=14)
-        header_frame.pack(fill="x", padx=16, pady=(16, 8))
+        header_frame = tk.Frame(
+            self,
+            bg=SIDEBAR_BG,
+            padx=20,
+            pady=12,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+        )
+        header_frame.pack(fill="x", side="top")
 
-        text_box = tk.Frame(header_frame, bg=CARD_BG)
-        text_box.pack(side="left", fill="y")
+        # Left Brand & Version Info
+        brand_box = tk.Frame(header_frame, bg=SIDEBAR_BG)
+        brand_box.pack(side="left", fill="y")
 
-        lbl_title = tk.Label(text_box, text="BT MOUSE & KEYBOARD", font=("Segoe UI", 15, "bold"),
-                             bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_title.pack(anchor="w")
+        title_row = tk.Frame(brand_box, bg=SIDEBAR_BG)
+        title_row.pack(anchor="w")
 
-        lbl_sub = tk.Label(text_box, text="PC Companion Receiver Server", font=("Segoe UI", 9),
-                           bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_sub.pack(anchor="w")
+        lbl_badge = tk.Label(
+            title_row,
+            text="🖱️",
+            font=(UI_FONT, 15),
+            bg=SIDEBAR_BG,
+            fg=ACCENT_CYAN,
+        )
+        lbl_badge.pack(side="left", padx=(0, 8))
 
-        right_box = tk.Frame(header_frame, bg=CARD_BG)
+        lbl_title = tk.Label(
+            title_row,
+            text="BT Mouse & Keyboard",
+            font=(UI_FONT, 14, "bold"),
+            bg=SIDEBAR_BG,
+            fg=TEXT_PRIMARY,
+        )
+        lbl_title.pack(side="left")
+
+        lbl_ver = tk.Label(
+            title_row,
+            text=f"v{APP_VERSION}",
+            font=(UI_FONT, 8, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_CYAN,
+            padx=7,
+            pady=2,
+        )
+        lbl_ver.pack(side="left", padx=(10, 0))
+
+        lbl_sub = tk.Label(
+            brand_box,
+            text="Windows Desktop Companion · Low-Latency Wi-Fi, Bluetooth & Remote WAN Server",
+            font=(UI_FONT, 8),
+            bg=SIDEBAR_BG,
+            fg=TEXT_MUTED,
+        )
+        lbl_sub.pack(anchor="w", pady=(2, 0))
+
+        # Right Status Pill & Action Controls
+        right_box = tk.Frame(header_frame, bg=SIDEBAR_BG)
         right_box.pack(side="right", fill="y")
 
-        self.lbl_status_pill = tk.Label(right_box, text="● SERVER READY", font=("Segoe UI", 10, "bold"),
-                                        bg=CARD_BG, fg=ACCENT_GREEN, padx=8, pady=4)
-        self.lbl_status_pill.pack(side="left", padx=8)
+        self.lbl_status_pill = tk.Label(
+            right_box,
+            text="● SERVER READY",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_GREEN,
+            padx=12,
+            pady=6,
+        )
+        self.lbl_status_pill.pack(side="left", padx=(0, 8))
 
-        self.btn_toggle = tk.Button(right_box, text="Stop", font=("Segoe UI", 9, "bold"),
-                                    bg=BUTTON_BG, fg=ACCENT_RED, activebackground=CARD_BORDER,
-                                    activeforeground=TEXT_PRIMARY, relief="flat", padx=10, pady=6,
-                                    command=self.toggle_server, cursor="hand2")
+        self.btn_toggle = self._make_button(
+            right_box, "Stop Server", self.toggle_server, bg=BUTTON_BG, fg=ACCENT_RED, padx=11, pady=5
+        )
         self.btn_toggle.pack(side="left", padx=(0, 6))
 
-        self.btn_restart = tk.Button(right_box, text="Restart Server", font=("Segoe UI", 9, "bold"),
-                                     bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-                                     activeforeground=TEXT_PRIMARY, relief="flat", padx=12, pady=6,
-                                     command=self.restart_server, cursor="hand2")
-        self.btn_restart.pack(side="left")
+        self.btn_restart = self._make_button(
+            right_box, "Restart", self.restart_server, bg=BUTTON_BG, fg=ACCENT_CYAN, padx=11, pady=5
+        )
+        self.btn_restart.pack(side="left", padx=(0, 6))
 
-        self.btn_update = tk.Button(right_box, text="Check for updates", font=("Segoe UI", 9, "bold"),
-                                    bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-                                    activeforeground=TEXT_PRIMARY, relief="flat", padx=10, pady=6,
-                                    command=self.check_for_companion_updates, cursor="hand2")
-        self.btn_update.pack(side="left", padx=(6, 0))
+        self.btn_update = self._make_button(
+            right_box, "Check for Updates", self.check_for_companion_updates, bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY, hover_bg=ACCENT_INDIGO_HOVER, padx=12, pady=5
+        )
+        self.btn_update.pack(side="left")
 
     def _build_notebook(self):
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=16, pady=8)
+        """Builds a modern Windows 11 Fluent left navigation rail + main page container."""
+        self.notebook = _NotebookCompatibilityShim(self)
 
-        self.tab_wifi = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_wifi, text="📱 Wi-Fi & QR Code")
+        body = tk.Frame(self, bg=BG_DARK)
+        body.pack(fill="both", expand=True)
+
+        # Left Navigation Sidebar
+        self.sidebar = tk.Frame(
+            body,
+            bg=SIDEBAR_BG,
+            width=225,
+            padx=10,
+            pady=12,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+        )
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
+
+        tk.Label(
+            self.sidebar,
+            text="NAVIGATION",
+            font=(UI_FONT, 8, "bold"),
+            bg=SIDEBAR_BG,
+            fg=TEXT_MUTED,
+            padx=8,
+        ).pack(anchor="w", pady=(0, 6))
+
+        self.nav_Container = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
+        self.nav_Container.pack(fill="x")
+
+        # Main Page Stack Area
+        self.page_host = tk.Frame(body, bg=BG_DARK, padx=16, pady=14)
+        self.page_host.pack(side="left", fill="both", expand=True)
+
+        self._nav_items = {}
+        self._active_page = None
+
+        def _create_page(icon_text, title):
+            page = tk.Frame(self.page_host, bg=BG_DARK)
+            self.notebook.add(page, text=f"{icon_text} {title}")
+
+            nav_row = tk.Frame(self.nav_Container, bg=SIDEBAR_BG, cursor="hand2")
+            nav_row.pack(fill="x", pady=2)
+
+            indicator = tk.Frame(nav_row, bg=SIDEBAR_BG, width=4, height=34)
+            indicator.pack(side="left", fill="y")
+
+            btn_lbl = tk.Label(
+                nav_row,
+                text=f"  {icon_text}   {title}",
+                font=(UI_FONT, 9, "bold"),
+                bg=SIDEBAR_BG,
+                fg=TEXT_SECONDARY,
+                anchor="w",
+                padx=8,
+                pady=8,
+                cursor="hand2",
+            )
+            btn_lbl.pack(side="left", fill="x", expand=True)
+
+            def _on_click(_e=None, target=page):
+                self._select_page(target)
+
+            def _on_enter(_e=None, target=page):
+                if self._active_page is not target:
+                    nav_row.configure(bg=SIDEBAR_HOVER)
+                    btn_lbl.configure(bg=SIDEBAR_HOVER, fg=TEXT_PRIMARY)
+
+            def _on_leave(_e=None, target=page):
+                if self._active_page is not target:
+                    nav_row.configure(bg=SIDEBAR_BG)
+                    btn_lbl.configure(bg=SIDEBAR_BG, fg=TEXT_SECONDARY)
+
+            for w in (nav_row, indicator, btn_lbl):
+                w.bind("<Button-1>", _on_click)
+                w.bind("<Enter>", _on_enter)
+                w.bind("<Leave>", _on_leave)
+
+            self._nav_items[page] = (nav_row, indicator, btn_lbl)
+            return page
+
+        self.tab_wifi = _create_page("📱", "Wi-Fi & QR Pairing")
+        self.tab_bt = _create_page("📶", "Bluetooth Mode")
+        self.tab_wan = _create_page("🌐", "Remote WAN")
+        self.tab_desktop = _create_page("🚀", "Desktop & Controls")
+        self.tab_recordings = _create_page("🎬", "Recordings Library")
+        self.tab_phone_cam = _create_page("📷", "Phone as Webcam")
+        self.tab_tablet = _create_page("✍️", "Tablet Writing Pad")
+        self.tab_logs = _create_page("📊", "Live Monitor")
+
+        # Sidebar Footer Quick-Status Card
+        sidebar_footer = tk.Frame(
+            self.sidebar,
+            bg=CARD_BG,
+            padx=12,
+            pady=10,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+        )
+        sidebar_footer.pack(side="bottom", fill="x", pady=(8, 0))
+
+        tk.Label(
+            sidebar_footer,
+            text="QUICK PAIRING INFO",
+            font=(UI_FONT, 7, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+        ).pack(anchor="w")
+
+        self.lbl_sidebar_ip = tk.Label(
+            sidebar_footer,
+            text=f"IP: {self.current_ip}:{self.current_port}",
+            font=("Consolas", 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+        )
+        self.lbl_sidebar_ip.pack(anchor="w", pady=(3, 1))
+
+        self.lbl_sidebar_pin = tk.Label(
+            sidebar_footer,
+            text=f"PIN: {self.auth_token}",
+            font=("Consolas", 10, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_GREEN,
+        )
+        self.lbl_sidebar_pin.pack(anchor="w")
+
+        # Populate all 8 pages
         self._build_wifi_tab()
-
-        self.tab_bt = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_bt, text="📶 Bluetooth Assistant")
         self._build_bt_tab()
-
-        self.tab_wan = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_wan, text="🌐 Remote Access (WAN)")
         self._build_wan_tab()
-
-        self.tab_desktop = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_desktop, text="🚀 Desktop & Hardware")
         self._build_desktop_tab()
-
-        self.tab_recordings = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_recordings, text="🎬 Recordings")
         self._build_recordings_tab()
-
-        self.tab_phone_cam = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_phone_cam, text="📷 Phone as Webcam")
         self._build_phone_cam_tab()
-
-        self.tab_tablet = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_tablet, text="✍️ Tablet Writing Pad")
         self._build_tablet_tab()
-
-        self.tab_logs = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
-        self.notebook.add(self.tab_logs, text="📊 Live Monitor")
         self._build_logs_tab()
+
+        # Show initial page
+        self._select_page(self.tab_wifi)
+
+    def _select_page(self, target_page):
+        if self._active_page is target_page:
+            return
+        if self._active_page is not None:
+            self._active_page.pack_forget()
+        self._active_page = target_page
+        target_page.pack(fill="both", expand=True)
+
+        for page, (nav_row, indicator, btn_lbl) in self._nav_items.items():
+            if page is target_page:
+                nav_row.configure(bg=SIDEBAR_ACTIVE)
+                indicator.configure(bg=ACCENT_CYAN)
+                btn_lbl.configure(bg=SIDEBAR_ACTIVE, fg=TEXT_PRIMARY)
+            else:
+                nav_row.configure(bg=SIDEBAR_BG)
+                indicator.configure(bg=SIDEBAR_BG)
+                btn_lbl.configure(bg=SIDEBAR_BG, fg=TEXT_SECONDARY)
 
     def _build_wifi_tab(self):
         container = tk.Frame(self.tab_wifi, bg=BG_DARK)
         container.pack(fill="both", expand=True)
 
-        qr_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
-                           highlightbackground=CARD_BORDER, highlightthickness=1)
+        # Left Card: Instant QR Scanner
+        qr_card = self._make_card(container, padx=22, pady=20)
         qr_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        lbl_qr_title = tk.Label(qr_card, text="Scan with BT Mouse App", font=("Segoe UI", 12, "bold"),
-                                bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_qr_title.pack(anchor="center", pady=(0, 4))
+        tk.Label(
+            qr_card,
+            text="Instant Wi-Fi Pairing",
+            font=(UI_FONT, 14, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="center", pady=(0, 4))
 
-        lbl_qr_desc = tk.Label(qr_card, text="Instant Wi-Fi Pairing (Zero typing needed)",
-                               font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_qr_desc.pack(anchor="center", pady=(0, 12))
+        tk.Label(
+            qr_card,
+            text="Scan with the BT Mouse Android app — IP, port, and PIN auto-fill automatically.",
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            wraplength=320,
+            justify="center",
+        ).pack(anchor="center", pady=(0, 14))
 
-        self.qr_label = tk.Label(qr_card, bg=CARD_BG)
-        self.qr_label.pack(anchor="center", pady=6)
+        qr_frame = tk.Frame(qr_card, bg="#FFFFFF", padx=10, pady=10, relief="flat", bd=0)
+        qr_frame.pack(anchor="center", pady=6)
 
-        lbl_hint = tk.Label(qr_card, text="Open Phone App -> Connect -> Scan QR",
-                            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN)
-        lbl_hint.pack(anchor="center", pady=(8, 0))
+        self.qr_label = tk.Label(qr_frame, bg="#FFFFFF")
+        self.qr_label.pack(anchor="center")
 
-        info_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
-                             highlightbackground=CARD_BORDER, highlightthickness=1)
+        tk.Label(
+            qr_card,
+            text="Phone App  ➔  Connect  ➔  Wi-Fi  ➔  Scan QR Code",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+        ).pack(anchor="center", pady=(14, 4))
+
+        tk.Label(
+            qr_card,
+            text="Ensure your phone and PC are connected to the same Wi-Fi network or hotspot.",
+            font=(UI_FONT, 8),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            wraplength=300,
+            justify="center",
+        ).pack(anchor="center")
+
+        # Right Card: Connection Details & Pairing PIN
+        info_card = self._make_card(container, padx=22, pady=20)
         info_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
 
-        lbl_info_title = tk.Label(info_card, text="Server Connection Info", font=("Segoe UI", 12, "bold"),
-                                  bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_info_title.pack(anchor="w", pady=(0, 10))
+        tk.Label(
+            info_card,
+            text="Server Network & Security",
+            font=(UI_FONT, 14, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="w", pady=(0, 12))
 
-        lbl_adapter = tk.Label(info_card, text="Network Adapter / IP:", font=("Segoe UI", 9, "bold"),
-                               bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_adapter.pack(anchor="w", pady=(4, 2))
+        tk.Label(
+            info_card,
+            text="Network Adapter / Interface:",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+        ).pack(anchor="w", pady=(2, 4))
 
         adapter_names = [f"{name}: {ip}" for name, ip in self.adapters]
-        self.combo_adapter = ttk.Combobox(info_card, values=adapter_names, state="readonly", font=("Segoe UI", 9))
+        self.combo_adapter = ttk.Combobox(info_card, values=adapter_names, state="readonly", font=(UI_FONT, 9))
         if adapter_names:
             self.combo_adapter.current(0)
-        self.combo_adapter.pack(fill="x", pady=(0, 10))
+        self.combo_adapter.pack(fill="x", pady=(0, 14))
         self.combo_adapter.bind("<<ComboboxSelected>>", self._on_adapter_selected)
 
-        lbl_ip_head = tk.Label(info_card, text="Local IP Address:", font=("Segoe UI", 9, "bold"),
-                               bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_ip_head.pack(anchor="w", pady=(4, 2))
+        metrics_grid = tk.Frame(info_card, bg=CARD_BG)
+        metrics_grid.pack(fill="x", pady=(0, 14))
 
-        self.lbl_ip_val = tk.Label(info_card, text=self.current_ip, font=("Segoe UI", 14, "bold"),
-                                   bg=CARD_BG, fg=ACCENT_CYAN)
-        self.lbl_ip_val.pack(anchor="w")
+        ip_box = tk.Frame(
+            metrics_grid, bg=CARD_SURFACE, padx=14, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        ip_box.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
-        lbl_port_head = tk.Label(info_card, text="UDP Input Port:", font=("Segoe UI", 9, "bold"),
-                                 bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_port_head.pack(anchor="w", pady=(8, 2))
+        tk.Label(ip_box, text="LOCAL IP ADDRESS", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED).pack(
+            anchor="w"
+        )
+        self.lbl_ip_val = tk.Label(
+            ip_box, text=self.current_ip, font=("Consolas", 14, "bold"), bg=CARD_SURFACE, fg=ACCENT_CYAN
+        )
+        self.lbl_ip_val.pack(anchor="w", pady=(2, 0))
 
-        self.lbl_port_val = tk.Label(info_card, text=str(self.current_port), font=("Segoe UI", 14, "bold"),
-                                     bg=CARD_BG, fg=TEXT_PRIMARY)
-        self.lbl_port_val.pack(anchor="w")
+        port_box = tk.Frame(
+            metrics_grid, bg=CARD_SURFACE, padx=14, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        port_box.pack(side="right", fill="both", padx=(6, 0))
 
-        lbl_pin_head = tk.Label(info_card, text="Wi-Fi Pairing PIN (enter this on your phone):",
-                                font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_pin_head.pack(anchor="w", pady=(12, 2))
-        self.lbl_wifi_pin = tk.Label(info_card, text=self.auth_token, font=("Segoe UI", 18, "bold"),
-                                     bg=BUTTON_BG, fg=ACCENT_GREEN, padx=10, pady=5)
-        self.lbl_wifi_pin.pack(anchor="w", fill="x")
+        tk.Label(port_box, text="UDP PORT", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED).pack(anchor="w")
+        self.lbl_port_val = tk.Label(
+            port_box, text=str(self.current_port), font=("Consolas", 14, "bold"), bg=CARD_SURFACE, fg=TEXT_PRIMARY
+        )
+        self.lbl_port_val.pack(anchor="w", pady=(2, 0))
 
-        btn_copy = tk.Button(info_card, text="📋 Copy IP Address", font=("Segoe UI", 9, "bold"),
-                             bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-                             relief="flat", padx=10, pady=8, command=self.copy_ip, cursor="hand2")
-        btn_copy.pack(fill="x", pady=(10, 6))
+        pin_box = tk.Frame(
+            info_card, bg=CARD_SURFACE, padx=14, pady=12, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        pin_box.pack(fill="x", pady=(0, 16))
 
-        btn_copy_pin = tk.Button(info_card, text="📋 Copy Pairing PIN", font=("Segoe UI", 9, "bold"),
-                                 bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-                                 relief="flat", padx=10, pady=8, command=self.copy_pairing_pin, cursor="hand2")
-        btn_copy_pin.pack(fill="x", pady=(0, 6))
+        tk.Label(
+            pin_box,
+            text="6-DIGIT PAIRING PIN (INCLUDED IN QR CODE)",
+            font=(UI_FONT, 8, "bold"),
+            bg=CARD_SURFACE,
+            fg=TEXT_MUTED,
+        ).pack(anchor="w")
 
-        btn_refresh = tk.Button(info_card, text="🔄 Refresh QR Code", font=("Segoe UI", 9),
-                                bg=CARD_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-                                relief="flat", padx=10, pady=6, command=self.generate_qr, cursor="hand2")
+        self.lbl_wifi_pin = tk.Label(
+            pin_box,
+            text=self.auth_token,
+            font=("Consolas", 20, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_GREEN,
+        )
+        self.lbl_wifi_pin.pack(anchor="w", pady=(4, 0))
+
+        btn_copy = self._make_button(
+            info_card, "📋  Copy IP Address", self.copy_ip, bg=BUTTON_BG, fg=TEXT_PRIMARY, pady=8
+        )
+        btn_copy.pack(fill="x", pady=(0, 8))
+
+        btn_copy_pin = self._make_button(
+            info_card, "🔑  Copy Pairing PIN", self.copy_pairing_pin, bg=BUTTON_BG, fg=TEXT_PRIMARY, pady=8
+        )
+        btn_copy_pin.pack(fill="x", pady=(0, 8))
+
+        btn_refresh = self._make_button(
+            info_card,
+            "🔄  Refresh QR Code",
+            self.generate_qr,
+            bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY,
+            hover_bg=ACCENT_INDIGO_HOVER,
+            pady=8,
+        )
         btn_refresh.pack(fill="x")
 
         self.generate_qr()
 
     def _build_bt_tab(self):
-        card = tk.Frame(self.tab_bt, bg=CARD_BG, padx=20, pady=20, relief="flat",
-                        highlightbackground=CARD_BORDER, highlightthickness=1)
+        card = self._make_card(self.tab_bt, padx=24, pady=22)
         card.pack(fill="both", expand=True)
 
-        lbl_title = tk.Label(card, text="Bluetooth HID Mode (Hardware Emulation)",
-                             font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_title.pack(anchor="w", pady=(0, 6))
+        tk.Label(
+            card,
+            text="Bluetooth RFCOMM & HID Hardware Mode",
+            font=(UI_FONT, 14, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="w", pady=(0, 6))
 
         desc = (
-            "In Bluetooth HID mode, your Android phone acts as a real hardware Bluetooth Mouse & Keyboard.\n"
-            "• Zero companion software is needed on the PC!\n"
-            "• Works directly with Windows, macOS, Linux, Android TV, iPad, and iPhone.\n"
-            "• If Bluetooth connection is acting funky or fails to pair, use the tools below to reset."
+            "Your Android phone supports two Bluetooth modes simultaneously:\n"
+            "• Bluetooth RFCOMM (Companion Link): Full media remote, system stats, live audio, and webcam streaming.\n"
+            "• Bluetooth HID (Hardware Emulation): Zero-driver hardware mouse & keyboard that works even on BIOS or lock screens."
         )
-        lbl_desc = tk.Label(card, text=desc, font=("Segoe UI", 10), justify="left",
-                            bg=CARD_BG, fg=TEXT_MUTED, wraplength=600)
-        lbl_desc.pack(anchor="w", pady=(0, 16))
+        tk.Label(
+            card,
+            text=desc,
+            font=(UI_FONT, 9),
+            justify="left",
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            wraplength=660,
+        ).pack(anchor="w", pady=(0, 18))
 
-        btn_win_bt = tk.Button(card, text="⚙️ Open Windows Bluetooth Settings", font=("Segoe UI", 10, "bold"),
-                               bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-                               relief="flat", padx=14, pady=10, command=self.open_windows_bt_settings, cursor="hand2")
-        btn_win_bt.pack(anchor="w", pady=(0, 16))
+        btn_win_bt = self._make_button(
+            card,
+            "⚙️  Open Windows Bluetooth Settings",
+            self.open_windows_bt_settings,
+            bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY,
+            hover_bg=ACCENT_INDIGO_HOVER,
+            font_size=10,
+            padx=16,
+            pady=9,
+        )
+        btn_win_bt.pack(anchor="w", pady=(0, 18))
 
-        trouble_box = tk.LabelFrame(card, text=" Pairing Fix Checklist ", font=("Segoe UI", 10, "bold"),
-                                    bg=CARD_BG, fg=ACCENT_CYAN, padx=12, pady=10)
-        trouble_box.pack(fill="x", pady=8)
+        trouble_box = tk.Frame(
+            card, bg=CARD_SURFACE, padx=18, pady=16, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        trouble_box.pack(fill="x", pady=6)
+
+        tk.Label(
+            trouble_box,
+            text="Quick Pairing & Troubleshooting Checklist",
+            font=(UI_FONT, 10, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_CYAN,
+        ).pack(anchor="w", pady=(0, 8))
 
         steps = (
-            "1. In Windows Bluetooth Settings, find your phone under 'Other devices' or 'Input' and click 'Remove device'.\n"
-            "2. On your phone: Go to Bluetooth settings, unpair this PC.\n"
-            "3. In the BT Mouse phone app: Go to 'Connect' tab -> select 'Bluetooth HID' -> tap 'Register HID Device'.\n"
-            "4. Put your phone in Bluetooth discoverable mode.\n"
-            "5. On your PC: Click 'Add Device' -> 'Bluetooth' -> select your phone.\n"
-            "6. Accept the pairing prompt on BOTH phone and PC."
+            "1. Open Windows Bluetooth Settings and pair your Android phone with this PC.\n"
+            "2. In the BT Mouse Android app, open the Connect tab and select the Bluetooth section.\n"
+            "3. Tap 'Refresh' to list your paired PC, then tap 'Connect' next to your PC's name.\n"
+            "4. If switching from an older pairing, remove the device on both Windows and Android, then pair fresh."
         )
-        lbl_steps = tk.Label(trouble_box, text=steps, font=("Segoe UI", 9), justify="left",
-                             bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_steps.pack(anchor="w")
+        tk.Label(
+            trouble_box,
+            text=steps,
+            font=(UI_FONT, 9),
+            justify="left",
+            bg=CARD_SURFACE,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="w")
 
     def _build_tablet_tab(self):
-        card = tk.Frame(self.tab_tablet, bg=CARD_BG, padx=20, pady=20, relief="flat",
-                        highlightbackground=CARD_BORDER, highlightthickness=1)
+        card = self._make_card(self.tab_tablet, padx=24, pady=22)
         card.pack(fill="both", expand=True)
 
-        lbl_title = tk.Label(card, text="Tablet Writing & Drawing Pad",
-                             font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_title.pack(anchor="w", pady=(0, 6))
+        tk.Label(
+            card,
+            text="Tablet Writing & Graphics Drawing Slate",
+            font=(UI_FONT, 14, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="w", pady=(0, 6))
 
         desc = (
-            "Turn any Android tablet (or phone) into an interactive Graphics Drawing Pad & Writing Slate!\n\n"
-            "Features:\n"
-            "• Absolute 1:1 Screen Mapping: Tablet surface maps directly to your PC monitor.\n"
-            "• S-Pen & Stylus Support: Detects stylus touches with pressure sensitivity.\n"
-            "• Palm Rejection: Rest your wrist on the tablet while drawing without accidental clicks.\n"
-            "• Works seamlessly with MS Paint, OneNote, Photoshop, Paint 3D, and whiteboard apps."
+            "Turn any Android phone or tablet into a low-latency graphics drawing slate:\n\n"
+            "• 1:1 Absolute Screen Mapping: Maps your mobile surface proportionally to your primary monitor.\n"
+            "• S-Pen & Active Stylus Support: Translates stylus pressure and hover actions smoothly.\n"
+            "• Works with OneNote, MS Paint, Photoshop, Krita, Blender, and whiteboard apps."
         )
-        lbl_desc = tk.Label(card, text=desc, font=("Segoe UI", 10), justify="left",
-                            bg=CARD_BG, fg=TEXT_MUTED, wraplength=600)
-        lbl_desc.pack(anchor="w", pady=(0, 16))
+        tk.Label(
+            card,
+            text=desc,
+            font=(UI_FONT, 9),
+            justify="left",
+            bg=CARD_BG,
+            fg=TEXT_SECONDARY,
+            wraplength=660,
+        ).pack(anchor="w", pady=(0, 16))
 
-        metrics_frame = tk.Frame(card, bg=CARD_BG)
-        metrics_frame.pack(anchor="w", pady=8)
+        metrics_frame = tk.Frame(
+            card, bg=CARD_SURFACE, padx=16, pady=12, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        metrics_frame.pack(anchor="w", fill="x", pady=(0, 16))
 
         sw, sh = 1920, 1080
         if IS_WINDOWS:
@@ -627,102 +1095,169 @@ class CompanionApp(tk.Tk):
             except Exception:
                 pass
 
-        lbl_res_title = tk.Label(metrics_frame, text="Detected PC Screen Resolution:",
-                                 font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_res_title.pack(side="left")
+        tk.Label(
+            metrics_frame,
+            text="Detected Primary Monitor Resolution:",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_SURFACE,
+            fg=TEXT_MUTED,
+        ).pack(side="left")
 
-        lbl_res_val = tk.Label(metrics_frame, text=f"{sw} x {sh} px",
-                               font=("Segoe UI", 11, "bold"), bg=CARD_BG, fg=ACCENT_CYAN, padx=8)
-        lbl_res_val.pack(side="left")
+        tk.Label(
+            metrics_frame,
+            text=f"{sw} × {sh} px",
+            font=("Consolas", 12, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_CYAN,
+            padx=10,
+        ).pack(side="left")
 
-        btn_open_paint = tk.Button(card, text="🎨 Open MS Paint for Drawing Test", font=("Segoe UI", 10, "bold"),
-                                   bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-                                   relief="flat", padx=14, pady=8, command=self.open_paint, cursor="hand2")
-        btn_open_paint.pack(anchor="w", pady=12)
+        btn_open_paint = self._make_button(
+            card,
+            "🎨  Open MS Paint for Drawing Test",
+            self.open_paint,
+            bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY,
+            hover_bg=ACCENT_INDIGO_HOVER,
+            font_size=10,
+            padx=16,
+            pady=9,
+        )
+        btn_open_paint.pack(anchor="w")
 
     def _build_wan_tab(self):
         container = tk.Frame(self.tab_wan, bg=BG_DARK)
         container.pack(fill="both", expand=True)
 
-        qr_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
-                           highlightbackground=CARD_BORDER, highlightthickness=1)
+        qr_card = self._make_card(container, padx=22, pady=20)
         qr_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        lbl_qr_title = tk.Label(qr_card, text="Secure Remote Access Setup", font=("Segoe UI", 12, "bold"),
-                                bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_qr_title.pack(anchor="center", pady=(0, 4))
+        tk.Label(
+            qr_card,
+            text="Remote WAN / WebSocket Pairing",
+            font=(UI_FONT, 14, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="center", pady=(0, 4))
 
-        lbl_qr_desc = tk.Label(qr_card, text="Scan to fill the local server address; enter the PIN separately",
-                               font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_qr_desc.pack(anchor="center", pady=(0, 10))
+        tk.Label(
+            qr_card,
+            text="Scan to auto-configure the WebSocket URL and 6-digit security PIN on your phone.",
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            wraplength=310,
+            justify="center",
+        ).pack(anchor="center", pady=(0, 14))
 
-        self.wan_qr_label = tk.Label(qr_card, bg=CARD_BG)
-        self.wan_qr_label.pack(anchor="center", pady=6)
+        wan_qr_frame = tk.Frame(qr_card, bg="#FFFFFF", padx=10, pady=10, relief="flat", bd=0)
+        wan_qr_frame.pack(anchor="center", pady=6)
 
-        lbl_hint = tk.Label(qr_card, text="Open Phone App -> Connect -> Remote WAN -> Scan QR",
-                            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN)
-        lbl_hint.pack(anchor="center", pady=(8, 0))
+        self.wan_qr_label = tk.Label(wan_qr_frame, bg="#FFFFFF")
+        self.wan_qr_label.pack(anchor="center")
 
-        info_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
-                             highlightbackground=CARD_BORDER, highlightthickness=1)
+        tk.Label(
+            qr_card,
+            text="Phone App  ➔  Connect  ➔  Remote WAN  ➔  Scan QR",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+        ).pack(anchor="center", pady=(14, 0))
+
+        info_card = self._make_card(container, padx=22, pady=20)
         info_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
 
-        lbl_info_title = tk.Label(info_card, text="WAN Server Configuration", font=("Segoe UI", 12, "bold"),
-                                  bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_info_title.pack(anchor="w", pady=(0, 10))
+        tk.Label(
+            info_card,
+            text="WebSocket & PIN Configuration",
+            font=(UI_FONT, 14, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="w", pady=(0, 12))
 
-        lbl_ws_port = tk.Label(info_card, text=f"WebSocket Port: {self.ws_port}", font=("Segoe UI", 11, "bold"),
-                               bg=CARD_BG, fg=ACCENT_CYAN)
-        lbl_ws_port.pack(anchor="w", pady=(4, 6))
+        ws_box = tk.Frame(
+            info_card, bg=CARD_SURFACE, padx=14, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        ws_box.pack(fill="x", pady=(0, 12))
 
-        lbl_token_head = tk.Label(info_card, text="Security Access Key (PIN):", font=("Segoe UI", 9, "bold"),
-                                  bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_token_head.pack(anchor="w", pady=(6, 2))
+        tk.Label(ws_box, text="DIRECT WEBSOCKET ENDPOINT", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED).pack(
+            anchor="w"
+        )
+        self.lbl_wan_url = tk.Label(
+            ws_box,
+            text=f"ws://{self.current_ip}:{self.ws_port}",
+            font=("Consolas", 12, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_GREEN,
+        )
+        self.lbl_wan_url.pack(anchor="w", pady=(3, 0))
+
+        tk.Label(
+            info_card,
+            text="Security Access Key (6-Digit Pairing PIN):",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+        ).pack(anchor="w", pady=(2, 4))
 
         token_row = tk.Frame(info_card, bg=CARD_BG)
-        token_row.pack(fill="x", pady=(0, 8))
+        token_row.pack(fill="x", pady=(0, 14))
 
-        self.ent_token = tk.Entry(token_row, font=("Segoe UI", 11, "bold"), bg=BUTTON_BG, fg=TEXT_PRIMARY,
-                                  insertbackground=TEXT_PRIMARY, relief="flat")
+        self.ent_token = tk.Entry(
+            token_row,
+            font=("Consolas", 12, "bold"),
+            bg=BUTTON_BG,
+            fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            relief="flat",
+            highlightbackground=CARD_BORDER,
+            highlightcolor=ACCENT_CYAN,
+            highlightthickness=1,
+        )
         self.ent_token.insert(0, self.auth_token)
-        self.ent_token.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=4)
+        self.ent_token.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=6)
 
-        btn_set_token = tk.Button(token_row, text="Update Key", font=("Segoe UI", 9, "bold"),
-                                  bg=CARD_BORDER, fg=TEXT_PRIMARY, relief="flat", padx=10,
-                                  command=self._update_auth_token, cursor="hand2")
+        btn_set_token = self._make_button(
+            token_row,
+            "Update PIN",
+            self._update_auth_token,
+            bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY,
+            hover_bg=ACCENT_INDIGO_HOVER,
+            padx=12,
+            pady=6,
+        )
         btn_set_token.pack(side="right")
 
-        lbl_url_head = tk.Label(info_card, text="Direct WebSocket Address:", font=("Segoe UI", 9, "bold"),
-                                bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_url_head.pack(anchor="w", pady=(8, 2))
+        btn_copy_url = self._make_button(
+            info_card, "📋  Copy WebSocket URL", self.copy_wan_url, bg=BUTTON_BG, fg=TEXT_PRIMARY, pady=8
+        )
+        btn_copy_url.pack(fill="x", pady=(0, 8))
 
-        self.lbl_wan_url = tk.Label(info_card, text=f"ws://{self.current_ip}:{self.ws_port}",
-                                    font=("Consolas", 10, "bold"), bg=BUTTON_BG, fg=ACCENT_GREEN, padx=8, pady=6)
-        self.lbl_wan_url.pack(anchor="w", fill="x")
+        btn_refresh_wan = self._make_button(
+            info_card, "🔄  Refresh WAN QR Code", self.generate_wan_qr, bg=BUTTON_BG, fg=ACCENT_CYAN, pady=8
+        )
+        btn_refresh_wan.pack(fill="x", pady=(0, 12))
 
-        btn_copy_url = tk.Button(info_card, text="📋 Copy WebSocket URL", font=("Segoe UI", 9, "bold"),
-                                 bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-                                 relief="flat", padx=10, pady=8, command=self.copy_wan_url, cursor="hand2")
-        btn_copy_url.pack(fill="x", pady=(14, 6))
-
-        btn_refresh_wan = tk.Button(info_card, text="🔄 Refresh WAN QR Code", font=("Segoe UI", 9),
-                                    bg=CARD_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-                                    relief="flat", padx=10, pady=6, command=self.generate_wan_qr, cursor="hand2")
-        btn_refresh_wan.pack(fill="x")
-
-        lbl_tips = tk.Label(info_card, text="Internet use requires a TLS endpoint (wss://), such as a securely configured tunnel or reverse proxy. This companion listens locally with ws://; never expose that port directly to the Internet.",
-                            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED, wraplength=280, justify="left")
-        lbl_tips.pack(anchor="w", pady=(12, 0))
+        tk.Label(
+            info_card,
+            text="Security Note: Local LAN connections use ws://. For access over the public Internet, route through a TLS-terminated tunnel (wss://) such as Cloudflare Tunnel or Tailscale Funnel.",
+            font=(UI_FONT, 8),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            wraplength=330,
+            justify="left",
+        ).pack(anchor="w")
 
         self.generate_wan_qr()
 
     def _build_desktop_tab(self):
-        canvas = tk.Canvas(self.tab_desktop, bg=CARD_BG, highlightthickness=0, borderwidth=0)
+        canvas = tk.Canvas(self.tab_desktop, bg=BG_DARK, highlightthickness=0, borderwidth=0)
         v_scroll = ttk.Scrollbar(self.tab_desktop, orient="vertical", command=canvas.yview)
-        card = tk.Frame(canvas, bg=CARD_BG, padx=18, pady=16, relief="flat")
+        card = self._make_card(canvas, padx=20, pady=18)
         card_window = canvas.create_window((0, 0), window=card, anchor="nw")
 
-        def _on_card_configure(event):
+        def _on_card_configure(_event):
             canvas.configure(scrollregion=canvas.bbox("all"))
 
         def _on_canvas_configure(event):
@@ -742,194 +1277,288 @@ class CompanionApp(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         v_scroll.pack(side="right", fill="y")
 
-        lbl_title = tk.Label(card, text="Desktop Controls, Camera & Mic Diagnostics",
-                             font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_title.pack(anchor="w", pady=(0, 6))
+        top_row = tk.Frame(card, bg=CARD_BG)
+        top_row.pack(fill="x", pady=(0, 10))
 
-        lbl_sub = tk.Label(card, text="Test remote control actions locally on this PC:",
-                           font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_sub.pack(anchor="w", pady=(0, 14))
+        title_col = tk.Frame(top_row, bg=CARD_BG)
+        title_col.pack(side="left")
 
-        startup_frame = tk.Frame(card, bg=CARD_BG)
-        startup_frame.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            title_col,
+            text="Desktop Controls, Quick Apps & Diagnostics",
+            font=(UI_FONT, 13, "bold"),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+        ).pack(anchor="w")
+
+        tk.Label(
+            title_col,
+            text="Configure Windows startup, curated Quick Apps, media preview area, and local hardware checks.",
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+        ).pack(anchor="w")
+
+        btn_lock = self._make_button(
+            top_row,
+            "🔒  Lock Workstation",
+            lambda: self.server._handle_system_power("lock") if self.server else None,
+            bg=BUTTON_BG,
+            fg=ACCENT_RED,
+            padx=12,
+            pady=6,
+        )
+        btn_lock.pack(side="right")
+
+        startup_frame = tk.Frame(card, bg=CARD_SURFACE, padx=12, pady=8, highlightbackground=CARD_BORDER, highlightthickness=1)
+        startup_frame.pack(fill="x", pady=(0, 12))
         self.startup_var = tk.BooleanVar(value=self._startup_registry_value() is not None)
         tk.Checkbutton(
             startup_frame,
-            text="Start with Windows (minimized to tray)",
+            text="Launch BT Mouse Companion automatically when signing in to Windows (minimized to system tray)",
             variable=self.startup_var,
             command=lambda: self._set_startup_enabled(self.startup_var.get()),
             state="normal" if os.name == "nt" else "disabled",
-            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_PRIMARY,
-            activebackground=CARD_BG, activeforeground=TEXT_PRIMARY,
-            selectcolor=BUTTON_BG, anchor="w"
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_SURFACE,
+            fg=TEXT_PRIMARY,
+            activebackground=CARD_SURFACE,
+            activeforeground=TEXT_PRIMARY,
+            selectcolor=BUTTON_BG,
+            anchor="w",
         ).pack(anchor="w", fill="x")
 
-        quick_box = tk.LabelFrame(card, text=" Quick Apps on this PC ", font=("Segoe UI", 10, "bold"),
-                                  bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=8)
-        quick_box.pack(fill="x", pady=(4, 8))
-        add_row = tk.Frame(quick_box, bg=CARD_BG)
-        add_row.pack(fill="x", pady=(0, 6))
-        self.combo_available_apps = ttk.Combobox(add_row, state="readonly", font=("Segoe UI", 10))
-        self.combo_available_apps.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        tk.Button(add_row, text="Add selected app", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
-                  fg=ACCENT_GREEN, relief="flat", padx=8, pady=5, command=self.add_quick_app).pack(side="right")
+        # Quick Apps Section
+        quick_box = tk.LabelFrame(
+            card,
+            text="  Quick Apps on this PC (Synced to Phone)  ",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+            padx=12,
+            pady=10,
+            bd=1,
+            relief="solid",
+        )
+        quick_box.pack(fill="x", pady=(0, 12))
 
-        self.list_quick_apps = tk.Listbox(quick_box, height=5, font=("Segoe UI", 10), bg=BUTTON_BG,
-                                          fg=TEXT_PRIMARY, selectbackground=ACCENT_INDIGO,
-                                          borderwidth=0, highlightthickness=0, activestyle="none")
-        self.list_quick_apps.pack(fill="x", pady=(0, 6))
+        add_row = tk.Frame(quick_box, bg=CARD_BG)
+        add_row.pack(fill="x", pady=(0, 8))
+        self.combo_available_apps = ttk.Combobox(add_row, state="readonly", font=(UI_FONT, 9))
+        self.combo_available_apps.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._make_button(
+            add_row, "＋ Add App", self.add_quick_app, bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, hover_bg=ACCENT_INDIGO_HOVER, padx=10, pady=4
+        ).pack(side="right")
+
+        self.list_quick_apps = tk.Listbox(
+            quick_box,
+            height=4,
+            font=(UI_FONT, 9),
+            bg=CARD_SURFACE,
+            fg=TEXT_PRIMARY,
+            selectbackground=ACCENT_INDIGO,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=CARD_BORDER,
+            activestyle="none",
+        )
+        self.list_quick_apps.pack(fill="x", pady=(0, 8))
         self.list_quick_apps.bind("<<ListboxSelect>>", self.on_quick_app_selected)
+
         edit_row = tk.Frame(quick_box, bg=CARD_BG)
         edit_row.pack(fill="x")
-        self.ent_quick_app_name = tk.Entry(edit_row, font=("Segoe UI", 10), bg=BUTTON_BG, fg=TEXT_PRIMARY,
-                                           insertbackground=TEXT_PRIMARY, relief="flat")
-        self.ent_quick_app_name.pack(side="left", fill="x", expand=True, padx=(0, 6), ipady=5)
-        tk.Button(edit_row, text="Save name", font=("Segoe UI", 9), bg=BUTTON_BG, fg=ACCENT_CYAN,
-                  relief="flat", padx=8, pady=5, command=self.rename_quick_app).pack(side="left", padx=(0, 5))
-        tk.Button(edit_row, text="Remove", font=("Segoe UI", 9), bg=BUTTON_BG, fg=ACCENT_RED,
-                  relief="flat", padx=8, pady=5, command=self.remove_quick_app).pack(side="left")
-        tk.Button(edit_row, text="Refresh installed apps", font=("Segoe UI", 9), bg=BUTTON_BG,
-                  fg=TEXT_PRIMARY, relief="flat", padx=8, pady=5, command=self.refresh_quick_apps).pack(side="left", padx=(5, 0))
-        self.lbl_quick_apps_status = tk.Label(quick_box, text="Quick apps are saved on this PC and shared with the phone app.",
-                                              font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w")
-        self.lbl_quick_apps_status.pack(fill="x", pady=(5, 0))
+        self.ent_quick_app_name = tk.Entry(
+            edit_row,
+            font=(UI_FONT, 9),
+            bg=BUTTON_BG,
+            fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            relief="flat",
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+        )
+        self.ent_quick_app_name.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=4)
+        self._make_button(edit_row, "Save Name", self.rename_quick_app, fg=ACCENT_CYAN, padx=9, pady=4).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(edit_row, "Remove", self.remove_quick_app, fg=ACCENT_RED, padx=9, pady=4).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(edit_row, "🔄 Refresh Apps", self.refresh_quick_apps, fg=TEXT_PRIMARY, padx=9, pady=4).pack(
+            side="left"
+        )
+
+        self.lbl_quick_apps_status = tk.Label(
+            quick_box,
+            text="Quick apps are saved on this PC and shared with the phone app.",
+            font=(UI_FONT, 8),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            anchor="w",
+        )
+        self.lbl_quick_apps_status.pack(fill="x", pady=(6, 0))
         self.after_idle(self.refresh_quick_apps)
 
-        # Power Controls
-        pwr_frame = tk.Frame(card, bg=CARD_BG)
-        pwr_frame.pack(anchor="w", fill="x", pady=10)
-
-        lbl_pwr = tk.Label(pwr_frame, text="Power Actions:", font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_pwr.pack(side="left", padx=(0, 8))
-
-        btn_lock = tk.Button(pwr_frame, text="🔒 Lock Workstation", font=("Segoe UI", 9, "bold"),
-                             bg=BUTTON_BG, fg=ACCENT_RED, relief="flat", padx=10, pady=4, cursor="hand2",
-                             command=lambda: self.server._handle_system_power("lock") if self.server else None)
-        btn_lock.pack(side="left", padx=4)
+        # Recording Policy Section
+        policy_box = tk.LabelFrame(
+            card,
+            text="  Capture & Storage Retention Policy  ",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+            padx=12,
+            pady=10,
+            bd=1,
+            relief="solid",
+        )
+        policy_box.pack(fill="x", pady=(0, 12))
 
         self.auto_record_video_var = tk.BooleanVar(value=self.auto_record_video)
         tk.Checkbutton(
-            card,
-            text="Record every live webcam session on this PC (1280×720, high quality)",
+            policy_box,
+            text="Automatically record every live PC webcam session (1280×720 MP4)",
             variable=self.auto_record_video_var,
             command=self._save_recording_preferences,
-            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_PRIMARY,
-            activebackground=CARD_BG, activeforeground=TEXT_PRIMARY,
-            selectcolor=BUTTON_BG, anchor="w"
-        ).pack(anchor="w", fill="x", pady=(4, 0))
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+            activebackground=CARD_BG,
+            activeforeground=TEXT_PRIMARY,
+            selectcolor=BUTTON_BG,
+            anchor="w",
+        ).pack(anchor="w", fill="x")
+
         self.auto_record_audio_var = tk.BooleanVar(value=self.auto_record_audio)
         tk.Checkbutton(
-            card,
+            policy_box,
             text="Also record the PC microphone during each live webcam session",
             variable=self.auto_record_audio_var,
             command=self._save_recording_preferences,
-            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_PRIMARY,
-            activebackground=CARD_BG, activeforeground=TEXT_PRIMARY,
-            selectcolor=BUTTON_BG, anchor="w"
-        ).pack(anchor="w", fill="x", pady=(2, 0))
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+            activebackground=CARD_BG,
+            activeforeground=TEXT_PRIMARY,
+            selectcolor=BUTTON_BG,
+            anchor="w",
+        ).pack(anchor="w", fill="x", pady=(2, 6))
 
-        retention_row = tk.Frame(card, bg=CARD_BG)
-        retention_row.pack(anchor="w", fill="x", pady=(8, 2))
-        tk.Label(retention_row, text="Delete older than days (0 = keep):", font=("Segoe UI", 8),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
+        retention_row = tk.Frame(policy_box, bg=CARD_BG)
+        retention_row.pack(anchor="w", fill="x", pady=2)
+        tk.Label(retention_row, text="Auto-delete older than (days, 0=keep):", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED).pack(
+            side="left"
+        )
         self.recording_retention_var = tk.StringVar(value=str(self.recording_retention_days))
-        ttk.Spinbox(retention_row, from_=0, to=3650, width=6, textvariable=self.recording_retention_var).pack(side="left", padx=(5, 12))
-        tk.Label(retention_row, text="Maximum library MB (0 = unlimited):", font=("Segoe UI", 8),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
+        ttk.Spinbox(retention_row, from_=0, to=3650, width=6, textvariable=self.recording_retention_var).pack(
+            side="left", padx=(6, 14)
+        )
+        tk.Label(retention_row, text="Max library MB (0=unlimited):", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED).pack(
+            side="left"
+        )
         self.recording_max_storage_var = tk.StringVar(value=str(self.recording_max_storage_mb))
-        ttk.Spinbox(retention_row, from_=0, to=500000, increment=512, width=8,
-                    textvariable=self.recording_max_storage_var).pack(side="left", padx=5)
-        reserve_row = tk.Frame(card, bg=CARD_BG)
-        reserve_row.pack(anchor="w", fill="x", pady=(2, 6))
-        tk.Label(reserve_row, text="Keep at least this much disk space free (MB):", font=("Segoe UI", 8),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
+        ttk.Spinbox(retention_row, from_=0, to=500000, increment=512, width=8, textvariable=self.recording_max_storage_var).pack(
+            side="left", padx=(6, 14)
+        )
+        tk.Label(retention_row, text="Min free disk (MB):", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
         self.recording_min_free_var = tk.StringVar(value=str(self.recording_min_free_mb))
-        ttk.Spinbox(reserve_row, from_=0, to=100000, increment=256, width=8,
-                    textvariable=self.recording_min_free_var).pack(side="left", padx=5)
-        tk.Button(reserve_row, text="Save recording limits", font=("Segoe UI", 8), bg=BUTTON_BG,
-                  fg=ACCENT_CYAN, relief="flat", padx=8, pady=4,
-                  command=self._save_recording_preferences).pack(side="left", padx=8)
+        ttk.Spinbox(retention_row, from_=0, to=100000, increment=256, width=7, textvariable=self.recording_min_free_var).pack(
+            side="left", padx=6
+        )
+        self._make_button(
+            retention_row, "Save Limits", self._save_recording_preferences, fg=ACCENT_CYAN, font_size=8, padx=8, pady=3
+        ).pack(side="left", padx=(6, 0))
 
-        # Hardware & Multimedia tests
-        media_frame = tk.Frame(card, bg=CARD_BG)
-        media_frame.pack(anchor="w", fill="x", pady=12)
+        # Media Preview Region & Hardware Diagnostics
+        diag_box = tk.LabelFrame(
+            card,
+            text="  Media Player Preview Area & Hardware Self-Test  ",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+            padx=12,
+            pady=10,
+            bd=1,
+            relief="solid",
+        )
+        diag_box.pack(fill="x", pady=(0, 12))
 
-        preview_row = tk.Frame(card, bg=CARD_BG)
+        preview_row = tk.Frame(diag_box, bg=CARD_BG)
         preview_row.pack(anchor="w", fill="x", pady=(0, 8))
-        tk.Button(preview_row, text="Select player preview area", font=("Segoe UI", 9, "bold"),
-                  bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6,
-                  command=self.select_media_preview_region).pack(side="left", padx=(0, 8))
+        self._make_button(
+            preview_row, "📐 Select Player Preview Area", self.select_media_preview_region, fg=ACCENT_CYAN, padx=10, pady=5
+        ).pack(side="left", padx=(0, 10))
         self.lbl_media_preview_region = tk.Label(
-            preview_row, text=self._media_preview_region_description(), font=("Segoe UI", 9),
-            bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
+            preview_row, text=self._media_preview_region_description(), font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY, anchor="w"
         )
         self.lbl_media_preview_region.pack(side="left", fill="x", expand=True)
-        tk.Label(card, text="Phone preview captures only this selected on-screen rectangle while its preview toggle is on. Page content inside the selection may appear; protected video can be black.",
-                 font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED, wraplength=610, justify="left").pack(anchor="w")
 
-        btn_cam = tk.Button(media_frame, text="📸 Test Webcam Snapshot", font=("Segoe UI", 9, "bold"),
-                            bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6, cursor="hand2",
-                            command=self.test_camera_snapshot)
-        btn_cam.pack(side="left", padx=(0, 8))
+        media_frame = tk.Frame(diag_box, bg=CARD_BG)
+        media_frame.pack(anchor="w", fill="x", pady=(4, 4))
+        self._make_button(media_frame, "📸 Test Webcam Snapshot", self.test_camera_snapshot, fg=ACCENT_CYAN, padx=10, pady=5).pack(
+            side="left", padx=(0, 8)
+        )
+        self._make_button(media_frame, "📷 Snapshots Folder", self.open_snapshots_folder, fg=TEXT_PRIMARY, padx=10, pady=5).pack(
+            side="left", padx=(0, 8)
+        )
+        self._make_button(media_frame, "🎙️ Test Mic (3s Record)", self.test_mic_record, fg=ACCENT_GREEN, padx=10, pady=5).pack(
+            side="left"
+        )
 
-        btn_snaps = tk.Button(media_frame, text="📷 Snapshots Folder", font=("Segoe UI", 9, "bold"),
-                              bg=BUTTON_BG, fg=ACCENT_CYAN, relief="flat", padx=10, pady=6, cursor="hand2",
-                              command=self.open_snapshots_folder)
-        btn_snaps.pack(side="left", padx=(0, 8))
+        self.lbl_cam_preview = tk.Label(diag_box, bg=CARD_BG)
+        self.lbl_cam_preview.pack(anchor="w", pady=4)
 
-        btn_mic = tk.Button(media_frame, text="🎙️ Test Mic (3-sec Record)", font=("Segoe UI", 9, "bold"),
-                            bg=BUTTON_BG, fg=ACCENT_GREEN, relief="flat", padx=10, pady=6, cursor="hand2",
-                            command=self.test_mic_record)
-        btn_mic.pack(side="left")
+        self.lbl_media_status = tk.Label(
+            diag_box, text="Webcam & Microphone ready for remote commands.", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED
+        )
+        self.lbl_media_status.pack(anchor="w")
 
-        self.lbl_cam_preview = tk.Label(card, bg=CARD_BG)
-        self.lbl_cam_preview.pack(anchor="w", pady=8)
-
-        self.lbl_media_status = tk.Label(card, text="Webcam & Mic ready for remote commands.",
-                                         font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
-        self.lbl_media_status.pack(anchor="w", pady=4)
-
-        recordings = tk.LabelFrame(card, text=" Recordings on this PC ", font=("Segoe UI", 10, "bold"),
-                                   bg=CARD_BG, fg=ACCENT_CYAN, padx=12, pady=10)
-        recordings.pack(fill="x", pady=(12, 0))
+        # Recordings Quick Summary Box
+        recordings = tk.LabelFrame(
+            card,
+            text="  Recent Recordings on this PC  ",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_BG,
+            fg=ACCENT_CYAN,
+            padx=12,
+            pady=10,
+            bd=1,
+            relief="solid",
+        )
+        recordings.pack(fill="x")
 
         rec_header = tk.Frame(recordings, bg=CARD_BG)
         rec_header.pack(fill="x", pady=(0, 8))
 
         self.lbl_desktop_recordings_summary = tk.Label(
-            rec_header, text="Loading recordings...", font=("Segoe UI", 9, "bold"),
-            bg=CARD_BG, fg=TEXT_PRIMARY, anchor="w"
+            rec_header, text="Loading recordings...", font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY, anchor="w"
         )
         self.lbl_desktop_recordings_summary.pack(side="left", fill="x", expand=True)
 
-        tk.Button(
-            rec_header, text="📁 Open Recordings", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=5, cursor="hand2",
-            command=self.open_recordings_folder
-        ).pack(side="right", padx=(6, 0))
-
-        tk.Button(
-            rec_header, text="📷 Open Snapshots", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER,
-            relief="flat", padx=8, pady=5, cursor="hand2",
-            command=self.open_snapshots_folder
-        ).pack(side="right", padx=(6, 0))
-
-        tk.Button(
-            rec_header, text="🎬 Full Manager ➔", font=("Segoe UI", 9, "bold"),
-            bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=5, cursor="hand2",
-            command=self.switch_to_recordings_tab
+        self._make_button(
+            rec_header,
+            "🎬 Open Full Library ➔",
+            self.switch_to_recordings_tab,
+            bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY,
+            hover_bg=ACCENT_INDIGO_HOVER,
+            padx=10,
+            pady=4,
         ).pack(side="right")
 
         rec_list_frame = tk.Frame(recordings, bg=CARD_BG)
         rec_list_frame.pack(fill="x", pady=(0, 8))
 
         self.list_recordings = tk.Listbox(
-            rec_list_frame, height=5, font=("Segoe UI", 9), bg=BUTTON_BG,
-            fg=TEXT_PRIMARY, selectbackground=ACCENT_INDIGO,
-            borderwidth=0, highlightthickness=0, activestyle="none"
+            rec_list_frame,
+            height=4,
+            font=(UI_FONT, 9),
+            bg=CARD_SURFACE,
+            fg=TEXT_PRIMARY,
+            selectbackground=ACCENT_INDIGO,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=CARD_BORDER,
+            activestyle="none",
         )
         rec_scroll = ttk.Scrollbar(rec_list_frame, orient="vertical", command=self.list_recordings.yview)
         self.list_recordings.config(yscrollcommand=rec_scroll.set)
@@ -939,24 +1568,20 @@ class CompanionApp(tk.Tk):
 
         recording_actions = tk.Frame(recordings, bg=CARD_BG)
         recording_actions.pack(fill="x")
-        tk.Button(recording_actions, text="▶️ Open selected", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
-                  fg=ACCENT_GREEN, relief="flat", padx=10, pady=5, cursor="hand2",
-                  command=self.open_selected_recording).pack(side="left", padx=(0, 6))
-        tk.Button(recording_actions, text="🔍 Show in Explorer", font=("Segoe UI", 9), bg=BUTTON_BG,
-                  fg=TEXT_PRIMARY, relief="flat", padx=10, pady=5, cursor="hand2",
-                  command=self.show_selected_in_explorer).pack(side="left", padx=4)
-        tk.Button(recording_actions, text="📁 Open in File Explorer", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
-                  fg=ACCENT_CYAN, relief="flat", padx=10, pady=5, cursor="hand2",
-                  command=self.open_recordings_folder).pack(side="left", padx=4)
-        tk.Button(recording_actions, text="🗑️ Delete", font=("Segoe UI", 9, "bold"), bg=BUTTON_BG,
-                  fg=ACCENT_RED, relief="flat", padx=10, pady=5, cursor="hand2",
-                  command=self.delete_selected_recording).pack(side="left", padx=4)
-        tk.Button(recording_actions, text="🔄 Refresh", font=("Segoe UI", 9), bg=BUTTON_BG,
-                  fg=TEXT_PRIMARY, relief="flat", padx=10, pady=5, cursor="hand2",
-                  command=self.refresh_recordings).pack(side="left", padx=4)
+        self._make_button(recording_actions, "▶️ Play", self.open_selected_recording, fg=ACCENT_GREEN, padx=10, pady=4).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(recording_actions, "🔍 Reveal in Explorer", self.show_selected_in_explorer, padx=10, pady=4).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(recording_actions, "📁 Recordings Folder", self.open_recordings_folder, fg=ACCENT_CYAN, padx=10, pady=4).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(recording_actions, "🗑️ Delete", self.delete_selected_recording, fg=ACCENT_RED, padx=10, pady=4).pack(
+            side="left"
+        )
 
-        self.lbl_recordings_path = tk.Label(recordings, text="", font=("Segoe UI", 8), bg=CARD_BG,
-                                            fg=TEXT_MUTED, anchor="w")
+        self.lbl_recordings_path = tk.Label(recordings, text="", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED, anchor="w")
         self.lbl_recordings_path.pack(fill="x", pady=(6, 0))
         self.refresh_recordings()
 
@@ -975,18 +1600,25 @@ class CompanionApp(tk.Tk):
         overlay.geometry(f"{width}x{height}+0+0")
         canvas = tk.Canvas(overlay, bg="#111827", cursor="crosshair", highlightthickness=0)
         canvas.pack(fill="both", expand=True)
-        canvas.create_text(width // 2, 50, text="Drag around the video player area · Esc to cancel",
-                           fill="white", font=("Segoe UI", 18, "bold"))
-        canvas.create_text(width // 2, 82, text="Only the selected rectangle is sent to your phone while preview is enabled.",
-                           fill="#cbd5e1", font=("Segoe UI", 11))
+        canvas.create_text(
+            width // 2, 50, text="Drag around the video player area · Esc to cancel", fill="white", font=(UI_FONT, 18, "bold")
+        )
+        canvas.create_text(
+            width // 2,
+            82,
+            text="Only the selected rectangle is sent to your phone while preview is enabled.",
+            fill="#cbd5e1",
+            font=(UI_FONT, 11),
+        )
         selection = {"start": None, "rect": None}
 
         def begin(event):
             selection["start"] = (event.x, event.y)
             if selection["rect"]:
                 canvas.delete(selection["rect"])
-            selection["rect"] = canvas.create_rectangle(event.x, event.y, event.x, event.y,
-                                                          outline="#22d3ee", width=3, fill="", stipple="gray25")
+            selection["rect"] = canvas.create_rectangle(
+                event.x, event.y, event.x, event.y, outline="#22d3ee", width=3, fill="", stipple="gray25"
+            )
 
         def drag(event):
             if selection["start"] and selection["rect"]:
@@ -1038,13 +1670,17 @@ class CompanionApp(tk.Tk):
         try:
             self.recording_settings_path.parent.mkdir(parents=True, exist_ok=True)
             self.recording_settings_path.write_text(
-                json.dumps({
-                    "auto_record_video": enabled,
-                    "auto_record_audio": record_audio,
-                    "recording_retention_days": retention_days,
-                    "recording_max_storage_mb": max_storage_mb,
-                    "recording_min_free_mb": min_free_mb,
-                }, indent=2), encoding="utf-8"
+                json.dumps(
+                    {
+                        "auto_record_video": enabled,
+                        "auto_record_audio": record_audio,
+                        "recording_retention_days": retention_days,
+                        "recording_max_storage_mb": max_storage_mb,
+                        "recording_min_free_mb": min_free_mb,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
             )
         except OSError as exc:
             messagebox.showerror("Recording settings", f"Could not save the recording preference.\n\n{exc}")
@@ -1089,19 +1725,21 @@ class CompanionApp(tk.Tk):
                 else:
                     size_str = f"{stat.st_size / (1024 * 1024):.1f} MB"
 
-                recordings.append({
-                    "path": path,
-                    "name": path.name,
-                    "size": stat.st_size,
-                    "size_str": size_str,
-                    "mtime": stat.st_mtime,
-                    "date_str": date_str,
-                    "is_audio": is_audio,
-                    "is_snapshot": False,
-                    "type_name": type_name,
-                    "type_icon": type_icon,
-                    "ext": ext,
-                })
+                recordings.append(
+                    {
+                        "path": path,
+                        "name": path.name,
+                        "size": stat.st_size,
+                        "size_str": size_str,
+                        "mtime": stat.st_mtime,
+                        "date_str": date_str,
+                        "is_audio": is_audio,
+                        "is_snapshot": False,
+                        "type_name": type_name,
+                        "type_icon": type_icon,
+                        "ext": ext,
+                    }
+                )
             except OSError:
                 continue
 
@@ -1124,19 +1762,21 @@ class CompanionApp(tk.Tk):
                     else:
                         size_str = f"{stat.st_size / (1024 * 1024):.1f} MB"
 
-                    recordings.append({
-                        "path": path,
-                        "name": path.name,
-                        "size": stat.st_size,
-                        "size_str": size_str,
-                        "mtime": stat.st_mtime,
-                        "date_str": date_str,
-                        "is_audio": False,
-                        "is_snapshot": True,
-                        "type_name": "Snapshot",
-                        "type_icon": "📷",
-                        "ext": ext,
-                    })
+                    recordings.append(
+                        {
+                            "path": path,
+                            "name": path.name,
+                            "size": stat.st_size,
+                            "size_str": size_str,
+                            "mtime": stat.st_mtime,
+                            "date_str": date_str,
+                            "is_audio": False,
+                            "is_snapshot": True,
+                            "type_name": "Snapshot",
+                            "type_icon": "📷",
+                            "ext": ext,
+                        }
+                    )
                 except OSError:
                     continue
         except Exception:
@@ -1150,13 +1790,12 @@ class CompanionApp(tk.Tk):
         self._all_recordings = recordings
         self._total_recordings_bytes = total_bytes
 
-        # Update Desktop tab listbox
         if hasattr(self, "list_recordings"):
             self.list_recordings.delete(0, "end")
             self._recording_paths = []
-            for item in recordings:
-                self._recording_paths.append(item["path"])
-                self.list_recordings.insert("end", f"{item['type_icon']}  {item['name']}  ·  {item['size_str']}")
+            for rec in recordings:
+                self._recording_paths.append(rec["path"])
+                self.list_recordings.insert("end", f"{rec['type_icon']}  {rec['name']}  ·  {rec['size_str']}")
 
             if hasattr(self, "lbl_recordings_path"):
                 self.lbl_recordings_path.config(text=str(folder))
@@ -1164,10 +1803,9 @@ class CompanionApp(tk.Tk):
                 total_mb = total_bytes / (1024 * 1024)
                 count = len(recordings)
                 self.lbl_desktop_recordings_summary.config(
-                    text=f"Total: {count} recording{'s' if count != 1 else ''}  ·  {total_mb:.1f} MB stored"
+                    text=f"Total: {count} item{'s' if count != 1 else ''}  ·  {total_mb:.1f} MB stored"
                 )
 
-        # Update dedicated Recordings tab
         if hasattr(self, "tree_recordings"):
             if changed or not getattr(self, "_tree_rendered_once", False):
                 self._tree_rendered_once = True
@@ -1189,7 +1827,6 @@ class CompanionApp(tk.Tk):
 
         items = list(getattr(self, "_all_recordings", []))
 
-        # Filter by type
         if filter_type == "audio":
             items = [x for x in items if x.get("is_audio")]
         elif filter_type == "video":
@@ -1197,11 +1834,9 @@ class CompanionApp(tk.Tk):
         elif filter_type == "snapshot":
             items = [x for x in items if x.get("is_snapshot")]
 
-        # Filter by search
         if search_query:
             items = [x for x in items if search_query in x["name"].lower() or search_query in x["date_str"].lower()]
 
-        # Sort
         if sort_mode == "Newest First":
             items.sort(key=lambda x: x["mtime"], reverse=True)
         elif sort_mode == "Oldest First":
@@ -1213,7 +1848,6 @@ class CompanionApp(tk.Tk):
         elif sort_mode == "Size (Smallest)":
             items.sort(key=lambda x: x["size"])
 
-        # Preserve selection if item is still present
         prev_selection_path = None
         current_sel = self.tree_recordings.selection()
         if current_sel and current_sel[0] in getattr(self, "_tree_item_map", {}):
@@ -1223,16 +1857,24 @@ class CompanionApp(tk.Tk):
         self._tree_item_map = {}
 
         to_select = None
-        for item in items:
-            iid = f"rec_{hash(str(item['path']))}"
-            type_display = f"{item['type_icon']} {item['type_name']} ({item['ext'][1:].upper()})"
+        for idx, rec in enumerate(items):
+            iid = f"rec_{hash(str(rec['path']))}"
+            type_display = f"{rec['type_icon']} {rec['type_name']} ({rec['ext'][1:].upper()})"
+            tag = "even" if idx % 2 == 0 else "odd"
             self.tree_recordings.insert(
-                "", "end", iid=iid, text=item["name"],
-                values=(f"{item['type_icon']}  {item['name']}", type_display, item["date_str"], item["size_str"])
+                "",
+                "end",
+                iid=iid,
+                text=rec["name"],
+                values=(f"{rec['type_icon']}  {rec['name']}", type_display, rec["date_str"], rec["size_str"]),
+                tags=(tag,),
             )
-            self._tree_item_map[iid] = item
-            if prev_selection_path and item["path"] == prev_selection_path:
+            self._tree_item_map[iid] = rec
+            if prev_selection_path and rec["path"] == prev_selection_path:
                 to_select = iid
+
+        self.tree_recordings.tag_configure("even", background=CARD_BG)
+        self.tree_recordings.tag_configure("odd", background=CARD_SURFACE)
 
         if to_select:
             self.tree_recordings.selection_set(to_select)
@@ -1243,15 +1885,12 @@ class CompanionApp(tk.Tk):
         else:
             self._on_tree_recording_selected()
 
-        # Update stats bar
         folder = self._recordings_dir()
         total_mb = getattr(self, "_total_recordings_bytes", 0) / (1024 * 1024)
         count_all = len(getattr(self, "_all_recordings", []))
-        showing_str = f"Showing {len(items)} of {count_all}" if len(items) != count_all else f"{count_all} recordings"
+        showing_str = f"Showing {len(items)} of {count_all}" if len(items) != count_all else f"{count_all} items"
         if hasattr(self, "lbl_recordings_stats"):
-            self.lbl_recordings_stats.config(
-                text=f"📊 {showing_str}  ·  {total_mb:.1f} MB total library"
-            )
+            self.lbl_recordings_stats.config(text=f"📊 {showing_str}  ·  {total_mb:.1f} MB total library")
 
         if hasattr(self, "lbl_disk_free"):
             try:
@@ -1294,10 +1933,9 @@ class CompanionApp(tk.Tk):
         if not sel or sel[0] not in getattr(self, "_tree_item_map", {}):
             self.lbl_selected_recording_info.config(text="Select a recording to play or inspect.", fg=TEXT_MUTED)
             return
-        item = self._tree_item_map[sel[0]]
+        rec = self._tree_item_map[sel[0]]
         self.lbl_selected_recording_info.config(
-            text=f"Selected: {item['name']}  ·  {item['size_str']}  ·  {item['date_str']}",
-            fg=TEXT_PRIMARY
+            text=f"Selected: {rec['name']}  ·  {rec['size_str']}  ·  {rec['date_str']}", fg=TEXT_PRIMARY
         )
 
     def _on_tree_context_menu(self, event):
@@ -1309,13 +1947,11 @@ class CompanionApp(tk.Tk):
             self.rec_context_menu.tk_popup(event.x_root, event.y_root)
 
     def _get_selected_recording_path(self):
-        # Dedicated recordings tree takes priority if item selected
         if hasattr(self, "tree_recordings") and hasattr(self, "_tree_item_map"):
             tree_sel = self.tree_recordings.selection()
             if tree_sel and tree_sel[0] in self._tree_item_map:
                 return self._tree_item_map[tree_sel[0]]["path"]
 
-        # Then check desktop tab listbox
         if hasattr(self, "list_recordings") and hasattr(self, "_recording_paths"):
             list_sel = self.list_recordings.curselection()
             if list_sel and list_sel[0] < len(self._recording_paths):
@@ -1396,7 +2032,7 @@ class CompanionApp(tk.Tk):
         size_mb = path.stat().st_size / (1024 * 1024)
         confirm = messagebox.askyesno(
             "Delete Recording",
-            f"Are you sure you want to permanently delete this recording?\n\n{path.name} ({size_mb:.1f} MB)\n\nThis cannot be undone."
+            f"Are you sure you want to permanently delete this recording?\n\n{path.name} ({size_mb:.1f} MB)\n\nThis cannot be undone.",
         )
         if confirm:
             try:
@@ -1418,92 +2054,78 @@ class CompanionApp(tk.Tk):
             self.notebook.select(self.tab_recordings)
 
     def _build_recordings_tab(self):
-        container = tk.Frame(self.tab_recordings, bg=BG_DARK)
-        container.pack(fill="both", expand=True)
-
-        card = tk.Frame(container, bg=CARD_BG, padx=18, pady=16, relief="flat",
-                        highlightbackground=CARD_BORDER, highlightthickness=1)
+        card = self._make_card(self.tab_recordings, padx=20, pady=18)
         card.pack(fill="both", expand=True)
 
-        # Header Frame
         header = tk.Frame(card, bg=CARD_BG)
-        header.pack(fill="x", pady=(0, 10))
+        header.pack(fill="x", pady=(0, 12))
 
         header_text = tk.Frame(header, bg=CARD_BG)
         header_text.pack(side="left", fill="y")
 
-        lbl_title = tk.Label(header_text, text="Session & Hardware Recordings",
-                             font=("Segoe UI", 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY)
-        lbl_title.pack(anchor="w")
+        tk.Label(
+            header_text, text="Session & Hardware Recordings", font=(UI_FONT, 14, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
+        ).pack(anchor="w")
 
-        lbl_sub = tk.Label(header_text, text="Browse, preview, filter, and manage audio & webcam recordings saved on this PC.",
-                           font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED)
-        lbl_sub.pack(anchor="w")
+        tk.Label(
+            header_text,
+            text="Browse, preview, filter, and manage audio, webcam videos, and snapshots saved on this PC.",
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+        ).pack(anchor="w")
 
         header_buttons = tk.Frame(header, bg=CARD_BG)
         header_buttons.pack(side="right", fill="y")
 
-        btn_open_exp = tk.Button(
-            header_buttons, text="📁 Open Recordings", font=("Segoe UI", 10, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER, activeforeground=TEXT_PRIMARY,
-            relief="flat", padx=14, pady=6, cursor="hand2",
-            command=self.open_recordings_folder
+        self._make_button(header_buttons, "📁 Recordings Folder", self.open_recordings_folder, fg=ACCENT_CYAN, padx=12, pady=5).pack(
+            side="left", padx=(0, 6)
         )
-        btn_open_exp.pack(side="left", padx=(0, 8))
-
-        btn_open_snaps = tk.Button(
-            header_buttons, text="📷 Open Snapshots", font=("Segoe UI", 10, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER, activeforeground=TEXT_PRIMARY,
-            relief="flat", padx=14, pady=6, cursor="hand2",
-            command=self.open_snapshots_folder
+        self._make_button(header_buttons, "📷 Snapshots Folder", self.open_snapshots_folder, fg=ACCENT_GREEN, padx=12, pady=5).pack(
+            side="left", padx=(0, 6)
         )
-        btn_open_snaps.pack(side="left", padx=(0, 8))
-
-        btn_refresh = tk.Button(
-            header_buttons, text="🔄 Refresh", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-            relief="flat", padx=12, pady=6, cursor="hand2",
-            command=self.refresh_recordings
+        self._make_button(header_buttons, "🔄 Refresh", self.refresh_recordings, fg=TEXT_PRIMARY, padx=10, pady=5).pack(
+            side="left"
         )
-        btn_refresh.pack(side="left")
 
-        # Stats & Storage bar
-        stats_bar = tk.Frame(card, bg=BUTTON_BG, padx=12, pady=8, relief="flat")
+        stats_bar = tk.Frame(card, bg=CARD_SURFACE, padx=12, pady=8, highlightbackground=CARD_BORDER, highlightthickness=1)
         stats_bar.pack(fill="x", pady=(0, 10))
 
-        stats_left = tk.Frame(stats_bar, bg=BUTTON_BG)
+        stats_left = tk.Frame(stats_bar, bg=CARD_SURFACE)
         stats_left.pack(side="left")
 
         self.lbl_recordings_stats = tk.Label(
-            stats_left, text="📊 Loading recordings...", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY
+            stats_left, text="📊 Loading recordings...", font=(UI_FONT, 9, "bold"), bg=CARD_SURFACE, fg=TEXT_PRIMARY
         )
         self.lbl_recordings_stats.pack(side="left", padx=(0, 12))
 
-        self.lbl_disk_free = tk.Label(
-            stats_left, text="", font=("Segoe UI", 9),
-            bg=BUTTON_BG, fg=ACCENT_GREEN
-        )
+        self.lbl_disk_free = tk.Label(stats_left, text="", font=(UI_FONT, 9, "bold"), bg=CARD_SURFACE, fg=ACCENT_GREEN)
         self.lbl_disk_free.pack(side="left")
 
         self.lbl_mgr_folder_path = tk.Label(
-            stats_bar, text="", font=("Segoe UI", 8),
-            bg=BUTTON_BG, fg=TEXT_MUTED, anchor="e"
+            stats_bar, text="", font=("Consolas", 8), bg=CARD_SURFACE, fg=TEXT_MUTED, anchor="e"
         )
         self.lbl_mgr_folder_path.pack(side="right")
 
-        # Filter & Search Controls bar
         filter_bar = tk.Frame(card, bg=CARD_BG)
         filter_bar.pack(fill="x", pady=(0, 10))
 
-        tk.Label(filter_bar, text="🔍 Search:", font=("Segoe UI", 9, "bold"),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(0, 6))
+        tk.Label(filter_bar, text="🔍 Search:", font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(
+            side="left", padx=(0, 6)
+        )
 
         self.ent_recording_search = tk.Entry(
-            filter_bar, font=("Segoe UI", 9), bg=BUTTON_BG, fg=TEXT_PRIMARY,
-            insertbackground=TEXT_PRIMARY, relief="flat", width=22
+            filter_bar,
+            font=(UI_FONT, 9),
+            bg=BUTTON_BG,
+            fg=TEXT_PRIMARY,
+            insertbackground=TEXT_PRIMARY,
+            relief="flat",
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+            width=20,
         )
-        self.ent_recording_search.pack(side="left", ipady=3, padx=(0, 12))
+        self.ent_recording_search.pack(side="left", ipady=4, padx=(0, 12))
         self.ent_recording_search.bind("<KeyRelease>", lambda _e: self._filter_and_render_recordings())
 
         filter_btn_frame = tk.Frame(filter_bar, bg=CARD_BG)
@@ -1517,56 +2139,85 @@ class CompanionApp(tk.Tk):
             self._filter_and_render_recordings()
 
         self.btn_filter_all = tk.Button(
-            filter_btn_frame, text="All", font=("Segoe UI", 9, "bold"),
-            bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
-            cursor="hand2", command=lambda: _select_filter("all")
+            filter_btn_frame,
+            text="All",
+            font=(UI_FONT, 8, "bold"),
+            bg=ACCENT_INDIGO,
+            fg=TEXT_PRIMARY,
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=lambda: _select_filter("all"),
         )
         self.btn_filter_all.pack(side="left", padx=(0, 4))
 
         self.btn_filter_audio = tk.Button(
-            filter_btn_frame, text="🎙️ Audio", font=("Segoe UI", 9),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
-            cursor="hand2", command=lambda: _select_filter("audio")
+            filter_btn_frame,
+            text="🎙️ Audio",
+            font=(UI_FONT, 8, "bold"),
+            bg=BUTTON_BG,
+            fg=TEXT_PRIMARY,
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=lambda: _select_filter("audio"),
         )
         self.btn_filter_audio.pack(side="left", padx=4)
 
         self.btn_filter_video = tk.Button(
-            filter_btn_frame, text="📹 Video", font=("Segoe UI", 9),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
-            cursor="hand2", command=lambda: _select_filter("video")
+            filter_btn_frame,
+            text="📹 Video",
+            font=(UI_FONT, 8, "bold"),
+            bg=BUTTON_BG,
+            fg=TEXT_PRIMARY,
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=lambda: _select_filter("video"),
         )
         self.btn_filter_video.pack(side="left", padx=4)
 
         self.btn_filter_snapshot = tk.Button(
-            filter_btn_frame, text="📷 Snapshots", font=("Segoe UI", 9),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, relief="flat", padx=10, pady=3,
-            cursor="hand2", command=lambda: _select_filter("snapshot")
+            filter_btn_frame,
+            text="📷 Snapshots",
+            font=(UI_FONT, 8, "bold"),
+            bg=BUTTON_BG,
+            fg=TEXT_PRIMARY,
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=lambda: _select_filter("snapshot"),
         )
         self.btn_filter_snapshot.pack(side="left", padx=4)
 
-        # Sort Dropdown
         sort_frame = tk.Frame(filter_bar, bg=CARD_BG)
         sort_frame.pack(side="right")
 
-        tk.Label(sort_frame, text="Sort by:", font=("Segoe UI", 9, "bold"),
-                 bg=CARD_BG, fg=TEXT_MUTED).pack(side="left", padx=(0, 6))
+        tk.Label(sort_frame, text="Sort:", font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(
+            side="left", padx=(0, 6)
+        )
 
         self.combo_recording_sort = ttk.Combobox(
-            sort_frame, state="readonly", width=14, font=("Segoe UI", 9),
-            values=["Newest First", "Oldest First", "Name (A-Z)", "Size (Largest)", "Size (Smallest)"]
+            sort_frame,
+            state="readonly",
+            width=14,
+            font=(UI_FONT, 9),
+            values=["Newest First", "Oldest First", "Name (A-Z)", "Size (Largest)", "Size (Smallest)"],
         )
         self.combo_recording_sort.set("Newest First")
         self.combo_recording_sort.pack(side="left")
         self.combo_recording_sort.bind("<<ComboboxSelected>>", lambda _e: self._filter_and_render_recordings())
 
-        # Main Recordings Treeview
-        tree_frame = tk.Frame(card, bg=CARD_BG)
+        tree_frame = tk.Frame(card, bg=CARD_BG, highlightbackground=CARD_BORDER, highlightthickness=1)
         tree_frame.pack(fill="both", expand=True, pady=(0, 10))
 
         columns = ("name", "type", "date", "size")
         self.tree_recordings = ttk.Treeview(
-            tree_frame, columns=columns, show="headings",
-            style="Recordings.Treeview", selectmode="browse"
+            tree_frame, columns=columns, show="headings", style="Recordings.Treeview", selectmode="browse"
         )
 
         self.tree_recordings.heading("name", text="File Name", anchor="w")
@@ -1575,7 +2226,7 @@ class CompanionApp(tk.Tk):
         self.tree_recordings.heading("size", text="Size", anchor="e")
 
         self.tree_recordings.column("name", width=290, minwidth=200, anchor="w")
-        self.tree_recordings.column("type", width=110, minwidth=80, anchor="center")
+        self.tree_recordings.column("type", width=120, minwidth=80, anchor="center")
         self.tree_recordings.column("date", width=170, minwidth=140, anchor="center")
         self.tree_recordings.column("size", width=90, minwidth=70, anchor="e")
 
@@ -1591,9 +2242,9 @@ class CompanionApp(tk.Tk):
         self.tree_recordings.bind("<Button-3>", self._on_tree_context_menu)
         self.tree_recordings.bind("<Button-2>", self._on_tree_context_menu)
 
-        # Right click context menu
-        self.rec_context_menu = tk.Menu(self, tearoff=0, bg=CARD_BG, fg=TEXT_PRIMARY,
-                                        activebackground=ACCENT_INDIGO, activeforeground=TEXT_PRIMARY)
+        self.rec_context_menu = tk.Menu(
+            self, tearoff=0, bg=CARD_BG, fg=TEXT_PRIMARY, activebackground=ACCENT_INDIGO, activeforeground=TEXT_PRIMARY
+        )
         self.rec_context_menu.add_command(label="▶️  Play / Open", command=self.open_selected_recording)
         self.rec_context_menu.add_command(label="🔍  Show in File Explorer", command=self.show_selected_in_explorer)
         self.rec_context_menu.add_command(label="📁  Open Recordings Folder", command=self.open_recordings_folder)
@@ -1601,76 +2252,61 @@ class CompanionApp(tk.Tk):
         self.rec_context_menu.add_command(label="📋  Copy File Path", command=self.copy_selected_recording_path)
         self.rec_context_menu.add_command(label="🗑️  Delete Recording", command=self.delete_selected_recording)
 
-        # Bottom Action Bar & Details
         action_bar = tk.Frame(card, bg=CARD_BG)
         action_bar.pack(fill="x")
 
         self.lbl_selected_recording_info = tk.Label(
-            action_bar, text="Select a recording to play or inspect.",
-            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
+            action_bar, text="Select a recording to play or inspect.", font=(UI_FONT, 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
         )
         self.lbl_selected_recording_info.pack(side="left", fill="x", expand=True)
 
         action_buttons = tk.Frame(action_bar, bg=CARD_BG)
         action_buttons.pack(side="right")
 
-        tk.Button(
-            action_buttons, text="▶️ Play / Open", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER,
-            relief="flat", padx=12, pady=6, cursor="hand2",
-            command=self.open_selected_recording
-        ).pack(side="left", padx=(0, 6))
-
-        tk.Button(
-            action_buttons, text="🔍 Show in Explorer", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-            relief="flat", padx=12, pady=6, cursor="hand2",
-            command=self.show_selected_in_explorer
-        ).pack(side="left", padx=4)
-
-        tk.Button(
-            action_buttons, text="📁 Open in File Explorer", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-            relief="flat", padx=12, pady=6, cursor="hand2",
-            command=self.open_recordings_folder
-        ).pack(side="left", padx=4)
-
-        tk.Button(
-            action_buttons, text="🗑️ Delete", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_RED, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=6, cursor="hand2",
-            command=self.delete_selected_recording
-        ).pack(side="left", padx=(4, 0))
+        self._make_button(action_buttons, "▶️ Play / Open", self.open_selected_recording, fg=ACCENT_GREEN, padx=11, pady=5).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(action_buttons, "🔍 Show in Explorer", self.show_selected_in_explorer, padx=11, pady=5).pack(
+            side="left", padx=4
+        )
+        self._make_button(action_buttons, "📁 Open Folder", self.open_recordings_folder, fg=ACCENT_CYAN, padx=11, pady=5).pack(
+            side="left", padx=4
+        )
+        self._make_button(action_buttons, "🗑️ Delete", self.delete_selected_recording, fg=ACCENT_RED, padx=10, pady=5).pack(
+            side="left", padx=(4, 0)
+        )
 
     def _build_phone_cam_tab(self):
         container = tk.Frame(self.tab_phone_cam, bg=BG_DARK)
         container.pack(fill="both", expand=True)
 
-        preview_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
-                                highlightbackground=CARD_BORDER, highlightthickness=1)
+        preview_card = self._make_card(container, padx=18, pady=16)
         preview_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         preview_header = tk.Frame(preview_card, bg=CARD_BG)
         preview_header.pack(fill="x", pady=(0, 10))
 
         tk.Label(
-            preview_header, text="📹 Phone Camera Stream",
-            font=("Segoe UI", 12, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
+            preview_header, text="📹 Live Phone Camera Viewfinder", font=(UI_FONT, 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
         ).pack(side="left")
 
         self.lbl_phone_cam_status = tk.Label(
-            preview_header, text="○ STANDBY",
-            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED
+            preview_header, text="○ STANDBY", font=(UI_FONT, 9, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED, padx=10, pady=3
         )
         self.lbl_phone_cam_status.pack(side="right")
 
-        viewfinder_container = tk.Frame(preview_card, bg="#050811", highlightbackground=CARD_BORDER, highlightthickness=1)
-        viewfinder_container.pack(fill="both", expand=True, pady=6)
+        viewfinder_container = tk.Frame(
+            preview_card, bg="#050811", highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        viewfinder_container.pack(fill="both", expand=True, pady=4)
 
         self.lbl_phone_cam_preview = tk.Label(
             viewfinder_container,
-            text="📷 Phone Camera Standby\n\nOpen BT Mouse mobile app\nGo to Camera & Mic ➔ Start Phone Camera\nto broadcast live video to this PC.",
-            font=("Segoe UI", 10), bg="#050811", fg=TEXT_MUTED, justify="center"
+            text="📷 Phone Camera Standby\n\nOpen the BT Mouse mobile app\nGo to Tools  ➔  Camera & Mic  ➔  Start Phone Camera\nto broadcast live video to this PC.",
+            font=(UI_FONT, 10),
+            bg="#050811",
+            fg=TEXT_MUTED,
+            justify="center",
         )
         self.lbl_phone_cam_preview.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -1678,117 +2314,125 @@ class CompanionApp(tk.Tk):
         telemetry_bar.pack(fill="x", pady=(8, 0))
 
         self.lbl_phone_cam_telemetry = tk.Label(
-            telemetry_bar, text="Waiting for stream from phone...",
-            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
+            telemetry_bar, text="Waiting for stream from phone...", font=(UI_FONT, 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
         )
         self.lbl_phone_cam_telemetry.pack(side="left", fill="x", expand=True)
 
         self.lbl_phone_cam_counter = tk.Label(
-            telemetry_bar, text="0 frames",
-            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN, anchor="e"
+            telemetry_bar, text="0 frames", font=("Consolas", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN, anchor="e"
         )
         self.lbl_phone_cam_counter.pack(side="right")
 
-        controls_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
-                                 highlightbackground=CARD_BORDER, highlightthickness=1, width=380)
+        controls_card = self._make_card(container, padx=18, pady=16)
+        controls_card.configure(width=360)
         controls_card.pack(side="right", fill="both", padx=(8, 0))
         controls_card.pack_propagate(False)
 
         tk.Label(
-            controls_card, text="⚙️ PC Virtual Camera & Loopback",
-            font=("Segoe UI", 12, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
+            controls_card, text="⚙️ Virtual Webcam & OBS", font=(UI_FONT, 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
         ).pack(anchor="w", pady=(0, 4))
 
         tk.Label(
-            controls_card, text="Stream your phone camera directly into OBS, Zoom, Teams, Discord, and browsers.",
-            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, wraplength=340, justify="left"
+            controls_card,
+            text="Use your phone's camera inside OBS Studio, Zoom, Microsoft Teams, Discord, and Google Meet.",
+            font=(UI_FONT, 9),
+            bg=CARD_BG,
+            fg=TEXT_MUTED,
+            wraplength=320,
+            justify="left",
         ).pack(anchor="w", pady=(0, 12))
 
-        mjpeg_group = tk.LabelFrame(controls_card, text=" Localhost MJPEG Stream URL ", font=("Segoe UI", 9, "bold"),
-                                    bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=10)
+        mjpeg_group = tk.Frame(
+            controls_card, bg=CARD_SURFACE, padx=12, pady=12, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
         mjpeg_group.pack(fill="x", pady=(0, 12))
+
+        tk.Label(
+            mjpeg_group, text="LOCALHOST MJPEG STREAM URL", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=ACCENT_CYAN
+        ).pack(anchor="w", pady=(0, 6))
 
         port = getattr(getattr(self.server, "phone_camera_http", None), "port", 8766)
         mjpeg_url = f"http://127.0.0.1:{port}/phone_cam/mjpeg"
 
         self.lbl_phone_mjpeg_url = tk.Label(
-            mjpeg_group, text=mjpeg_url,
-            font=("Consolas", 9, "bold"), bg=CARD_BORDER, fg=TEXT_PRIMARY,
-            padx=8, pady=6, anchor="w"
+            mjpeg_group,
+            text=mjpeg_url,
+            font=("Consolas", 9, "bold"),
+            bg=BG_DARK,
+            fg=TEXT_PRIMARY,
+            padx=8,
+            pady=6,
+            anchor="w",
         )
         self.lbl_phone_mjpeg_url.pack(fill="x", pady=(0, 8))
 
-        btn_row = tk.Frame(mjpeg_group, bg=CARD_BG)
+        btn_row = tk.Frame(mjpeg_group, bg=CARD_SURFACE)
         btn_row.pack(fill="x")
 
-        tk.Button(
-            btn_row, text="📋 Copy URL", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=5, cursor="hand2",
-            command=self._copy_phone_mjpeg_url
-        ).pack(side="left", padx=(0, 6))
-
-        tk.Button(
-            btn_row, text="🌐 Open in Browser", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=5, cursor="hand2",
-            command=lambda: webbrowser.open(self.lbl_phone_mjpeg_url.cget("text"))
+        self._make_button(btn_row, "📋 Copy URL", self._copy_phone_mjpeg_url, padx=10, pady=4).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(
+            btn_row,
+            "🌐 Open in Browser",
+            lambda: webbrowser.open(self.lbl_phone_mjpeg_url.cget("text")),
+            fg=ACCENT_CYAN,
+            padx=10,
+            pady=4,
         ).pack(side="left")
 
-        setup_group = tk.LabelFrame(controls_card, text=" 3-Step Setup for Zoom / Teams / Meet ",
-                                    font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY,
-                                    padx=10, pady=10)
-        setup_group.pack(fill="x", pady=(0, 12))
-
-        steps_text = (
-            "1. Open OBS Studio (or VLC / ManyCam).\n"
-            "2. Add Source ➔ Media Source ➔ Uncheck 'Local file' ➔ Paste the MJPEG URL above.\n"
-            "3. Click 'Start Virtual Camera' in OBS Studio.\n\n"
-            "Now select 'OBS Virtual Camera' inside Zoom, Teams, Discord, or Google Meet!"
+        vcam_group = tk.Frame(
+            controls_card, bg=CARD_SURFACE, padx=12, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
         )
-        tk.Label(
-            setup_group, text=steps_text,
-            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED,
-            justify="left", wraplength=330
-        ).pack(anchor="w")
-
-        vcam_group = tk.LabelFrame(controls_card, text=" Direct Virtual Camera Driver ",
-                                   font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY,
-                                   padx=10, pady=10)
         vcam_group.pack(fill="x", pady=(0, 12))
+
+        tk.Label(
+            vcam_group, text="DIRECT VIRTUAL CAMERA DRIVER", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED
+        ).pack(anchor="w")
 
         vcam_status = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_status", "MJPEG_STREAM")
         vcam_err = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_error", "MJPEG stream ready.")
 
         self.lbl_vcam_status = tk.Label(
-            vcam_group, text=f"Backend: {vcam_status}",
-            font=("Segoe UI", 9, "bold"), bg=CARD_BG,
-            fg=ACCENT_GREEN if vcam_status.startswith("ACTIVE") else ACCENT_CYAN
+            vcam_group,
+            text=f"Backend: {vcam_status}",
+            font=(UI_FONT, 9, "bold"),
+            bg=CARD_SURFACE,
+            fg=ACCENT_GREEN if vcam_status.startswith("ACTIVE") else ACCENT_CYAN,
         )
-        self.lbl_vcam_status.pack(anchor="w")
+        self.lbl_vcam_status.pack(anchor="w", pady=(2, 2))
 
         tk.Label(
-            vcam_group, text=vcam_err,
-            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED,
-            justify="left", wraplength=330
-        ).pack(anchor="w", pady=(2, 0))
+            vcam_group, text=vcam_err, font=(UI_FONT, 8), bg=CARD_SURFACE, fg=TEXT_MUTED, justify="left", wraplength=310
+        ).pack(anchor="w")
+
+        setup_group = tk.Frame(
+            controls_card, bg=CARD_SURFACE, padx=12, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
+        )
+        setup_group.pack(fill="x", pady=(0, 12))
+
+        tk.Label(
+            setup_group, text="3-STEP SETUP FOR ZOOM / TEAMS / MEET", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_PRIMARY
+        ).pack(anchor="w", pady=(0, 4))
+
+        steps_text = (
+            "1. Open OBS Studio and add a 'Media Source'.\n"
+            "2. Uncheck 'Local File' and paste the MJPEG URL above.\n"
+            "3. Click 'Start Virtual Camera' in OBS and select 'OBS Virtual Camera' in Zoom/Teams/Meet."
+        )
+        tk.Label(
+            setup_group, text=steps_text, font=(UI_FONT, 8), bg=CARD_SURFACE, fg=TEXT_MUTED, justify="left", wraplength=310
+        ).pack(anchor="w")
 
         snapshot_group = tk.Frame(controls_card, bg=CARD_BG)
-        snapshot_group.pack(fill="x", pady=(4, 0))
+        snapshot_group.pack(fill="x")
 
-        tk.Button(
-            snapshot_group, text="📸 Save Snapshot", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=6, cursor="hand2",
-            command=self._save_phone_cam_snapshot
-        ).pack(side="left", padx=(0, 6))
-
-        tk.Button(
-            snapshot_group, text="📁 Open Snapshots", font=("Segoe UI", 9, "bold"),
-            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
-            relief="flat", padx=10, pady=6, cursor="hand2",
-            command=self.open_snapshots_folder
-        ).pack(side="left")
+        self._make_button(snapshot_group, "📸 Save Snapshot", self._save_phone_cam_snapshot, fg=ACCENT_GREEN, padx=10, pady=6).pack(
+            side="left", padx=(0, 6)
+        )
+        self._make_button(snapshot_group, "📁 Open Snapshots", self.open_snapshots_folder, padx=10, pady=6).pack(
+            side="left"
+        )
 
     def _copy_phone_mjpeg_url(self):
         try:
@@ -1826,7 +2470,7 @@ class CompanionApp(tk.Tk):
         try:
             import io
             img = Image.open(io.BytesIO(raw_jpeg))
-            max_w, max_h = 480, 270
+            max_w, max_h = 520, 292
             img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
             self.phone_cam_photo = photo
@@ -1835,7 +2479,7 @@ class CompanionApp(tk.Tk):
             if hasattr(self, "lbl_phone_cam_status"):
                 self.lbl_phone_cam_status.config(text=f"● LIVE · {lens.upper()} CAMERA", fg=ACCENT_GREEN)
             if hasattr(self, "lbl_phone_cam_telemetry"):
-                self.lbl_phone_cam_telemetry.config(text=f"{w}x{h} · {fps} FPS · {bitrate_kbps} kbps")
+                self.lbl_phone_cam_telemetry.config(text=f"{w}×{h} · {fps} FPS · {bitrate_kbps} kbps")
             if hasattr(self, "lbl_phone_cam_counter"):
                 count = getattr(self.server.phone_camera_receiver, "frame_count", 0)
                 self.lbl_phone_cam_counter.config(text=f"{count:,} frames")
@@ -1858,24 +2502,41 @@ class CompanionApp(tk.Tk):
         container = tk.Frame(self.tab_logs, bg=BG_DARK)
         container.pack(fill="both", expand=True)
 
-        stats_card = tk.Frame(container, bg=CARD_BG, padx=12, pady=10, relief="flat",
-                              highlightbackground=CARD_BORDER, highlightthickness=1)
-        stats_card.pack(fill="x", pady=(0, 8))
+        stats_card = self._make_card(container, padx=16, pady=12)
+        stats_card.pack(fill="x", pady=(0, 10))
 
-        self.lbl_client = tk.Label(stats_card, text="Client: Disconnected", font=("Segoe UI", 10, "bold"),
-                                   bg=CARD_BG, fg=TEXT_MUTED)
-        self.lbl_client.pack(side="left", padx=8)
+        self.lbl_client = tk.Label(
+            stats_card, text="Client: Disconnected", font=(UI_FONT, 10, "bold"), bg=CARD_BG, fg=TEXT_MUTED
+        )
+        self.lbl_client.pack(side="left", padx=4)
 
-        self.lbl_packets = tk.Label(stats_card, text="Packets Received: 0", font=("Segoe UI", 10, "bold"),
-                                    bg=CARD_BG, fg=ACCENT_CYAN)
+        self._make_button(
+            stats_card,
+            "🧹 Clear Log",
+            lambda: self.txt_log.delete("1.0", "end"),
+            font_size=8,
+            padx=10,
+            pady=4,
+        ).pack(side="right", padx=(8, 0))
+
+        self.lbl_packets = tk.Label(
+            stats_card, text="Packets Received: 0", font=("Consolas", 10, "bold"), bg=CARD_BG, fg=ACCENT_CYAN
+        )
         self.lbl_packets.pack(side="right", padx=8)
 
-        log_frame = tk.Frame(container, bg=CARD_BG, relief="flat",
-                             highlightbackground=CARD_BORDER, highlightthickness=1)
+        log_frame = tk.Frame(container, bg=CARD_BG, relief="flat", highlightbackground=CARD_BORDER, highlightthickness=1)
         log_frame.pack(fill="both", expand=True)
 
-        self.txt_log = tk.Text(log_frame, bg=CARD_BG, fg=TEXT_PRIMARY, font=("Consolas", 9),
-                               borderwidth=0, highlightthickness=0, padx=8, pady=8)
+        self.txt_log = tk.Text(
+            log_frame,
+            bg=CARD_BG,
+            fg=TEXT_PRIMARY,
+            font=("Consolas", 9),
+            borderwidth=0,
+            highlightthickness=0,
+            padx=12,
+            pady=10,
+        )
         self.txt_log.pack(side="left", fill="both", expand=True)
 
         scrollbar = ttk.Scrollbar(log_frame, command=self.txt_log.yview)
@@ -1885,11 +2546,24 @@ class CompanionApp(tk.Tk):
         self.log("Companion initialized. Ready for connections.")
 
     def _build_statusbar(self):
-        bar = tk.Frame(self, bg=CARD_BG, height=28, padx=16, pady=4)
+        bar = tk.Frame(
+            self,
+            bg=SIDEBAR_BG,
+            height=28,
+            padx=16,
+            pady=5,
+            highlightbackground=CARD_BORDER,
+            highlightthickness=1,
+        )
         bar.pack(fill="x", side="bottom")
 
-        lbl_foot = tk.Label(bar, text=f"BT Mouse Companion v{APP_VERSION} | Minimizes to system tray | Native Windows Hardware Input",
-                            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED)
+        lbl_foot = tk.Label(
+            bar,
+            text=f"BT Mouse Companion v{APP_VERSION}  ·  Minimizes to system tray on close  ·  Native Windows Hardware Input",
+            font=(UI_FONT, 8),
+            bg=SIDEBAR_BG,
+            fg=TEXT_MUTED,
+        )
         lbl_foot.pack(side="left")
 
     @staticmethod
@@ -1925,10 +2599,13 @@ class CompanionApp(tk.Tk):
     def _check_companion_updates_worker(self):
         try:
             api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
-            request = urllib.request.Request(api_url, headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "BT-Mouse-Companion-Updater",
-            })
+            request = urllib.request.Request(
+                api_url,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "BT-Mouse-Companion-Updater",
+                },
+            )
             with urllib.request.urlopen(request, timeout=20) as response:
                 release = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
 
@@ -1936,13 +2613,13 @@ class CompanionApp(tk.Tk):
             if release.get("draft") or release.get("prerelease"):
                 raise ValueError("GitHub did not return a stable release.")
             if self._version_tuple(tag_name) <= self._version_tuple(APP_VERSION):
-                self.after(0, lambda: messagebox.showinfo(
-                    "Companion updates", f"You are using the latest version (v{APP_VERSION})."))
-                self.after(0, lambda: self.btn_update.config(state="normal", text="Check for updates"))
+                self.after(
+                    0, lambda: messagebox.showinfo("Companion updates", f"You are using the latest version (v{APP_VERSION}).")
+                )
+                self.after(0, lambda: self.btn_update.config(state="normal", text="Check for Updates"))
                 return
 
-            asset = next((item for item in release.get("assets", [])
-                          if item.get("name") == "BT-Mouse-Companion.exe"), None)
+            asset = next((item for item in release.get("assets", []) if item.get("name") == "BT-Mouse-Companion.exe"), None)
             if not asset or not asset.get("browser_download_url"):
                 raise ValueError("The latest release does not include the Windows companion executable.")
             if asset.get("size", 0) <= 0 or asset["size"] > MAX_COMPANION_UPDATE_BYTES:
@@ -1952,18 +2629,20 @@ class CompanionApp(tk.Tk):
                 update = messagebox.askyesno(
                     "Companion update available",
                     f"Version {tag_name} is available. Download and install it now?\n\n"
-                    "The companion will close briefly and reopen after updating.")
+                    "The companion will close briefly and reopen after updating.",
+                )
                 if update:
                     self.btn_update.config(state="disabled", text="Downloading…")
-                    threading.Thread(target=self._download_companion_update_worker,
-                                     args=(tag_name, asset), daemon=True).start()
+                    threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
                 else:
-                    self.btn_update.config(state="normal", text="Check for updates")
+                    self.btn_update.config(state="normal", text="Check for Updates")
+
             self.after(0, ask_to_update)
         except Exception as exc:
-            self.after(0, lambda error=str(exc): messagebox.showerror(
-                "Companion update failed", f"Could not check for updates.\n\n{error}"))
-            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for updates"))
+            self.after(
+                0, lambda error=str(exc): messagebox.showerror("Companion update failed", f"Could not check for updates.\n\n{error}")
+            )
+            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for Updates"))
 
     def _download_companion_update_worker(self, tag_name, asset):
         staged_path = None
@@ -1971,10 +2650,13 @@ class CompanionApp(tk.Tk):
             download_url = asset["browser_download_url"]
             if not download_url.startswith("https://github.com/"):
                 raise ValueError("The update URL is not a trusted GitHub release link.")
-            request = urllib.request.Request(download_url, headers={
-                "User-Agent": "BT-Mouse-Companion-Updater",
-                "Accept": "application/octet-stream",
-            })
+            request = urllib.request.Request(
+                download_url,
+                headers={
+                    "User-Agent": "BT-Mouse-Companion-Updater",
+                    "Accept": "application/octet-stream",
+                },
+            )
             digest = hashlib.sha256()
             downloaded = 0
             temp_dir = Path(tempfile.gettempdir())
@@ -2000,7 +2682,6 @@ class CompanionApp(tk.Tk):
                 raise ValueError("The downloaded update failed its SHA-256 check.")
 
             executable = Path(sys.executable).resolve()
-            # Probe the destination directory now, before closing the working app.
             probe_path = executable.parent / f".btmouse-update-check-{os.getpid()}"
             try:
                 probe_path.write_text("", encoding="ascii")
@@ -2051,7 +2732,7 @@ class CompanionApp(tk.Tk):
                 "  if (-not $backedUp) { throw ('Could not move the previous companion into its rollback copy after waiting for Windows to release it: ' + $moveError) }\n"
                 "  Move-Item -LiteralPath $replacement -Destination $target -Force\n"
                 "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
-                "  $quotedMarker = '"' + $readyMarker + '"'\n"
+                "  $quotedMarker = '\"' + $readyMarker + '\"'\n"
                 "  $started = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ArgumentList @('--btmouse-update-ready', $quotedMarker) -PassThru\n"
                 "  $launchDeadline = (Get-Date).AddSeconds(30)\n"
                 "  $ready = $false\n"
@@ -2095,9 +2776,20 @@ class CompanionApp(tk.Tk):
             helper_output = temp_dir / "btmouse-update-helper.log"
             with helper_output.open("wb") as output:
                 helper = subprocess.Popen(
-                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                     "-File", str(script_path)], creationflags=flags,
-                    stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                        str(script_path),
+                    ],
+                    creationflags=flags,
+                    stdin=subprocess.DEVNULL,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
             time.sleep(0.5)
             if helper.poll() is not None:
                 detail = helper_output.read_text(encoding="utf-8", errors="replace").strip()
@@ -2109,9 +2801,13 @@ class CompanionApp(tk.Tk):
                     staged_path.unlink()
                 except OSError:
                     pass
-            self.after(0, lambda error=str(exc): messagebox.showerror(
-                "Companion update failed", f"Could not download or install the update.\n\n{error}"))
-            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for updates"))
+            self.after(
+                0,
+                lambda error=str(exc): messagebox.showerror(
+                    "Companion update failed", f"Could not download or install the update.\n\n{error}"
+                ),
+            )
+            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for Updates"))
 
     def _exit_for_companion_update(self):
         self.stop_server()
@@ -2121,8 +2817,6 @@ class CompanionApp(tk.Tk):
             except Exception:
                 pass
         self.destroy()
-        # Make the helper's PID wait definitive; destroying Tk alone can leave
-        # the process alive while a non-daemon audio/device worker unwinds.
         sys.exit(0)
 
     def _on_adapter_selected(self, event):
@@ -2131,11 +2825,14 @@ class CompanionApp(tk.Tk):
             name, ip = self.adapters[idx]
             self.current_ip = ip
             self.lbl_ip_val.config(text=ip)
+            if hasattr(self, "lbl_sidebar_ip"):
+                self.lbl_sidebar_ip.config(text=f"IP: {ip}:{self.current_port}")
             self.generate_qr()
+            self.generate_wan_qr()
 
     def generate_qr(self):
         if not HAS_QR:
-            self.qr_label.config(text="QR library not found.\nInstall: pip install qrcode pillow", fg=ACCENT_RED)
+            self.qr_label.config(text="QR library not found.\nInstall: pip install qrcode pillow", fg=ACCENT_RED, bg="#FFFFFF")
             return
 
         hostname = socket.gethostname()
@@ -2143,7 +2840,9 @@ class CompanionApp(tk.Tk):
             "type": "btmouse",
             "ip": self.current_ip,
             "port": self.current_port,
-            "name": hostname
+            "name": hostname,
+            "pin": self.auth_token,
+            "token": self.auth_token
         })
 
         try:
@@ -2198,9 +2897,13 @@ class CompanionApp(tk.Tk):
                 for app in quick_apps:
                     self.list_quick_apps.insert(tk.END, f"{app['name']}  —  {os.path.basename(app['path'])}")
                 if not quick_apps:
-                    self.lbl_quick_apps_status.config(text="No quick apps saved yet. Select an installed app above to add one.", fg=TEXT_MUTED)
+                    self.lbl_quick_apps_status.config(
+                        text="No quick apps saved yet. Select an installed app above to add one.", fg=TEXT_MUTED
+                    )
                 else:
-                    self.lbl_quick_apps_status.config(text=f"{len(quick_apps)} quick app(s). Select one to rename or remove it.", fg=TEXT_MUTED)
+                    self.lbl_quick_apps_status.config(
+                        text=f"{len(quick_apps)} quick app(s). Select one to rename or remove it.", fg=TEXT_MUTED
+                    )
 
             self.after(0, _update_ui)
 
@@ -2209,6 +2912,7 @@ class CompanionApp(tk.Tk):
                 if not self.winfo_exists() or generation != self._quick_apps_refresh_generation:
                     return
                 self.lbl_quick_apps_status.config(text=f"Could not load installed apps: {exc}", fg=ACCENT_RED)
+
             self.after(0, _update_ui)
 
         def _run():
@@ -2223,8 +2927,7 @@ class CompanionApp(tk.Tk):
         if not self.server or not self.available_apps:
             return
         quick_paths = {os.path.realpath(item["path"]).lower() for item in self.quick_apps}
-        apps = [dict(item, is_quick=os.path.realpath(item["path"]).lower() in quick_paths)
-                for item in self.available_apps]
+        apps = [dict(item, is_quick=os.path.realpath(item["path"]).lower() in quick_paths) for item in self.available_apps]
         with self.server._query_cache_lock:
             self.server._query_cache["apps"] = (time.monotonic(), apps)
 
@@ -2303,10 +3006,10 @@ class CompanionApp(tk.Tk):
         self.is_server_running = is_running
         if is_running:
             self.after(0, lambda: self.lbl_status_pill.config(text="● SERVER LISTENING", fg=ACCENT_GREEN))
-            self.after(0, lambda: self.btn_toggle.config(text="Stop", fg=ACCENT_RED))
+            self.after(0, lambda: self.btn_toggle.config(text="Stop Server", fg=ACCENT_RED))
         else:
             self.after(0, lambda: self.lbl_status_pill.config(text="○ SERVER STOPPED", fg=ACCENT_RED))
-            self.after(0, lambda: self.btn_toggle.config(text="Start", fg=ACCENT_GREEN))
+            self.after(0, lambda: self.btn_toggle.config(text="Start Server", fg=ACCENT_GREEN))
 
     def start_server(self):
         if self.server and self.server.running:
@@ -2341,10 +3044,13 @@ class CompanionApp(tk.Tk):
             self.auth_token = new_token
             if hasattr(self, "lbl_wifi_pin"):
                 self.lbl_wifi_pin.config(text=new_token)
+            if hasattr(self, "lbl_sidebar_pin"):
+                self.lbl_sidebar_pin.config(text=f"PIN: {new_token}")
             if self.server:
                 self.server.auth_token = new_token
                 if hasattr(self.server, "ws_server") and self.server.ws_server:
                     self.server.ws_server.auth_token = new_token
+            self.generate_qr()
             self.generate_wan_qr()
             messagebox.showinfo("Pairing PIN Updated", "The new six-digit PIN is active for Wi-Fi and remote pairing.")
         else:
@@ -2354,12 +3060,14 @@ class CompanionApp(tk.Tk):
         url = f"ws://{self.current_ip}:{self.ws_port}"
         self.clipboard_clear()
         self.clipboard_append(url)
-        messagebox.showinfo("Copied", f"Local WebSocket URL '{url}' copied. For Internet access, use a TLS-protected wss:// endpoint.")
+        messagebox.showinfo(
+            "Copied", f"Local WebSocket URL '{url}' copied. For Internet access, use a TLS-protected wss:// endpoint."
+        )
 
     def generate_wan_qr(self):
         if not HAS_QR:
             if hasattr(self, "wan_qr_label"):
-                self.wan_qr_label.config(text="QR library not found.", fg=ACCENT_RED)
+                self.wan_qr_label.config(text="QR library not found.", fg=ACCENT_RED, bg="#FFFFFF")
             return
         hostname = socket.gethostname()
         payload = json.dumps({
@@ -2367,14 +3075,16 @@ class CompanionApp(tk.Tk):
             "url": f"ws://{self.current_ip}:{self.ws_port}",
             "ip": self.current_ip,
             "port": self.ws_port,
-            "name": hostname
+            "name": hostname,
+            "pin": self.auth_token,
+            "token": self.auth_token
         })
         try:
-            qr = qrcode.QRCode(version=1, box_size=3, border=2)
+            qr = qrcode.QRCode(version=1, box_size=5, border=2)
             qr.add_data(payload)
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
-            img = img.resize((190, 190), Image.Resampling.NEAREST)
+            img = img.resize((200, 200), Image.Resampling.NEAREST)
             self.wan_qr_photo = ImageTk.PhotoImage(img)
             self.wan_qr_label.config(image=self.wan_qr_photo)
             if hasattr(self, "lbl_wan_url"):
@@ -2387,6 +3097,7 @@ class CompanionApp(tk.Tk):
         if not self.server:
             return
         self.lbl_media_status.config(text="Capturing camera frame...", fg=ACCENT_CYAN)
+
         def _snap():
             b64 = self.server.camera_manager.get_snapshot()
             if b64:
@@ -2397,20 +3108,24 @@ class CompanionApp(tk.Tk):
                 photo = ImageTk.PhotoImage(img)
                 last_path = getattr(self.server.camera_manager, "last_snapshot_path", None)
                 snap_name = os.path.basename(last_path) if last_path else "snapshot.jpg"
+
                 def _update_ui():
                     self.cam_photo = photo
                     self.lbl_cam_preview.config(image=self.cam_photo)
                     self.lbl_media_status.config(text=f"✓ Camera snapshot captured & saved: {snap_name}", fg=ACCENT_GREEN)
                     self.refresh_recordings()
+
                 self.after(0, _update_ui)
             else:
                 self.after(0, lambda: self.lbl_media_status.config(text="✕ Could not access camera.", fg=ACCENT_RED))
+
         threading.Thread(target=_snap, daemon=True).start()
 
     def test_mic_record(self):
         if not self.server:
             return
         self.lbl_media_status.config(text="Recording microphone for 3 seconds...", fg=ACCENT_CYAN)
+
         def _rec():
             rec_file = self.server.audio_manager.start_recording()
             if not rec_file:
@@ -2421,17 +3136,23 @@ class CompanionApp(tk.Tk):
             final_file = self.server.audio_manager.stop_recording()
             if final_file and os.path.exists(final_file):
                 sz = os.path.getsize(final_file)
-                self.after(0, lambda: self.lbl_media_status.config(
-                    text=f"✓ Recorded {os.path.basename(final_file)} ({sz} bytes)", fg=ACCENT_GREEN))
+                self.after(
+                    0,
+                    lambda: self.lbl_media_status.config(
+                        text=f"✓ Recorded {os.path.basename(final_file)} ({sz} bytes)", fg=ACCENT_GREEN
+                    ),
+                )
                 self.after(0, self.refresh_recordings)
             else:
                 reason = self.server.audio_manager.last_error or "Microphone recording stopped without a file."
                 self.after(0, lambda: self.lbl_media_status.config(text=f"✕ {reason}", fg=ACCENT_RED))
+
         threading.Thread(target=_rec, daemon=True).start()
 
     def restart_server(self):
         self.log("Restarting server...")
         self.lbl_status_pill.config(text="● RESTARTING...", fg=ACCENT_CYAN)
+
         def _do_restart():
             if self.server:
                 self.server.stop()
@@ -2442,6 +3163,7 @@ class CompanionApp(tk.Tk):
             self.server_thread = threading.Thread(target=self.server.start, daemon=True)
             self.server_thread.start()
             self.after(0, lambda: self.log("Server successfully restarted."))
+
         threading.Thread(target=_do_restart, daemon=True).start()
 
     def quit_application(self):
@@ -2454,6 +3176,7 @@ class CompanionApp(tk.Tk):
             self.server.stop()
         self.destroy()
         sys.exit(0)
+
 
 if __name__ == "__main__":
     set_windows_dpi_awareness()

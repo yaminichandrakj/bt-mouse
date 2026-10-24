@@ -1,6 +1,7 @@
 package com.btmouse.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,23 +17,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ControlCamera
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +40,8 @@ import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
 import com.btmouse.app.ui.theme.DarkBackground
+import com.btmouse.app.ui.theme.DarkBorder
+import com.btmouse.app.ui.theme.DarkSurface
 import com.btmouse.app.ui.theme.DarkSurfaceVariant
 import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextMuted
@@ -74,15 +70,16 @@ fun TouchpadScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(DarkBackground)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        // Top Status Bar
+        // Fluent Status & Air Mouse Telemetry Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(DarkSurfaceVariant)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .clip(RoundedCornerShape(14.dp))
+                .background(DarkSurface)
+                .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -96,19 +93,19 @@ fun TouchpadScreen(
                         .clip(CircleShape)
                         .background(if (isConnected) AccentEmerald else AccentRose)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (isConnected) (connectedDevice ?: "Connected") else "Disconnected",
+                        text = if (isConnected) (connectedDevice ?: "Connected to PC") else "Ready to Pair",
                         color = TextPrimary,
                         fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     Text(
                         text = statusMessage,
-                        color = TextMuted,
+                        color = if (isConnected) AccentCyan else TextMuted,
                         fontSize = 11.sp,
                         maxLines = 1,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -118,25 +115,25 @@ fun TouchpadScreen(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Air Mouse quick toggle button
             if (isAirMouseSupported) {
                 FilledTonalButton(
                     onClick = { airMouseManager.toggleAirMouse() },
                     colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = if (isAirMouseEnabled) PrimaryIndigo else DarkBackground,
+                        containerColor = if (isAirMouseEnabled) PrimaryIndigo else DarkSurfaceVariant,
                         contentColor = if (isAirMouseEnabled) TextPrimary else TextSecondary
                     ),
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.ControlCamera,
                         contentDescription = "Air Mouse",
+                        tint = if (isAirMouseEnabled) AccentCyan else TextSecondary,
                         modifier = Modifier.size(15.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = if (isAirMouseEnabled) "Air On" else "Air Off",
+                        text = if (isAirMouseEnabled) "Gyro Air ON" else "Gyro Air OFF",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -146,9 +143,9 @@ fun TouchpadScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-        // Center Touchpad Area with right-side Scroll Wheel
+        // Center Touchpad Area with right-side Tactile Scroll Wheel
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -182,7 +179,7 @@ fun TouchpadScreen(
             )
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Bottom Mouse Buttons (Left, Middle, Right)
         MouseButtonsBar(

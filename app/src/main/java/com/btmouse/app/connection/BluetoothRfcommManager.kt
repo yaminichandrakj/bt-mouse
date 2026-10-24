@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStream
@@ -180,7 +179,7 @@ class BluetoothRfcommManager(
                     addProperty("type", "connect")
                     addProperty("client", "Android Phone (BT)")
                 }
-                sendJson(handshake)
+                sendJson(handshake, includeSeq = false)
                 queryMedia()
                 startHeartbeat()
 
@@ -215,7 +214,7 @@ class BluetoothRfcommManager(
                     addProperty("type", "ping")
                     addProperty("client_time", now)
                 }
-                sendJson(ping)
+                sendJson(ping, includeSeq = false)
                 delay(2500L)
             }
         }
@@ -228,7 +227,7 @@ class BluetoothRfcommManager(
         _isConnectionHealthy.value = true
         recordingTransfer.cancel()
         try {
-            if (_isConnected.value) sendJson(JsonObject().apply { addProperty("type", "disconnect") })
+            if (_isConnected.value) sendJson(JsonObject().apply { addProperty("type", "disconnect") }, includeSeq = false)
         } catch (ignored: Exception) {}
         try {
             outputStream?.close()
@@ -258,13 +257,13 @@ class BluetoothRfcommManager(
 
     override fun notifyPathSwitch() {
         sendMouseButton(0)
-        sendJson(JsonObject().apply { addProperty("type", "path_switch") })
+        sendJson(JsonObject().apply { addProperty("type", "path_switch") }, includeSeq = false)
     }
 
     private fun processIncomingPacket(line: String) {
         try {
             val root = gson.fromJson(line, JsonObject::class.java) ?: return
-            recordingTransfer.handleMessage(root, ::sendJson)
+            recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
             val type = root.get("type")?.asString ?: ""
             when (type) {
                 "pong" -> {
@@ -458,13 +457,15 @@ class BluetoothRfcommManager(
         }
     }
 
-    private fun sendJson(obj: JsonObject) {
+    private fun sendJson(obj: JsonObject, includeSeq: Boolean = true) {
         if (clientSessionId.isNotEmpty() && !obj.has("client_session")) {
             obj.addProperty("client_session", clientSessionId)
         }
-        nextSeqSupplier?.invoke()?.let { seq ->
-            if (seq > 0 && !obj.has("seq")) {
-                obj.addProperty("seq", seq)
+        if (includeSeq) {
+            nextSeqSupplier?.invoke()?.let { seq ->
+                if (seq > 0 && !obj.has("seq")) {
+                    obj.addProperty("seq", seq)
+                }
             }
         }
         sendQueue.trySend(obj.toString())
@@ -551,7 +552,7 @@ class BluetoothRfcommManager(
             addProperty("include_preview", includePreview)
             addProperty("include_video_preview", includeVideoPreview)
         }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun sendMediaSeek(position: Float) {
@@ -617,12 +618,12 @@ class BluetoothRfcommManager(
 
     override fun querySystemStats() {
         val obj = JsonObject().apply { addProperty("type", "query_stats") }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun queryRunningProcesses() {
         val obj = JsonObject().apply { addProperty("type", "query_processes") }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun killProcess(pid: Int) {
@@ -635,7 +636,7 @@ class BluetoothRfcommManager(
 
     override fun queryInstalledApps() {
         val obj = JsonObject().apply { addProperty("type", "query_apps") }
-        sendJson(obj)
+        sendJson(obj, includeSeq = false)
     }
 
     override fun updateQuickApps(paths: List<String>) {
@@ -647,7 +648,7 @@ class BluetoothRfcommManager(
     }
 
     override fun queryRecordings() {
-        sendJson(JsonObject().apply { addProperty("type", "recordings_list") })
+        sendJson(JsonObject().apply { addProperty("type", "recordings_list") }, includeSeq = false)
     }
 
     override fun downloadRecording(id: String) {
@@ -657,9 +658,9 @@ class BluetoothRfcommManager(
         })
     }
 
-    override fun streamRecording(id: String) = recordingTransfer.stream(id, ::sendJson)
+    override fun streamRecording(id: String) = recordingTransfer.stream(id) { obj -> sendJson(obj, includeSeq = false) }
 
-    override fun stopRecordingStream() = recordingTransfer.stopStream(::sendJson)
+    override fun stopRecordingStream() = recordingTransfer.stopStream { obj -> sendJson(obj, includeSeq = false) }
 
     override fun deleteRecording(id: String) = recordingTransfer.delete(id, ::sendJson)
 
@@ -735,6 +736,33 @@ class BluetoothRfcommManager(
         sendJson(JsonObject().apply {
             addProperty("type", "phone_audio_frame")
             addProperty("data", Base64.encodeToString(pcm, Base64.NO_WRAP))
+        }, includeSeq = false)
+    }
+
+    override fun startPhoneCameraStream(lens: String, width: Int, height: Int, fps: Int) {
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_cam_start")
+            addProperty("lens", lens)
+            addProperty("width", width)
+            addProperty("height", height)
+            addProperty("fps", fps)
         })
+    }
+
+    override fun stopPhoneCameraStream() {
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_cam_stop")
+        })
+    }
+
+    override fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {
+        if (!_isConnected.value || data.isEmpty()) return
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_cam_frame")
+            addProperty("lens", lens)
+            addProperty("w", width)
+            addProperty("h", height)
+            addProperty("frame", Base64.encodeToString(data, Base64.NO_WRAP))
+        }, includeSeq = false)
     }
 }

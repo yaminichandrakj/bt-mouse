@@ -18,5 +18,7 @@ __pycache__/
 app/build/
 *.apk
 *.exe
+*.keystore
+*.jks
 pc_server/build/
 pc_server/dist/

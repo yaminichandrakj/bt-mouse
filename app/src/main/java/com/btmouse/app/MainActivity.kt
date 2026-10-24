@@ -11,10 +11,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import com.btmouse.app.connection.ConnectionCoordinator
-import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.data.HidConstants
+import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.sensors.AirMouseManager
 import com.btmouse.app.ui.MainScreen
 import com.btmouse.app.ui.theme.BtMouseTheme
@@ -40,10 +39,11 @@ class MainActivity : ComponentActivity() {
 
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.entries.all { it.value }
-        if (allGranted) {
-            connectionCoordinator.initialize()
+    ) { _ ->
+        // Refresh Bluetooth state regardless of whether optional permissions
+        // (such as POST_NOTIFICATIONS or BLUETOOTH_ADVERTISE) were denied.
+        if (::connectionCoordinator.isInitialized) {
+            connectionCoordinator.onPermissionsUpdated()
         }
     }
 
@@ -54,10 +54,13 @@ class MainActivity : ComponentActivity() {
         // Keep screen awake while using the touchpad
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        settingsRepository = SettingsRepository(applicationContext)
-        connectionCoordinator = ConnectionCoordinator(applicationContext, settingsRepository, lifecycleScope)
-        airMouseManager = AirMouseManager(applicationContext, connectionCoordinator, settingsRepository)
+        val app = application as BtMouseApplication
+        settingsRepository = app.settingsRepository
+        connectionCoordinator = app.connectionCoordinator
+        airMouseManager = app.airMouseManager
 
+        // Ensure coordinator is initialized unconditionally
+        connectionCoordinator.initialize()
         checkAndRequestPermissions()
 
         setContent {
@@ -94,7 +97,7 @@ class MainActivity : ComponentActivity() {
         if (permissionsToRequest.isNotEmpty()) {
             requestPermissionsLauncher.launch(permissionsToRequest.toTypedArray())
         } else {
-            connectionCoordinator.initialize()
+            connectionCoordinator.onPermissionsUpdated()
         }
     }
 
@@ -106,6 +109,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        connectionCoordinator.cleanup()
+        airMouseManager.stop()
+        // Only tear down connections if the activity is finishing and background
+        // session persistence is disabled.
+        if (isFinishing && !isChangingConfigurations && !settingsRepository.backgroundSessionEnabled.value) {
+            connectionCoordinator.cleanup()
+        }
     }
 }

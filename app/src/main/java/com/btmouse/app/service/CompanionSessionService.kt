@@ -1,5 +1,6 @@
 package com.btmouse.app.service
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,11 +8,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.btmouse.app.MainActivity
 import com.btmouse.app.R
 import com.btmouse.app.connection.ConnectionCoordinator
@@ -26,7 +30,9 @@ import com.btmouse.app.connection.ConnectionCoordinator
  */
 class CompanionSessionService : Service() {
 
+    private val tag = "CompanionSessionService"
     private var wakeLock: PowerManager.WakeLock? = null
+    private var isForegroundStarted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -38,7 +44,9 @@ class CompanionSessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_SERVICE, ACTION_DISCONNECT -> {
-                ConnectionCoordinator.activeInstance?.disconnectAll()
+                if (intent.action == ACTION_DISCONNECT) {
+                    ConnectionCoordinator.activeInstance?.disconnectAll()
+                }
                 stopForegroundSafely()
                 stopSelf()
                 return START_NOT_STICKY
@@ -53,6 +61,26 @@ class CompanionSessionService : Service() {
                 updateNotification()
                 return START_STICKY
             }
+            ACTION_UPDATE -> {
+                val coord = ConnectionCoordinator.activeInstance
+                val hasActiveMedia = coord?.let {
+                    it.isPcLiveAudioActive.value ||
+                        it.isPhoneLiveAudioActive.value ||
+                        it.isCameraStreaming.value ||
+                        it.isPhoneCameraStreaming.value
+                } ?: false
+                if (!hasActiveMedia && coord?.isConnected?.value != true) {
+                    stopForegroundSafely()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (isForegroundStarted) {
+                    startForegroundWithSession()
+                } else {
+                    updateNotification()
+                }
+                return START_STICKY
+            }
             else -> {
                 startForegroundWithSession()
             }
@@ -65,7 +93,14 @@ class CompanionSessionService : Service() {
         val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             val coord = ConnectionCoordinator.activeInstance
-            if (coord?.isPhoneLiveAudioActive?.value == true) {
+            val hasMicPerm = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            val hasCamPerm = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (coord?.isPhoneLiveAudioActive?.value == true && hasMicPerm) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 }
@@ -73,7 +108,7 @@ class CompanionSessionService : Service() {
             if (coord?.isPcLiveAudioActive?.value == true) {
                 type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             }
-            if (coord?.isPhoneCameraStreaming?.value == true) {
+            if (coord?.isPhoneCameraStreaming?.value == true && hasCamPerm) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
                 }
@@ -81,18 +116,42 @@ class CompanionSessionService : Service() {
             type
         } else 0
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, foregroundType)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, foregroundType)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            isForegroundStarted = true
+            acquireWakeLockIfNeeded()
+        } catch (e: Exception) {
+            Log.w(tag, "Could not start foreground service with full type mask ($foregroundType), trying fallback", e)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+                isForegroundStarted = true
+                acquireWakeLockIfNeeded()
+            } catch (e2: Exception) {
+                Log.e(tag, "Foreground service start blocked by OS permissions/state", e2)
+                stopSelf()
+            }
         }
-
-        acquireWakeLockIfNeeded()
     }
 
     private fun updateNotification() {
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildSessionNotification())
+        try {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(NOTIFICATION_ID, buildSessionNotification())
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to update session notification", e)
+        }
     }
 
     private fun acquireWakeLockIfNeeded() {
@@ -115,17 +174,21 @@ class CompanionSessionService : Service() {
 
     private fun stopForegroundSafely() {
         releaseWakeLock()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
+        isForegroundStarted = false
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
         super.onDestroy()
         releaseWakeLock()
+        isForegroundStarted = false
     }
 
     private fun buildSessionNotification(): Notification {
@@ -205,6 +268,7 @@ class CompanionSessionService : Service() {
         const val NOTIFICATION_ID = 2001
 
         const val ACTION_START = "com.btmouse.app.action.START_SESSION_SERVICE"
+        const val ACTION_UPDATE = "com.btmouse.app.action.UPDATE_SESSION_SERVICE"
         const val ACTION_STOP_SERVICE = "com.btmouse.app.action.STOP_SESSION_SERVICE"
         const val ACTION_STOP_MEDIA = "com.btmouse.app.action.STOP_MEDIA"
         const val ACTION_DISCONNECT = "com.btmouse.app.action.DISCONNECT"
@@ -233,7 +297,9 @@ class CompanionSessionService : Service() {
 
         fun update(context: Context) {
             try {
-                val intent = Intent(context, CompanionSessionService::class.java)
+                val intent = Intent(context, CompanionSessionService::class.java).apply {
+                    action = ACTION_UPDATE
+                }
                 context.startService(intent)
             } catch (_: Exception) {}
         }

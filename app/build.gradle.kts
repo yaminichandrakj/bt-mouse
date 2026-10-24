@@ -12,8 +12,8 @@ android {
         applicationId = "com.btmouse.app"
         minSdk = 28
         targetSdk = 34
-        versionCode = 22
-        versionName = "1.3.15"
+        versionCode = 23
+        versionName = "1.3.16"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -23,12 +23,23 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystoreFile = file("release.keystore")
-            if (keystoreFile.exists()) {
+            val keystorePath = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() } ?: "release.keystore"
+            val keystoreFile = file(keystorePath)
+            val ksPassword = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+            val kAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
+            val kPassword = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+
+            if (keystoreFile.exists() && ksPassword != null && kAlias != null && kPassword != null) {
                 storeFile = keystoreFile
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "btmouse123"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "btmouse"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "btmouse123"
+                storePassword = ksPassword
+                keyAlias = kAlias
+                keyPassword = kPassword
+            } else if (keystoreFile.exists()) {
+                // Legacy local/CI fallback until GitHub Actions secrets are populated
+                storeFile = keystoreFile
+                storePassword = ksPassword ?: "btmouse123"
+                keyAlias = kAlias ?: "btmouse"
+                keyPassword = kPassword ?: "btmouse123"
             } else {
                 initWith(getByName("debug"))
             }

@@ -267,12 +267,20 @@ if IS_WINDOWS:
     u32.SendInput.argtypes = (ctypes.c_uint, ctypes.POINTER(_Input), ctypes.c_int)
     u32.SendInput.restype = ctypes.c_uint
 
+    _last_uipi_warning_at = 0.0
+
     def send_windows_mouse_event(flags, dx=0, dy=0, mouse_data=0, _extra_info=0):
         """Insert one checked mouse event through the supported Windows input API."""
+        global _last_uipi_warning_at
         event = _Input()
         event.type = INPUT_MOUSE
         event.mi = _MouseInput(dx, dy, mouse_data & 0xFFFFFFFF, flags, 0, 0)
         inserted = u32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_Input))
+        if inserted != 1:
+            now = time.monotonic()
+            if now - _last_uipi_warning_at > 10.0:
+                _last_uipi_warning_at = now
+                print("[!] Windows UIPI blocked input injection into an elevated window. Run BT Mouse Companion as Administrator to control elevated apps.")
         return inserted == 1
 
 try:
@@ -1955,6 +1963,7 @@ class PhoneCameraReceiver:
 
     def start(self, lens="back", width=640, height=360):
         with self._lock:
+            self._release_virtual_cam()
             self.is_active = True
             self.lens = lens
             self.width = width
@@ -2144,7 +2153,7 @@ class PhoneCameraHttpServer:
 
         for p in range(self.port, self.port + 10):
             try:
-                self.server = ThreadingHTTPServer(("0.0.0.0", p), Handler)
+                self.server = ThreadingHTTPServer(("127.0.0.1", p), Handler)
                 self.port = p
                 self.running = True
                 self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="PhoneCamHttpServer")
@@ -2583,7 +2592,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.15"
+                    "version": "1.3.16"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2627,16 +2636,25 @@ class Server:
             self.connected_client = None
             return
 
-        # Sequence deduplication
+        # Sequence deduplication across concurrent transports (sliding window)
         seq = data.get("seq")
         if seq is not None and isinstance(seq, int) and seq > 0:
             client_session = str(data.get("client_session") or self._camera_client_key(addr))
             with self._cmd_seq_lock:
-                last_seq = self._last_cmd_seq.get(client_session, 0)
-                if 0 < seq <= last_seq and (last_seq - seq) < 100_000:
-                    # Drop duplicate or out-of-order packet
+                seen_map = getattr(self, "_seen_cmd_seqs", None)
+                if seen_map is None:
+                    seen_map = {}
+                    self._seen_cmd_seqs = seen_map
+                seen = seen_map.setdefault(client_session, [])
+                if seq in seen:
+                    # Drop exact duplicate packet already processed on another transport
                     return
-                self._last_cmd_seq[client_session] = seq
+                seen.append(seq)
+                if len(seen) > 512:
+                    del seen[:-512]
+                last_seq = self._last_cmd_seq.get(client_session, 0)
+                if seq > last_seq or (last_seq - seq) >= 100_000:
+                    self._last_cmd_seq[client_session] = seq
 
         if self.on_packet_callback:
             try:
@@ -3019,9 +3037,8 @@ class Server:
             h = int(data.get("height", data.get("h", 360)))
             if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
                 self.phone_camera_receiver.start(lens=lens, width=w, height=h)
-            primary_ip = self.get_local_ip()
             port = getattr(getattr(self, "phone_camera_http", None), "port", 8766)
-            mjpeg_url = f"http://{primary_ip}:{port}/phone_cam/mjpeg"
+            mjpeg_url = f"http://127.0.0.1:{port}/phone_cam/mjpeg"
             vcam_status = getattr(getattr(self, "phone_camera_receiver", None), "virtual_cam_status", "MJPEG_STREAM")
             vcam_err = getattr(getattr(self, "phone_camera_receiver", None), "virtual_cam_error", "")
             respond({
@@ -4158,7 +4175,7 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
 
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(2048)
+                data, addr = self.sock.recvfrom(65507)
                 msg_str = data.decode("utf-8")
                 parsed = json.loads(msg_str)
                 self.handle_packet(parsed, addr)

@@ -125,13 +125,20 @@ fun ConnectionScreen(
                 val gson = Gson()
                 val obj = gson.fromJson(trimmed, JsonObject::class.java)
                 val type = obj.get("type")?.asString ?: ""
+                val scannedPin = (obj.get("pin")?.asString ?: obj.get("token")?.asString)?.trim().orEmpty()
+                if (scannedPin.isNotEmpty()) {
+                    wifiPin = scannedPin
+                    settings.setServerPin(scannedPin)
+                    settings.setWanToken(scannedPin)
+                }
                 if (type == "btmouse_wan" || obj.has("url")) {
                     val url = obj.get("url")?.asString ?: ""
-                    val token = obj.get("token")?.asString?.takeIf { it.isNotBlank() }
-                        ?: settings.serverPin.value.ifBlank { settings.wanToken.value }
+                    val token = scannedPin.ifBlank {
+                        settings.serverPin.value.ifBlank { settings.wanToken.value }
+                    }
                     if (url.isNotEmpty()) {
                         settings.setWanUrl(url)
-                        coordinator.setMode(ConnectionMode.REMOTE_WAN)
+                        coordinator.setMode(ConnectionMode.REMOTE_WAN, disconnectPrevious = false)
                         if (token.isNotBlank()) {
                             settings.setWanToken(token)
                             settings.setServerPin(token)
@@ -146,13 +153,18 @@ fun ConnectionScreen(
                 val ip = obj.get("ip")?.asString ?: ""
                 val port = obj.get("port")?.asInt ?: 53530
                 val name = obj.get("name")?.asString ?: "PC Server"
+                val effectivePin = scannedPin.ifBlank { wifiPin.trim() }
 
                 if (ip.isNotEmpty()) {
                     manualHost = ip
                     manualPort = port.toString()
-                    settings.setServerPin(wifiPin)
+                    if (effectivePin.isNotEmpty()) {
+                        wifiPin = effectivePin
+                        settings.setServerPin(effectivePin)
+                    }
                     settings.setWifiHost(ip)
                     settings.setWifiPort(port)
+                    coordinator.setMode(ConnectionMode.WIFI, disconnectPrevious = false)
                     coordinator.prepareForManualConnect()
                     coordinator.wifiClientManager.connectManual(ip, port, name)
                     return true
@@ -162,12 +174,17 @@ fun ConnectionScreen(
                 val ip = uri.getQueryParameter("ip") ?: ""
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 53530
                 val name = uri.getQueryParameter("name") ?: "PC Server"
+                val scannedPin = (uri.getQueryParameter("pin") ?: uri.getQueryParameter("token"))?.trim().orEmpty()
+                if (scannedPin.isNotEmpty()) {
+                    wifiPin = scannedPin
+                }
                 if (ip.isNotEmpty()) {
                     manualHost = ip
                     manualPort = port.toString()
                     settings.setServerPin(wifiPin)
                     settings.setWifiHost(ip)
                     settings.setWifiPort(port)
+                    coordinator.setMode(ConnectionMode.WIFI, disconnectPrevious = false)
                     coordinator.prepareForManualConnect()
                     coordinator.wifiClientManager.connectManual(ip, port, name)
                     return true
@@ -181,6 +198,8 @@ fun ConnectionScreen(
                 settings.setServerPin(wifiPin)
                 settings.setWifiHost(ip)
                 settings.setWifiPort(port)
+                coordinator.setMode(ConnectionMode.WIFI, disconnectPrevious = false)
+                coordinator.prepareForManualConnect()
                 coordinator.wifiClientManager.connectManual(ip, port, "PC Server")
                 return true
             }
@@ -204,7 +223,7 @@ fun ConnectionScreen(
                     if (rawValue.isNotEmpty()) {
                         val success = parseAndConnectQr(rawValue)
                         if (success) {
-                            Toast.makeText(context, "Details scanned; waiting for the PC connection handshake", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Details scanned; connecting to PC companion...", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Unrecognized QR format: $rawValue", Toast.LENGTH_LONG).show()
                         }
@@ -251,7 +270,7 @@ fun ConnectionScreen(
         ) {
             Tab(
                 selected = activeMode == ConnectionMode.BLUETOOTH,
-                onClick = { coordinator.setMode(ConnectionMode.BLUETOOTH) },
+                onClick = { coordinator.setMode(ConnectionMode.BLUETOOTH, disconnectPrevious = false) },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(imageVector = Icons.Default.Bluetooth, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -262,7 +281,7 @@ fun ConnectionScreen(
             )
             Tab(
                 selected = activeMode == ConnectionMode.WIFI,
-                onClick = { coordinator.setMode(ConnectionMode.WIFI) },
+                onClick = { coordinator.setMode(ConnectionMode.WIFI, disconnectPrevious = false) },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(imageVector = Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -273,7 +292,7 @@ fun ConnectionScreen(
             )
             Tab(
                 selected = activeMode == ConnectionMode.REMOTE_WAN,
-                onClick = { coordinator.setMode(ConnectionMode.REMOTE_WAN) },
+                onClick = { coordinator.setMode(ConnectionMode.REMOTE_WAN, disconnectPrevious = false) },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(imageVector = Icons.Default.Language, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentCyan)
@@ -485,7 +504,7 @@ fun ConnectionScreen(
                         Button(
                             onClick = {
                                 settings.setServerPin(wifiPin)
-                                coordinator.wifiClientManager.discoverServer { host, port, name ->
+                                coordinator.wifiClientManager.discoverServer { host, port, _ ->
                                     manualHost = host
                                     manualPort = port.toString()
                                 }

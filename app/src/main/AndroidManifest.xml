@@ -48,7 +48,9 @@
     <!-- RemoteWanManager limits ws:// to private LAN hosts; public WAN URLs must use wss://. -->
     <application
         android:name=".BtMouseApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"

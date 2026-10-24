@@ -199,7 +199,7 @@ class WifiClientManager(
                 }
                 "connect_ack" -> {
                     val pending = pendingConnect
-                    if (pending != null && pending.address == sourceAddress && pending.port == sourcePort) {
+                    if (pending != null && (pending.port == sourcePort || pending.address.hostAddress == sourceAddress.hostAddress)) {
                         pending.acknowledgement.complete(json)
                     }
                 }
@@ -495,7 +495,7 @@ class WifiClientManager(
                         _statusMessage.value = "PC server has not responded for 30 seconds"
                         break
                     }
-                    sendPacket(mapOf("type" to "ping", "client_time" to now))
+                    sendPacket(mapOf("type" to "ping", "client_time" to now), includeSeq = false)
                 }
                 delay(1500)
             }
@@ -577,7 +577,7 @@ class WifiClientManager(
                 var accepted = false
                 var confirmedServerName = serverName
                 for (attempt in 0 until 3) {
-                    sendPacket(connectPacket, host, port, allowDisconnected = true)
+                    sendPacket(connectPacket, host, port, allowDisconnected = true, includeSeq = false)
                     val reply = withTimeoutOrNull(1200) { acknowledgement.await() }
                     if (reply != null) {
                         accepted = reply.get("success")?.asBoolean == true
@@ -616,7 +616,7 @@ class WifiClientManager(
         connectJob?.cancel()
         pendingConnect = null
         scope.launch(Dispatchers.IO) {
-            if (_isConnected.value) sendPacket(mapOf("type" to "disconnect"))
+            if (_isConnected.value) sendPacket(mapOf("type" to "disconnect"), includeSeq = false)
             _isConnected.value = false
             _connectedDeviceName.value = null
             _statusMessage.value = "Disconnected"
@@ -650,14 +650,15 @@ class WifiClientManager(
 
     override fun notifyPathSwitch() {
         sendMouseButton(0)
-        sendPacket(mapOf("type" to "path_switch"))
+        sendPacket(mapOf("type" to "path_switch"), includeSeq = false)
     }
 
     private fun sendPacket(
         data: Map<String, Any?>,
         hostOverride: String? = null,
         portOverride: Int? = null,
-        allowDisconnected: Boolean = false
+        allowDisconnected: Boolean = false,
+        includeSeq: Boolean = true
     ) {
         if (!_isConnected.value && !allowDisconnected && data["type"] != "connect") return
         val targetHost = hostOverride ?: settings.wifiHost.value
@@ -669,12 +670,18 @@ class WifiClientManager(
             if (clientSessionId.isNotEmpty()) {
                 extra["client_session"] = clientSessionId
             }
-            nextSeqSupplier?.invoke()?.let { seq ->
-                if (seq > 0) extra["seq"] = seq
+            if (includeSeq) {
+                nextSeqSupplier?.invoke()?.let { seq ->
+                    if (seq > 0) extra["seq"] = seq
+                }
             }
             val authenticatedData = data + extra
             val json = gson.toJson(authenticatedData)
             val bytes = json.toByteArray()
+            if (bytes.size > 65000) {
+                Log.w(tag, "Skipping oversized UDP datagram (${bytes.size} bytes)")
+                return
+            }
             val address = InetAddress.getByName(targetHost)
             val packet = DatagramPacket(bytes, bytes.size, address, targetPort)
             val result = sendQueue.trySend(packet)
@@ -740,7 +747,10 @@ class WifiClientManager(
     }
 
     override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
-        sendPacket(mapOf("type" to "media_query", "include_preview" to includePreview, "include_video_preview" to includeVideoPreview))
+        sendPacket(
+            mapOf("type" to "media_query", "include_preview" to includePreview, "include_video_preview" to includeVideoPreview),
+            includeSeq = false
+        )
     }
 
     override fun sendMediaSeek(position: Float) {
@@ -823,11 +833,11 @@ class WifiClientManager(
     }
 
     override fun querySystemStats() {
-        sendPacket(mapOf("type" to "query_system_stats"))
+        sendPacket(mapOf("type" to "query_system_stats"), includeSeq = false)
     }
 
     override fun queryRunningProcesses() {
-        sendPacket(mapOf("type" to "query_processes"))
+        sendPacket(mapOf("type" to "query_processes"), includeSeq = false)
     }
 
     override fun killProcess(pid: Int) {
@@ -835,7 +845,7 @@ class WifiClientManager(
     }
 
     override fun queryInstalledApps() {
-        sendPacket(mapOf("type" to "query_apps"))
+        sendPacket(mapOf("type" to "query_apps"), includeSeq = false)
     }
 
     override fun updateQuickApps(paths: List<String>) {
@@ -843,7 +853,7 @@ class WifiClientManager(
     }
 
     override fun queryRecordings() {
-        sendPacket(mapOf("type" to "recordings_list"))
+        sendPacket(mapOf("type" to "recordings_list"), includeSeq = false)
     }
 
     override fun downloadRecording(id: String) {
@@ -852,12 +862,12 @@ class WifiClientManager(
 
     override fun streamRecording(id: String) = recordingTransfer.stream(id) { obj ->
         sendPacket(mapOf("type" to obj.get("type").asString, "id" to (obj.get("id")?.asString ?: ""),
-            "transfer_id" to (obj.get("transfer_id")?.asString ?: "")))
+            "transfer_id" to (obj.get("transfer_id")?.asString ?: "")), includeSeq = false)
     }
 
     override fun stopRecordingStream() = recordingTransfer.stopStream { obj ->
         sendPacket(mapOf("type" to obj.get("type").asString, "id" to (obj.get("id")?.asString ?: ""),
-            "transfer_id" to (obj.get("transfer_id")?.asString ?: "")))
+            "transfer_id" to (obj.get("transfer_id")?.asString ?: "")), includeSeq = false)
     }
 
     override fun deleteRecording(id: String) = recordingTransfer.delete(id) { obj ->
@@ -927,7 +937,7 @@ class WifiClientManager(
         sendPacket(mapOf(
             "type" to "phone_audio_frame",
             "data" to Base64.encodeToString(pcm, Base64.NO_WRAP)
-        ))
+        ), includeSeq = false)
     }
 
     override fun startPhoneCameraStream(lens: String, width: Int, height: Int, fps: Int) {
@@ -947,13 +957,17 @@ class WifiClientManager(
     override fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {
         if (!_isConnected.value || data.isEmpty()) return
         val b64 = Base64.encodeToString(data, Base64.NO_WRAP)
+        if (b64.length > 60_000) {
+            Log.w(tag, "Skipping phone camera frame exceeding UDP payload limit (${b64.length} chars)")
+            return
+        }
         sendPacket(mapOf(
             "type" to "phone_cam_frame",
             "lens" to lens,
             "w" to width,
             "h" to height,
             "frame" to b64
-        ))
+        ), includeSeq = false)
     }
 
     fun cleanup() {
