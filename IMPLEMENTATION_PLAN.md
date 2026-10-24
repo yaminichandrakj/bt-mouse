@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.8
-**Owner:** Codex | **Release:** [v1.3.8 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8) · [feature notes](release-notes/v1.3.8.md)
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.9
+**Owner:** Codex | **Release:** v1.3.9 prepared; CI and publication pending · [feature notes](release-notes/v1.3.9.md)
 
 ## Product objective
 
@@ -15,11 +15,11 @@ Source status below distinguishes CI/build verification from physical-device ver
 |---|---|---|
 | Security and pairing | PIN-authenticated UDP commands, persistent PIN, validated app launch, authenticated WebSocket, transport-specific state | Recheck integration and preserve authorization gates |
 | Quick Apps | PC companion can add, rename, remove, and share curated Start Menu shortcuts; phone can add/remove discovered PC shortcuts from its shared list | Build/device-check async refresh and phone management, including preloaded entries |
-| Tasks and stats | Cached/default response then background refresh for process and stats requests; cached disk activity and per-adapter GPU metrics | Build/device check, UI loading/error freshness, compare values with Task Manager |
-| PC webcam | Snapshot, live preview, stream failure reporting/recovery, opt-in webcam recording, desktop recordings list | Verify camera lifecycle and full-resolution recorded output on target PC |
+| Tasks and stats | Cached/default response then background refresh for process and stats requests; cached disk activity and per-adapter GPU metrics | Hotfix keeps query work off input path; device-check stats refresh and compare values with Task Manager |
+| PC webcam | Snapshot, live preview, stream failure reporting/recovery, opt-in webcam recording, desktop recordings list | Snapshot/start work moved off input path; verify camera lifecycle and full-resolution recording on target PC |
 | Recordings | Authenticated listing and chunked download, integrity checks, Android download/open and online-playback source; desktop retention age/size and minimum-free-space settings | Verify codecs/transports, retention behavior, transfer progress and cleanup |
 | Live audio | Foreground PC-mic-to-phone and phone-mic-to-PC source, optional PC-side audio recording | Verify latency, sample rates, interruptions, echo, recording integrity; device selector and echo handling missing |
-| Browser media | SMTC and browser audio-session detection; selected-screen-region preview with phone toggle in source | Build/device test, transport limits, coordinate scaling, visible failure and stop behavior |
+| Browser media | SMTC and browser audio-session detection; selected-screen-region preview with phone toggle in source; stable player identification; corrected Playing/Paused mapping and transient-session state retention | Verify player recognition, transport limits, coordinate scaling, errors, and stop behavior |
 | Startup/update | Windows sign-in option, Android installer handoff, desktop updater retry/rollback logic, version consistency in Actions | Verify packaged update/relaunch/rollback and startup; Android auto-reconnect remains incomplete |
 | Desktop UI | Python companion packaged as a one-file EXE; DPI awareness and version/path title | Sharpen/validate current UI; native Windows app migration not done |
 | Laptop unlock | Explicitly unsupported in server | Research supported Windows Hello/passkey integration; no password injection or secure-desktop bypass |
@@ -41,13 +41,14 @@ Phases are ordered from integration and verification toward larger platform work
 
 ### Phase 0 - Integrate and verify the current source (low/medium effort; immediate)
 
-1. ~~Review server command paths, Kotlin protocol signatures, and loading/error UI for the current working-tree changes.~~
-2. ~~Build Android and Windows companion from the same version; fix compile, packaging, and protocol mismatches before adding more features. v1.3.8 builds passed in Actions.~~
-3. ~~Run companion regression checks, Android build checks, and release-version consistency. v1.3.8 passed all 17 Python tests and both CI builds.~~
-4. Smoke-test Bluetooth HID without the companion and each companion transport independently.
-5. ~~Publish v1.3.8 after version, regression, Android build, and Windows packaging gates pass.~~
+1. ~~Review and isolate slow media, camera, snapshot, and live-audio work from the command paths that carry input and heartbeats.~~
+2. ~~Disable Pen/touch navigation while preserving its source for later work.~~
+3. ~~Correct media playback-state mapping and preserve state across transient media-session errors.~~
+4. Build Android and Windows companion at v1.3.9; fix compile, packaging, or protocol mismatches reported by CI.
+5. Run existing companion regression checks, Android build checks, and release-version consistency in GitHub Actions for v1.3.9.
+6. Smoke-test Bluetooth HID without the companion and each companion transport independently.
 
-**Acceptance:** CI platform builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
+**Acceptance:** v1.3.9 CI builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
 
 ### Phase 1 - Webcam video recording, recordings library, and browser video preview (medium effort; high priority)
 
@@ -180,5 +181,5 @@ Phases are ordered from integration and verification toward larger platform work
 - [ ] Check both updater flows, rollback, and correct relaunch path.
 - [ ] Check startup/reconnect without auto-starting capture.
 - [ ] Compare disk/GPU readings with Task Manager.
-- [x] ~~Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.8.~~ Keep adding explicit feature notes to future releases.
-- [x] ~~Publish v1.3.8 after both CI builds passed; hardware checks unavailable in CI remain open.~~
+- [ ] Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.9.
+- [ ] Publish v1.3.9 after both CI builds pass; hardware checks unavailable in CI remain open.

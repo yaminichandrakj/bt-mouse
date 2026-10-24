@@ -219,6 +219,7 @@ class RemoteWanManager(
                         title = title,
                         artist = artist,
                         album = album,
+                        playerName = root.get("player")?.asString ?: "",
                         status = status,
                         position = position,
                         duration = duration,
@@ -359,9 +360,8 @@ class RemoteWanManager(
             while (isActive) {
                 if (_isConnected.value) {
                     sendPacket(mapOf("type" to "ping"))
-                    queryMedia()
                 }
-                delay(2000)
+                delay(15_000)
             }
         }
     }

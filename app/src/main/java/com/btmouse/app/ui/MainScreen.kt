@@ -52,7 +52,6 @@ import com.btmouse.app.ui.screens.MediaRemoteScreen
 import com.btmouse.app.ui.screens.SettingsScreen
 import com.btmouse.app.ui.screens.TouchpadScreen
 import com.btmouse.app.ui.screens.UtilitiesScreen
-import com.btmouse.app.ui.screens.WritingPadScreen
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -146,11 +145,12 @@ fun MainScreen(
                 tabs.forEachIndexed { index, tab ->
                     NavigationBarItem(
                         selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
+                        onClick = { if (tab != NavigationTab.WritingPad) selectedTabIndex = index },
+                        enabled = tab != NavigationTab.WritingPad,
                         icon = {
                             Icon(
                                 imageVector = tab.icon,
-                                contentDescription = tab.title,
+                                contentDescription = if (tab == NavigationTab.WritingPad) "Pen and touch controls, temporarily disabled" else tab.title,
                                 modifier = Modifier.size(20.dp)
                             )
                         },
@@ -185,7 +185,9 @@ fun MainScreen(
             } else when (selectedTabIndex) {
                 0 -> TouchpadScreen(coordinator, airMouseManager, settings)
                 1 -> KeyboardScreen(coordinator, settings)
-                2 -> WritingPadScreen(coordinator, settings)
+                2 -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Pen and touch controls are temporarily disabled while this feature is rebuilt.")
+                }
                 3 -> MediaRemoteScreen(coordinator, settings)
                 4 -> UtilitiesScreen(coordinator, settings)
                 5 -> ConnectionScreen(coordinator, settings)

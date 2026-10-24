@@ -317,6 +317,7 @@ class MediaController:
             "artist": "",
             "album": "",
             "status": "Stopped",
+            "player": "",
             "position": 0.0,
             "duration": 0.0,
             "volume": 0.5,
@@ -417,10 +418,8 @@ class MediaController:
         return False
 
     async def _get_media_artwork(self, props, cache_key, max_encoded_bytes):
-        if cache_key == self._artwork_cache_key:
+        if cache_key == self._artwork_cache_key and self._artwork_cache_value:
             return self._artwork_cache_value
-        self._artwork_cache_key = cache_key
-        self._artwork_cache_value = ""
         try:
             thumbnail = props.thumbnail
             if not thumbnail:
@@ -446,11 +445,30 @@ class MediaController:
                 image.save(output, format="JPEG", quality=quality, optimize=True)
                 encoded = base64.b64encode(output.getvalue()).decode("ascii")
                 if len(encoded) <= max_encoded_bytes:
+                    self._artwork_cache_key = cache_key
                     self._artwork_cache_value = encoded
                     return encoded
         except Exception as e:
             print(f"[-] Media artwork unavailable: {e}")
         return ""
+
+    @staticmethod
+    def _identify_player(app_id="", title="", process_name=""):
+        identity = f"{app_id} {title} {process_name}".lower()
+        known = (
+            ("youtube music", "YouTube Music"), ("youtube", "YouTube"),
+            ("netflix", "Netflix"), ("prime video", "Prime Video"), ("amazon video", "Prime Video"),
+            ("disney+", "Disney+"), ("disneyplus", "Disney+"), ("spotify", "Spotify"),
+            ("apple music", "Apple Music"), ("tidal", "Tidal"), ("vlc", "VLC"),
+            ("groove", "Groove Music"), ("zunemusic", "Groove Music"),
+            ("windows media player", "Windows Media Player"), ("wmplayer", "Windows Media Player"),
+            ("brave", "Brave"), ("msedge", "Microsoft Edge"), ("edge", "Microsoft Edge"),
+            ("chrome", "Chrome"), ("firefox", "Firefox"), ("opera", "Opera"), ("vivaldi", "Vivaldi"),
+        )
+        for needle, label in known:
+            if needle in identity:
+                return label
+        return "Media Player" if app_id or process_name else ""
 
     def _detect_browser_audio_session(self):
         """Recognize active browser audio even when it does not publish an SMTC session."""
@@ -463,9 +481,15 @@ class MediaController:
             comtypes.CoInitialize()
             initialized = True
             for session in self.audio_utilities.GetAllSessions():
-                process = getattr(session, "Process", None)
-                if process and process.name().lower() in browser_names and int(session.State) == 1:
-                    return process.name().removesuffix(".exe"), process.pid
+                try:
+                    process = getattr(session, "Process", None)
+                    if not process or int(session.State) != 1:
+                        continue
+                    process_name = process.name()
+                    if process_name and process_name.lower() in browser_names:
+                        return process_name.removesuffix(".exe"), process.pid
+                except Exception:
+                    continue
         except Exception:
             return None
         finally:
@@ -513,12 +537,13 @@ class MediaController:
         self.last_state["volume"] = round(vol, 2)
         self.last_state["muted"] = muted
         self.last_state["is_muted"] = muted
+        previous_media_state = dict(self.last_state)
         # Rebuild playback identity for every poll; a lost SMTC/audio session
         # must not leave the previous track looking active indefinitely.
         self.last_state.update({
             "has_media": False, "title": "", "artist": "", "album": "",
             "status": "NoMedia", "position": 0.0, "duration": 0.0,
-            "artwork": ""
+            "artwork": "", "player": ""
         })
 
         if self.has_winrt:
@@ -542,7 +567,7 @@ class MediaController:
                         except Exception:
                             continue
                     if active:
-                        session = next((item for status, item in active if status == 5), active[0][1])
+                        session = next((item for status, item in active if status == 4), active[0][1])
                     else:
                         # Do not report an idle current-session pointer as the
                         # media that is currently playing in the browser.
@@ -552,7 +577,7 @@ class MediaController:
                         props = await session.try_get_media_properties_async()
                         info = session.get_playback_info()
                         timeline = session.get_timeline_properties()
-                        status_map = {0: "Closed", 1: "Opened", 2: "Changing", 3: "Stopped", 4: "Paused", 5: "Playing"}
+                        status_map = {0: "Closed", 1: "Opened", 2: "Changing", 3: "Stopped", 4: "Playing", 5: "Paused"}
                         status_str = status_map.get(int(info.playback_status), "Unknown")
                         pos_sec = timeline.position.total_seconds() if timeline and timeline.position else 0.0
                         end_sec = timeline.end_time.total_seconds() if timeline and timeline.end_time else 0.0
@@ -562,6 +587,10 @@ class MediaController:
                             "artist": (props.artist or "Unknown Artist") if props else "",
                             "album": (props.album_title or "") if props else "",
                             "status": status_str,
+                            "player": self._identify_player(
+                                getattr(session, "source_app_user_model_id", ""),
+                                props.title if props else "",
+                            ),
                             "position": round(pos_sec, 1),
                             "duration": round(end_sec, 1),
                             "volume": round(vol, 2),
@@ -578,8 +607,18 @@ class MediaController:
                 if res:
                     self.last_state.update(res)
                     return self.last_state
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[-] Media-session query failed: {exc}")
+                # SMTC can briefly fail while apps switch sessions or wake a
+                # player. Preserve the last known track on query errors; only
+                # an authoritative successful query with no active session
+                # should clear the now-playing card.
+                if previous_media_state.get("has_media"):
+                    self.last_state.update(previous_media_state)
+                    self.last_state["volume"] = round(vol, 2)
+                    self.last_state["muted"] = muted
+                    self.last_state["is_muted"] = muted
+                    return self.last_state
         if not self.last_state.get("has_media"):
             browser_audio = self._detect_browser_audio_session()
             if browser_audio:
@@ -591,6 +630,7 @@ class MediaController:
                     "artist": "Browser audio",
                     "album": "",
                     "status": "Playing",
+                    "player": self._identify_player(title=window_title, process_name=browser_name),
                     "position": 0.0,
                     "duration": 0.0,
                     "artwork": "",
@@ -1593,6 +1633,8 @@ class RemoteWebSocketServer:
         authenticated = False
         client_id = "Remote-WAN Client"
         client_reported = False
+        camera_send_lock = threading.Lock()
+        camera_send_pending = False
         try:
             async for message in websocket:
                 try:
@@ -1622,17 +1664,40 @@ class RemoteWebSocketServer:
                         return
 
                 def _respond(resp_dict):
+                    nonlocal camera_send_pending
                     if self.loop and self.loop.is_running():
                         try:
                             payload = json.dumps(resp_dict)
-                            future = asyncio.run_coroutine_threadsafe(websocket.send(payload), self.loop)
+                            is_camera_frame = resp_dict.get("type") == "camera_frame_response"
+                            if is_camera_frame:
+                                with camera_send_lock:
+                                    if camera_send_pending:
+                                        return
+                                    camera_send_pending = True
+
+                            async def _send():
+                                nonlocal camera_send_pending
+                                try:
+                                    await websocket.send(payload)
+                                finally:
+                                    if is_camera_frame:
+                                        with camera_send_lock:
+                                            camera_send_pending = False
+
+                            future = asyncio.run_coroutine_threadsafe(_send(), self.loop)
                             def _report_send_error(done_future):
                                 try:
                                     done_future.result()
                                 except Exception as e:
+                                    if is_camera_frame:
+                                        with camera_send_lock:
+                                            camera_send_pending = False
                                     print(f"[-] WebSocket response write failed: {e}")
                             future.add_done_callback(_report_send_error)
                         except Exception as e:
+                            if resp_dict.get("type") == "camera_frame_response":
+                                with camera_send_lock:
+                                    camera_send_pending = False
                             print(f"[-] Could not serialize WebSocket response: {e}")
 
                 if self.command_handler:
@@ -1728,6 +1793,7 @@ class Server:
         self._performance_sampler_thread = None
         self._camera_stream_owner = None
         self._camera_stream_owner_lock = threading.Lock()
+        self._media_operation_lock = threading.Lock()
         self.auto_record_audio_with_video = False
         self._camera_auto_audio_recording = False
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
@@ -1859,10 +1925,74 @@ class Server:
         except Exception:
             pass
 
+    def _start_camera_stream_for_client(self, addr, respond, is_websocket):
+        self._stop_camera_stream_for_client()
+        owner_key = self._camera_client_key(addr)
+        session_id = secrets.token_hex(8)
+        with self._camera_stream_owner_lock:
+            self._camera_stream_owner = {
+                "key": owner_key,
+                "session_id": session_id,
+                "last_seen": time.monotonic(),
+            }
+
+        def _on_frame(encoded_frame):
+            respond({"type": "camera_frame_response", "frame": encoded_frame, "is_streaming": True})
+
+        max_bytes = 16 * 1024 if not is_websocket else None
+        started = self.camera_manager.start_stream(
+            _on_frame,
+            max_width=160 if max_bytes else 640,
+            quality=35 if max_bytes else 65,
+            max_frame_bytes=max_bytes,
+            fps=8 if max_bytes else 15,
+            on_stream_end_callback=lambda reason: self._on_camera_stream_ended(
+                session_id, owner_key, respond, reason
+            ),
+        )
+        if started and self.auto_record_audio_with_video and not self.audio_manager.recording:
+            audio_path = self.audio_manager.start_recording()
+            with self._camera_stream_owner_lock:
+                owner = self._camera_stream_owner
+                still_active = bool(owner and owner.get("session_id") == session_id)
+                self._camera_auto_audio_recording = bool(audio_path) and still_active
+            if audio_path and not still_active:
+                self.audio_manager.stop_recording()
+            if not audio_path:
+                print(f"[-] Could not record PC microphone with webcam session: {self.audio_manager.last_error}")
+        elif not started:
+            with self._camera_stream_owner_lock:
+                if self._camera_stream_owner and self._camera_stream_owner.get("session_id") == session_id:
+                    self._camera_stream_owner = None
+
+        response = {"type": "camera_stream_status", "streaming": bool(started)}
+        if started and self.camera_manager.last_recording_error:
+            response["message"] = self.camera_manager.last_recording_error
+        respond(response)
+
+    def _send_camera_snapshot(self, addr, respond, is_websocket):
+        # Camera drivers can block while waking or capturing. Keep that work
+        # away from the UDP receive loop so input and heartbeat packets flow.
+        b64 = self.camera_manager.get_snapshot(max_width=1920, quality=92)
+        if is_websocket:
+            respond({"type": "camera_frame_response", "frame": b64,
+                     "is_snapshot": True, "success": b64 is not None})
+        elif addr and self.sock and b64:
+            try:
+                raw_frame = base64.b64decode(b64, validate=True)
+                if not raw_frame or len(raw_frame) > 8 * 1024 * 1024:
+                    raise ValueError("Snapshot exceeds the 8 MiB transfer limit")
+                self._start_udp_snapshot_transfer(raw_frame, addr)
+            except Exception as exc:
+                self._send_udp_json({"type": "error", "message": f"Snapshot transfer failed: {exc}"}, addr)
+        elif addr and self.sock:
+            self._send_udp_json({"type": "camera_frame_response", "frame": None,
+                                 "is_snapshot": True, "success": False}, addr)
+
     def _expire_udp_camera_stream(self):
         with self._camera_stream_owner_lock:
             owner = self._camera_stream_owner
-            expired = bool(owner and owner["key"][0] == "wifi" and time.monotonic() - owner["last_seen"] > 8.0)
+            expired = bool(owner and owner["key"][0] == "wifi" and time.monotonic() - owner["last_seen"] > 30.0)
             key = owner["key"] if expired else None
         if key:
             print("[*] Wi-Fi camera client timed out; stopping webcam capture")
@@ -1951,12 +2081,41 @@ class Server:
             elif addr and self.sock:
                 self._send_udp_json(payload, addr)
 
-        def respond_media_state(action_success=None):
-            response = {"type": "media_status"}
-            response.update(self.media_controller.get_media_state())
-            if action_success is not None:
-                response["action_success"] = bool(action_success)
-            respond(response)
+        def respond_media_state(action=None, include_preview=False, include_video_preview=False):
+            # Media queries call WinRT/COM and can take seconds. Keep them off
+            # the UDP input loop so mouse, keyboard, and heartbeat packets are
+            # never queued behind a slow player or screenshot operation.
+            if action is None:
+                if not self._media_operation_lock.acquire(blocking=False):
+                    return
+                lock_acquired = True
+            else:
+                lock_acquired = False
+
+            def _run():
+                nonlocal lock_acquired
+                try:
+                    if action is not None:
+                        self._media_operation_lock.acquire()
+                        lock_acquired = True
+                        action_success = bool(action())
+                    else:
+                        action_success = None
+                    response = {"type": "media_status"}
+                    response.update(self.media_controller.get_media_state(include_preview=include_preview))
+                    if include_video_preview:
+                        response["video_preview"] = capture_selected_media_preview()
+                    if action_success is not None:
+                        response["action_success"] = action_success
+                    respond(response)
+                except Exception as exc:
+                    print(f"[-] Media command failed: {exc}")
+                    respond({"type": "error", "message": f"Media command failed: {str(exc)[:160]}"})
+                finally:
+                    if lock_acquired:
+                        self._media_operation_lock.release()
+
+            threading.Thread(target=_run, name="MediaCommand", daemon=True).start()
 
         if cmd_type in ("connect", "client_connect"):
             if not self._auth_attempt_allowed(addr):
@@ -1972,7 +2131,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.8"
+                    "version": "1.3.9"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2152,38 +2311,31 @@ class Server:
 
         elif cmd_type in ("media_query", "query_media"):
             # Mobile app querying live media status, track title, progression, and volume
-            state = self.media_controller.get_media_state(
-                include_preview=bool(data.get("include_preview", False))
+            respond_media_state(
+                include_preview=bool(data.get("include_preview", False)),
+                include_video_preview=bool(data.get("include_video_preview", False)),
             )
-            response = {"type": "media_status"}
-            response.update(state)
-            if data.get("include_video_preview"):
-                response["video_preview"] = capture_selected_media_preview()
-            if responder:
-                responder(response)
-            elif addr and self.sock:
-                self._send_udp_json(response, addr)
 
         elif cmd_type == "media_seek":
             pos = float(data.get("position", 0.0))
-            respond_media_state(self.media_controller.seek(pos))
+            respond_media_state(lambda: self.media_controller.seek(pos))
 
         elif cmd_type == "media_toggle":
-            respond_media_state(self.media_controller.toggle_play_pause())
+            respond_media_state(self.media_controller.toggle_play_pause)
 
         elif cmd_type == "media_next":
-            respond_media_state(self.media_controller.next_track())
+            respond_media_state(self.media_controller.next_track)
 
         elif cmd_type == "media_prev":
-            respond_media_state(self.media_controller.prev_track())
+            respond_media_state(self.media_controller.prev_track)
 
         elif cmd_type == "set_volume":
             vol = float(data.get("volume", 0.5))
-            respond_media_state(self.media_controller.set_volume(vol))
+            respond_media_state(lambda: self.media_controller.set_volume(vol))
 
         elif cmd_type == "set_mute":
             muted = bool(data.get("mute", False))
-            respond_media_state(self.media_controller.set_mute(muted))
+            respond_media_state(lambda: self.media_controller.set_mute(muted))
 
         elif cmd_type == "launch_app":
             app_id = str(data.get("app", "")).strip()
@@ -2271,27 +2423,35 @@ class Server:
             respond(self._get_recordings_list())
 
         elif cmd_type == "live_audio_start":
-            owner = self._camera_client_key(addr)
-            started, message = self.live_audio_manager.start_pc_to_phone(
-                owner, respond, record=bool(data.get("record", False)))
-            respond({"type": "live_audio_status", "direction": "pc_to_phone",
-                     "active": started, "recording": bool(started and data.get("record", False)),
-                     "message": message})
+            def _start_live_audio():
+                owner = self._camera_client_key(addr)
+                started, message = self.live_audio_manager.start_pc_to_phone(
+                    owner, respond, record=bool(data.get("record", False)))
+                respond({"type": "live_audio_status", "direction": "pc_to_phone",
+                         "active": started, "recording": bool(started and data.get("record", False)),
+                         "message": message})
+            threading.Thread(target=_start_live_audio, name="StartLiveAudio", daemon=True).start()
 
         elif cmd_type == "live_audio_stop":
-            self.live_audio_manager.stop_pc_to_phone(self._camera_client_key(addr))
-            respond({"type": "live_audio_status", "direction": "pc_to_phone", "active": False})
+            def _stop_live_audio():
+                self.live_audio_manager.stop_pc_to_phone(self._camera_client_key(addr))
+                respond({"type": "live_audio_status", "direction": "pc_to_phone", "active": False})
+            threading.Thread(target=_stop_live_audio, name="StopLiveAudio", daemon=True).start()
 
         elif cmd_type == "phone_audio_start":
-            started, message = self.live_audio_manager.start_phone_to_pc(
-                self._camera_client_key(addr), record=bool(data.get("record", False)), respond=respond)
-            respond({"type": "live_audio_status", "direction": "phone_to_pc",
-                     "active": started, "recording": bool(started and data.get("record", False)),
-                     "message": message})
+            def _start_phone_audio():
+                started, message = self.live_audio_manager.start_phone_to_pc(
+                    self._camera_client_key(addr), record=bool(data.get("record", False)), respond=respond)
+                respond({"type": "live_audio_status", "direction": "phone_to_pc",
+                         "active": started, "recording": bool(started and data.get("record", False)),
+                         "message": message})
+            threading.Thread(target=_start_phone_audio, name="StartPhoneAudio", daemon=True).start()
 
         elif cmd_type == "phone_audio_stop":
-            self.live_audio_manager.stop_phone_to_pc(self._camera_client_key(addr))
-            respond({"type": "live_audio_status", "direction": "phone_to_pc", "active": False})
+            def _stop_phone_audio():
+                self.live_audio_manager.stop_phone_to_pc(self._camera_client_key(addr))
+                respond({"type": "live_audio_status", "direction": "phone_to_pc", "active": False})
+            threading.Thread(target=_stop_phone_audio, name="StopPhoneAudio", daemon=True).start()
 
         elif cmd_type == "phone_audio_frame":
             try:
@@ -2333,75 +2493,26 @@ class Server:
             # Snapshot quality is independent of the lower-resolution live
             # preview. UDP transfers are split into MTU-safe chunks and can be
             # selectively retried; reliable transports receive one full frame.
-            b64 = self.camera_manager.get_snapshot(max_width=1920, quality=92)
-            if responder:
-                resp = {"type": "camera_frame_response", "frame": b64, "is_snapshot": True, "success": b64 is not None}
-                responder(resp)
-            elif addr and self.sock and b64:
-                try:
-                    raw_frame = base64.b64decode(b64, validate=True)
-                    if not raw_frame or len(raw_frame) > 8 * 1024 * 1024:
-                        raise ValueError("Snapshot exceeds the 8 MiB transfer limit")
-                    self._start_udp_snapshot_transfer(raw_frame, addr)
-                except Exception as exc:
-                    self._send_udp_json({"type": "error", "message": f"Snapshot transfer failed: {exc}"}, addr)
-            elif addr and self.sock:
-                self._send_udp_json({"type": "camera_frame_response", "frame": None, "is_snapshot": True, "success": False}, addr)
+            threading.Thread(
+                target=self._send_camera_snapshot,
+                args=(addr, respond, responder is not None),
+                name="CameraSnapshot",
+                daemon=True,
+            ).start()
 
         elif cmd_type in ("camera_stream_start", "start_camera_stream"):
-            self._stop_camera_stream_for_client()
-            owner_key = self._camera_client_key(addr)
-            session_id = secrets.token_hex(8)
-            with self._camera_stream_owner_lock:
-                self._camera_stream_owner = {
-                    "key": owner_key,
-                    "session_id": session_id,
-                    "last_seen": time.monotonic(),
-                }
-            def _on_frame(b64):
-                frame_data = {"type": "camera_frame_response", "frame": b64, "is_streaming": True}
-                respond(frame_data)
-            max_bytes = 16 * 1024 if responder is None else None
-            started = self.camera_manager.start_stream(
-                _on_frame,
-                max_width=160 if max_bytes else 640,
-                quality=35 if max_bytes else 65,
-                max_frame_bytes=max_bytes,
-                fps=8 if max_bytes else 15,
-                on_stream_end_callback=lambda reason: self._on_camera_stream_ended(
-                    session_id, owner_key, respond, reason
-                ),
-            )
-            if started:
-                if self.auto_record_audio_with_video and not self.audio_manager.recording:
-                    audio_path = self.audio_manager.start_recording()
-                    with self._camera_stream_owner_lock:
-                        owner = self._camera_stream_owner
-                        still_active = bool(owner and owner.get("session_id") == session_id)
-                        self._camera_auto_audio_recording = bool(audio_path) and still_active
-                    if audio_path and not still_active:
-                        self.audio_manager.stop_recording()
-                    if not audio_path:
-                        print(f"[-] Could not record PC microphone with webcam session: {self.audio_manager.last_error}")
-            else:
-                with self._camera_stream_owner_lock:
-                    if self._camera_stream_owner and self._camera_stream_owner.get("session_id") == session_id:
-                        self._camera_stream_owner = None
-            resp = {"type": "camera_stream_status", "streaming": bool(started)}
-            if started and self.camera_manager.last_recording_error:
-                resp["message"] = self.camera_manager.last_recording_error
-            if responder:
-                responder(resp)
-            elif addr and self.sock:
-                self._send_udp_json(resp, addr)
+            threading.Thread(
+                target=self._start_camera_stream_for_client,
+                args=(addr, respond, responder is not None),
+                name="StartCameraStream",
+                daemon=True,
+            ).start()
 
         elif cmd_type in ("camera_stream_stop", "stop_camera_stream"):
-            self._stop_camera_stream_for_client(self._camera_client_key(addr))
-            resp = {"type": "camera_stream_status", "streaming": False}
-            if responder:
-                responder(resp)
-            elif addr and self.sock:
-                self._send_udp_json(resp, addr)
+            def _stop_camera():
+                self._stop_camera_stream_for_client(self._camera_client_key(addr))
+                respond({"type": "camera_stream_status", "streaming": False})
+            threading.Thread(target=_stop_camera, name="StopCameraStream", daemon=True).start()
 
         elif cmd_type in ("audio_record_start", "start_audio_record"):
             rec_file = self.audio_manager.start_recording()

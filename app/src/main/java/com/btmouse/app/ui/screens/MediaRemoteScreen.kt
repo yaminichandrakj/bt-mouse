@@ -96,7 +96,6 @@ fun MediaRemoteScreen(
     val isConnected by coordinator.isConnected.collectAsState()
     val volumeNavigation by settings.presentationVolumeNavigation.collectAsState()
     val view = LocalView.current
-    var previewEnabled by remember { mutableStateOf(false) }
     var videoPreviewEnabled by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
@@ -105,11 +104,11 @@ fun MediaRemoteScreen(
     }
 
     // Periodically poll PC media state while on this screen
-    LaunchedEffect(isConnected, previewEnabled, videoPreviewEnabled, mediaStatus.artworkBase64) {
+    LaunchedEffect(isConnected, videoPreviewEnabled) {
         while (true) {
             if (isConnected) {
                 coordinator.queryMedia(
-                    includePreview = previewEnabled && mediaStatus.artworkBase64.isEmpty(),
+                    includePreview = false,
                     includeVideoPreview = videoPreviewEnabled
                 )
             }
@@ -183,11 +182,20 @@ fun MediaRemoteScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val artworkBitmap = remember(mediaStatus.artworkBase64) {
-                        runCatching {
-                            val bytes = Base64.decode(mediaStatus.artworkBase64, Base64.DEFAULT)
-                            if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                        }.getOrNull()
+                    val playerName = mediaStatus.playerName.lowercase()
+                    val playerMark = when {
+                        "youtube music" in playerName -> "YTM"
+                        "youtube" in playerName -> "YT"
+                        "netflix" in playerName -> "N"
+                        "prime" in playerName -> "P"
+                        "disney" in playerName -> "D+"
+                        "spotify" in playerName -> "S"
+                        "apple music" in playerName -> "AM"
+                        "vlc" in playerName -> "VLC"
+                        "chrome" in playerName -> "C"
+                        "edge" in playerName -> "E"
+                        "firefox" in playerName -> "F"
+                        else -> mediaStatus.playerName.take(3).uppercase()
                     }
                     Box(
                         modifier = Modifier
@@ -200,8 +208,8 @@ fun MediaRemoteScreen(
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (previewEnabled && artworkBitmap != null) {
-                            Image(bitmap = artworkBitmap, contentDescription = "Playing media artwork", modifier = Modifier.fillMaxSize())
+                        if (playerMark.isNotBlank()) {
+                            Text(playerMark, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
                         } else {
                             Icon(
                                 imageVector = Icons.Default.MusicNote,
@@ -224,7 +232,8 @@ fun MediaRemoteScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = if (mediaStatus.hasMedia && mediaStatus.artist.isNotEmpty()) mediaStatus.artist else "Windows Media Session",
+                            text = if (mediaStatus.hasMedia && mediaStatus.artist.isNotEmpty()) mediaStatus.artist
+                                else mediaStatus.playerName.ifBlank { "Windows Media Session" },
                             color = TextSecondary,
                             fontSize = 12.sp,
                             maxLines = 1,
@@ -255,15 +264,6 @@ fun MediaRemoteScreen(
                             softWrap = false
                         )
                     }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Show playing media artwork", color = TextSecondary, fontSize = 11.sp)
-                    Switch(checked = previewEnabled, onCheckedChange = { previewEnabled = it })
                 }
 
                 Row(

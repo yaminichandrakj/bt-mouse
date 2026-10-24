@@ -224,6 +224,7 @@ class BluetoothRfcommManager(
                         title = title,
                         artist = artist,
                         album = album,
+                        playerName = root.get("player")?.asString ?: "",
                         status = status,
                         position = position,
                         duration = duration,

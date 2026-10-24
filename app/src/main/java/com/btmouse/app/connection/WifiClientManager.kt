@@ -198,6 +198,7 @@ class WifiClientManager(
                         title = title,
                         artist = artist,
                         album = album,
+                        playerName = json.get("player")?.asString ?: "",
                         status = status,
                         position = position,
                         duration = duration,
@@ -424,16 +425,14 @@ class WifiClientManager(
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 if (_isConnected.value) {
-                    if (android.os.SystemClock.elapsedRealtime() - lastPongAtMs > 8_000L) {
+                    if (android.os.SystemClock.elapsedRealtime() - lastPongAtMs > 30_000L) {
                         _isConnected.value = false
                         _connectedDeviceName.value = null
                         clearSessionState()
-                        _statusMessage.value = "PC server stopped responding"
+                        _statusMessage.value = "PC server has not responded for 30 seconds"
                         break
                     }
                     sendPacket(mapOf("type" to "ping"))
-                    // Periodically poll PC media state
-                    queryMedia()
                 }
                 delay(1500)
             }
