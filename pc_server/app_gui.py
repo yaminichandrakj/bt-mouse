@@ -49,7 +49,7 @@ except ImportError:
     HAS_QR = False
 
 try:
-    from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QSize, QRect
+    from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QSize, QRect, QPoint
     from PySide6.QtGui import QIcon, QPixmap, QImage, QFont, QColor, QAction, QPainter, QPen, QBrush, QCursor
     from PySide6.QtWidgets import (
         QApplication,
@@ -621,7 +621,7 @@ class CompanionApp(QMainWindow):
         elif os.path.exists(self.icon_path):
             self.setWindowIcon(QIcon(self.icon_path))
 
-        self.setStyleSheet(FLUENT_QSS)
+        self.setStyleSheet(FLUENT_QSS + self._checkmark_qss())
         apply_windows_dwm_dark_frame(self.winId())
 
         # Build Fluent Main Layout
@@ -657,6 +657,28 @@ class CompanionApp(QMainWindow):
 
         if "--minimized" in sys.argv:
             QTimer.singleShot(500, self.hide_to_tray)
+
+    @staticmethod
+    def _checkmark_qss():
+        """QSS can only draw an indicator tick from an image file, so render one once at startup."""
+        try:
+            size = 36
+            pix = QPixmap(size, size)
+            pix.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pix)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#FFFFFF"), 5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPolyline([QPoint(9, 19), QPoint(15, 25), QPoint(27, 11)])
+            painter.end()
+            path = Path(tempfile.gettempdir()) / "btmouse-checkmark.png"
+            if not pix.save(str(path), "PNG"):
+                return ""
+            return 'QCheckBox::indicator:checked { image: url("%s"); }' % path.as_posix()
+        except Exception:
+            return ""
 
     # ------------------------------------------------------------------
     # Startup & Self-Healing Helpers (also tested directly in unit tests)
@@ -816,7 +838,7 @@ class CompanionApp(QMainWindow):
         self.lbl_status_pill.setStyleSheet(
             "background-color: #062E22; color: #10B981; border: 1px solid #059669; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
         )
-        h_layout.addWidget(self.lbl_status_pill)
+        h_layout.addWidget(self.lbl_status_pill, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.btn_toggle = QPushButton("Stop Server")
         self.btn_toggle.setObjectName("DangerBtn")
@@ -857,14 +879,14 @@ class CompanionApp(QMainWindow):
         self.nav_buttons = []
 
         pages = [
-            ("📱  Wi-Fi & QR Pairing", self._create_wifi_page),
+            ("📱  Wi-Fi && QR Pairing", self._create_wifi_page),
             ("📷  Phone as Webcam", self._create_phone_cam_page),
-            ("🎬  Media Library (Videos / Audios)", self._create_recordings_page),
-            ("🚀  Desktop, Webcam & Quick Apps", self._create_desktop_page),
-            ("📶  Bluetooth Mode", self._create_bt_page),
+            ("🎬  Media Library", self._create_recordings_page),
+            ("🚀  Webcam && Quick Apps", self._create_desktop_page),
+            ("📶  Bluetooth", self._create_bt_page),
             ("🌐  Remote Access (WAN)", self._create_wan_page),
             ("✍️  Tablet Drawing Slate", self._create_tablet_page),
-            ("📊  Live Activity Monitor", self._create_logs_page),
+            ("📊  Live Monitor", self._create_logs_page),
         ]
 
         for idx, (label, builder) in enumerate(pages):
@@ -893,17 +915,17 @@ class CompanionApp(QMainWindow):
 
         folder_btn_row = QHBoxLayout()
         folder_btn_row.setSpacing(4)
-        btn_vid_f = QPushButton("📹 Videos")
+        btn_vid_f = QPushButton("Videos")
         btn_vid_f.setStyleSheet("padding: 5px 6px; font-size: 11px;")
         btn_vid_f.clicked.connect(self.open_videos_folder)
         folder_btn_row.addWidget(btn_vid_f)
 
-        btn_aud_f = QPushButton("🎙️ Audios")
+        btn_aud_f = QPushButton("Audios")
         btn_aud_f.setStyleSheet("padding: 5px 6px; font-size: 11px;")
         btn_aud_f.clicked.connect(self.open_audios_folder)
         folder_btn_row.addWidget(btn_aud_f)
 
-        btn_snap_f = QPushButton("📷 Snaps")
+        btn_snap_f = QPushButton("Snaps")
         btn_snap_f.setStyleSheet("padding: 5px 6px; font-size: 11px;")
         btn_snap_f.clicked.connect(self.open_snapshots_folder)
         folder_btn_row.addWidget(btn_snap_f)
@@ -1116,11 +1138,11 @@ class CompanionApp(QMainWindow):
         self.lbl_phone_cam_preview.double_clicked.connect(self.open_phone_cam_fullscreen)
         p_layout.addWidget(self.lbl_phone_cam_preview, 1)
 
-        # Viewfinder Toolbar
-        vf_bar = QHBoxLayout()
+        # Viewfinder Toolbar (telemetry gets its own line so it never squeezes the buttons)
         self.lbl_phone_cam_telemetry = QLabel("Waiting for stream from phone...")
         self.lbl_phone_cam_telemetry.setStyleSheet("color: #94A3B8; font-size: 12px;")
-        vf_bar.addWidget(self.lbl_phone_cam_telemetry)
+        p_layout.addWidget(self.lbl_phone_cam_telemetry)
+        vf_bar = QHBoxLayout()
         vf_bar.addStretch()
 
         btn_rot = QPushButton("↻ Rotate 90°")
@@ -1236,9 +1258,9 @@ class CompanionApp(QMainWindow):
         t_col.addWidget(lbl_t)
         lbl_s = QLabel("Automatically organized into dedicated Videos, Audios, and Snapshots folders on this PC.")
         lbl_s.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        lbl_s.setWordWrap(True)
         t_col.addWidget(lbl_s)
-        top_row.addLayout(t_col)
-        top_row.addStretch()
+        top_row.addLayout(t_col, 1)
 
         btn_vf = QPushButton("📹 Videos Folder")
         btn_vf.clicked.connect(self.open_videos_folder)
@@ -1357,6 +1379,7 @@ class CompanionApp(QMainWindow):
     def _create_desktop_page(self):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -1369,11 +1392,12 @@ class CompanionApp(QMainWindow):
         cam_l.setContentsMargins(20, 16, 20, 16)
         cam_l.setSpacing(10)
 
-        cam_hdr = QHBoxLayout()
         lbl_ct = QLabel("💻  PC Webcam Live Monitor & Combined Audio+Video Recording")
         lbl_ct.setStyleSheet("font-size: 16px; font-weight: 700;")
-        cam_hdr.addWidget(lbl_ct)
-        cam_hdr.addStretch()
+        lbl_ct.setWordWrap(True)
+        cam_l.addWidget(lbl_ct)
+
+        cam_hdr = QHBoxLayout()
 
         self.btn_pc_cam_live = QPushButton("📹 Start PC Webcam Preview")
         self.btn_pc_cam_live.setObjectName("CyanBtn")
@@ -1393,6 +1417,7 @@ class CompanionApp(QMainWindow):
         btn_pc_fs.setObjectName("PrimaryBtn")
         btn_pc_fs.clicked.connect(self.open_pc_cam_fullscreen)
         cam_hdr.addWidget(btn_pc_fs)
+        cam_hdr.addStretch()
         cam_l.addLayout(cam_hdr)
 
         self.lbl_cam_preview = AspectRatioVideoWidget(
@@ -1406,6 +1431,7 @@ class CompanionApp(QMainWindow):
 
         self.lbl_media_status = QLabel("PC Webcam & Microphone ready. Live recordings automatically combine video + audio into Videos/.")
         self.lbl_media_status.setStyleSheet("color: #38BDF8; font-size: 12px;")
+        self.lbl_media_status.setWordWrap(True)
         cam_l.addWidget(self.lbl_media_status)
 
         layout.addWidget(cam_card)
@@ -1444,33 +1470,39 @@ class CompanionApp(QMainWindow):
         self.chk_auto_audio.toggled.connect(self._save_recording_preferences)
         pol_l.addWidget(self.chk_auto_audio)
 
-        lim_row = QHBoxLayout()
-        lim_row.addWidget(QLabel("Auto-delete older than (days, 0=keep):"))
+        lim_grid = QGridLayout()
+        lim_grid.setHorizontalSpacing(12)
+        lim_grid.setVerticalSpacing(8)
         self.spin_retention = QSpinBox()
         self.spin_retention.setRange(0, 3650)
         self.spin_retention.setValue(self.recording_retention_days)
-        lim_row.addWidget(self.spin_retention)
-
-        lim_row.addWidget(QLabel("Max library MB (0=unlimited):"))
         self.spin_max_mb = QSpinBox()
         self.spin_max_mb.setRange(0, 500000)
         self.spin_max_mb.setSingleStep(512)
         self.spin_max_mb.setValue(self.recording_max_storage_mb)
-        lim_row.addWidget(self.spin_max_mb)
-
-        lim_row.addWidget(QLabel("Min free disk MB:"))
         self.spin_min_free = QSpinBox()
         self.spin_min_free.setRange(0, 100000)
         self.spin_min_free.setSingleStep(256)
         self.spin_min_free.setValue(self.recording_min_free_mb)
-        lim_row.addWidget(self.spin_min_free)
+        for col, (caption, spin) in enumerate(
+            (
+                ("Auto-delete after (days, 0 = keep)", self.spin_retention),
+                ("Max library size (MB, 0 = unlimited)", self.spin_max_mb),
+                ("Keep free disk space (MB)", self.spin_min_free),
+            )
+        ):
+            lbl_cap = QLabel(caption)
+            lbl_cap.setStyleSheet("color: #94A3B8; font-size: 12px;")
+            lim_grid.addWidget(lbl_cap, 0, col)
+            spin.setMinimumWidth(140)
+            lim_grid.addWidget(spin, 1, col)
 
         btn_save_lim = QPushButton("Save Limits")
         btn_save_lim.setObjectName("PrimaryBtn")
         btn_save_lim.clicked.connect(self._save_recording_preferences)
-        lim_row.addWidget(btn_save_lim)
-        lim_row.addStretch()
-        pol_l.addLayout(lim_row)
+        lim_grid.addWidget(btn_save_lim, 1, 3)
+        lim_grid.setColumnStretch(4, 1)
+        pol_l.addLayout(lim_grid)
 
         prev_row = QHBoxLayout()
         btn_sel_reg = QPushButton("📐 Select Media Player Preview Area")

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import app_gui
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 
@@ -39,7 +40,17 @@ def main():
         print(f"saved {target}")
 
     print(f"pages={win.stack.count()} nav_buttons={len(win.nav_buttons)}", flush=True)
-    return 0 if win.stack.count() == len(win.nav_buttons) else 3
+    code = 0 if win.stack.count() == len(win.nav_buttons) else 3
+
+    # Shut down the way the companion's Exit action does, so CI also covers a clean exit.
+    if win.tray_icon:
+        win.tray_icon.hide()
+    win.hide()
+    QTimer.singleShot(0, app.quit)
+    app.exec()
+    win.deleteLater()
+    app.processEvents()
+    return code
 
 
 if __name__ == "__main__":
@@ -53,5 +64,4 @@ if __name__ == "__main__":
         traceback.print_exc(file=sys.stdout)
         code = 2
     print(f"ui_snapshots exit code {code}", flush=True)
-    # Skip interpreter/Qt teardown: server daemon threads and the tray icon can stall or crash it.
-    os._exit(code)
+    sys.exit(code)
