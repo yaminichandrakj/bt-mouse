@@ -936,7 +936,9 @@ class CameraManager:
             import cv2
             with self.lock:
                 stream_active = self.streaming
-                frame = self.latest_frame.copy() if stream_active and self.latest_frame is not None else None
+                cached_frame = self.latest_frame
+                frame = (cached_frame.copy() if callable(getattr(cached_frame, "copy", None)) else cached_frame) \
+                    if stream_active and cached_frame is not None else None
             if stream_active:
                 # Reuse the live capture; opening another VideoCapture for the
                 # same webcam can reset the Windows camera driver.
@@ -1050,7 +1052,8 @@ class CameraManager:
                     if ret and frame is not None:
                         with self.lock:
                             if generation == self.generation:
-                                self.latest_frame = frame.copy()
+                                copy_frame = getattr(frame, "copy", None)
+                                self.latest_frame = copy_frame() if callable(copy_frame) else frame
                         if record_enabled:
                             if writer is None and not recording_attempted:
                                 recording_attempted = True
