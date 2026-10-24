@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.13
-**Owner:** Codex | **Release:** [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.14
+**Owner:** Codex | **Release:** [v1.3.14 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14) · [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
 
 ## Product objective
 
@@ -9,7 +9,7 @@ Make the Android phone a dependable PC input and companion device over Bluetooth
 
 ## Current implementation snapshot
 
-Source status below distinguishes CI/build verification from physical-device verification. v1.3.13 passed the GitHub Actions version check, 28 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
+Source status below distinguishes CI/build verification from physical-device verification. v1.3.14 passed the GitHub Actions version check, 31 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
 
 | Area | Present in source | Remaining |
 |---|---|---|
@@ -17,11 +17,12 @@ Source status below distinguishes CI/build verification from physical-device ver
 | Quick Apps | Curated Start Menu shortcuts; discovery and add/remove sync; phone launch notifications and missing shortcut reporting; cache fallback preserves saved entries | Hardware checks on target PC/phone |
 | Tasks and stats | Cached/default response then background refresh; measured CPU sample; up to 200 processes sorted by usage; end-task result returned and list refreshed | Compare live values with Task Manager on target PC |
 | PC webcam | Snapshot gallery stored in phone Pictures directory with delete support; PC snapshots in `%LOCALAPPDATA%\BTMouse\Snapshots`; live preview survives navigation; MP4 recordings | Verify codecs, webcam lifecycle, and playback on target PC/phone |
+| Phone as PC webcam | Android Camera2 hardware-accelerated JPEG capture; rear/front lens flip; 360p/480p/720p; foreground service camera type; PC HTTP MJPEG server at :8766; pyvirtualcam integration; companion GUI preview | Test with OBS/Zoom/Teams on target PC |
 | Recordings | Full desktop recordings table with search, category filtering, sort, and Explorer openers; delete support on both PC and phone with confirmation | Verify on target devices |
 | PC master volume & media | Hardened COM threading across pycaw and WinRT; Playing-session priority in SMTC; phone decoded artwork display separate from video preview | Device checks on target audio configurations |
 | Live audio | PC mic and phone mic routes; PC output resampling/channel conversion; first-audio and actual recording status; live controls inside Camera & Mic | Verify latency, device changes, interruption recovery |
-| Startup/update | Windows sign-in self-healing, Android foreground session service, connection supervisor with exponential backoff, version consistency in Actions | Phone camera as PC camera source (Phase 5) |
-| Desktop UI | Python companion packaged as a one-file EXE; DPI awareness and version/path title; new Recordings manager tab | Native Windows app migration not done |
+| Startup/update | Windows sign-in self-healing, Android foreground session service, connection supervisor with exponential backoff, version consistency in Actions | Phase 6 laptop unlock feasibility research |
+| Desktop UI | Python companion packaged as a one-file EXE; DPI awareness and version/path title; new Recordings manager tab; Phone as Webcam tab | Native Windows app migration not done |
 | Laptop unlock | Explicitly unsupported in server | Research supported Windows Hello/passkey integration; no password injection |
 
 ## Product and security constraints
@@ -64,14 +65,12 @@ Completed implementation work is recorded in the release notes and current imple
 - **Seamless Path Switching:** Client `path_switch` handshake and server `_release_mouse_buttons()` prevents stuck or held buttons; previous transport emits zero-button release; fresh media query resynchronizes SMTC state.
 - **Live Status & Settings:** Top-bar and Connection-screen active transport badges with live latency (e.g. `Wi-Fi • 12ms`); toggle for automatic measured failover in Settings.
 
-### Phase 5 - Phone camera as a PC camera source (very high effort; current priority)
-
-- Add a user-started Android camera session with preview, front/back switching, resolution/frame-rate controls, privacy indicator, permission handling, and stop.
-- Use bounded adaptive streaming over authenticated transports.
-- Prototype a Windows Media Foundation virtual-camera endpoint; investigate supported Windows builds, registration, signing, installation, and packaging.
-- Keep phone-camera streaming separate from PC webcam capture and browser preview. Respect Android background and lock-screen restrictions.
-
-**Acceptance:** supported PC apps can select the phone camera; switching/stopping releases it; unsupported configurations show a clear reason.
+### Phase 5 - Phone camera as a PC camera source (Completed in v1.3.14)
+- **Android Camera2 Wireless Streamer:** Hardware-accelerated JPEG encoding via `ImageReader` directly from Android `Camera2` API; dynamic front/rear camera flip; resolution profiles (360p, 480p, 720p HD) and frame rate selectors (15, 24, 30 fps); rate-limited wireless pipeline.
+- **Viewfinder & Privacy Indicator:** Dedicated "Phone as PC Webcam" card in Android "Camera & Mic" utilities tab with live viewfinder, real-time FPS/bitrate/resolution telemetry, and persistent "LIVE TO PC" privacy badge.
+- **Android Foreground Service:** Integrated `FOREGROUND_SERVICE_TYPE_CAMERA` into `CompanionSessionService` and `AndroidManifest.xml` with persistent "Stop Stream" notification control.
+- **PC Companion Virtual Camera & Local MJPEG Server:** Embedded zero-driver HTTP MJPEG server at `http://127.0.0.1:8766/phone_cam/mjpeg` and snapshot endpoint for OBS/VLC/browsers; direct `pyvirtualcam` adapter for OBS Virtual Camera/DirectShow in Zoom, Teams, Meet; dedicated "📷 Phone as Webcam" GUI tab in PC Companion.
+- **Testing & Stability:** Thread-safe frame receiver with automated teardown on client disconnect; 31 companion regression unit tests pass.
 
 ### Phase 6 - Phone-based laptop unlock feasibility (exploratory; very high/platform dependent)
 
@@ -124,3 +123,7 @@ Completed implementation work is recorded in the release notes and current imple
 - [ ] Compare disk/GPU readings with Task Manager.
 - [x] ~~Verify v1.3.10 CI artifacts, signing identity, version/tag consistency, release notes, and assets.~~
 - [x] ~~Publish v1.3.10 after both CI builds pass; hardware checks unavailable in CI remain open.~~ Release: [v1.3.10](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.10), with [APK](https://github.com/yaminichandrakj/bt-mouse/releases/download/v1.3.10/BT-Mouse-v1.3.10.apk) and [Windows companion](https://github.com/yaminichandrakj/bt-mouse/releases/download/v1.3.10/BT-Mouse-Companion.exe).
+- [x] ~~Publish v1.3.11 (Phase 1 & Phase 2 completed).~~ Release: [v1.3.11](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11).
+- [x] ~~Publish v1.3.12 (Phase 3 completed).~~ Release: [v1.3.12](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12).
+- [x] ~~Publish v1.3.13 (Phase 4 completed).~~ Release: [v1.3.13](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13).
+- [x] ~~Publish v1.3.14 (Phase 5 completed).~~ Release: [v1.3.14](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14).

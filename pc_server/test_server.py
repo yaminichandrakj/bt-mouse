@@ -667,5 +667,78 @@ class ConcurrentTransportFailoverTests(unittest.TestCase):
         self.assertEqual(responses, [{"type": "path_switch_ack", "success": True}])
 
 
+class PhoneCameraSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.instance = object.__new__(server.Server)
+        self.instance.auth_token = "123456"
+        self.instance.auth_failures = {}
+        self.instance.connected_client = None
+        self.instance.on_packet_callback = None
+        self.instance.on_phone_cam_callback = None
+        self.instance._camera_stream_owner_lock = threading.Lock()
+        self.instance.live_audio_manager = Mock()
+        self.instance._cmd_seq_lock = threading.Lock()
+        self.instance._last_cmd_seq = {}
+        self.instance.phone_camera_receiver = server.PhoneCameraReceiver()
+        self.instance.phone_camera_http = Mock()
+        self.instance.phone_camera_http.port = 8766
+        self.instance.get_local_ip = lambda: "192.168.1.100"
+
+    def test_phone_cam_start_acknowledgement(self):
+        responses = []
+        self.instance.handle_packet(
+            {"type": "phone_cam_start", "token": "123456", "lens": "front", "width": 1280, "height": 720},
+            ("127.0.0.1", 9999),
+            responses.append
+        )
+        self.assertEqual(len(responses), 1)
+        resp = responses[0]
+        self.assertEqual(resp["type"], "phone_cam_start_ack")
+        self.assertTrue(resp["success"])
+        self.assertIn("8766/phone_cam/mjpeg", resp["mjpeg_url"])
+        self.assertTrue(self.instance.phone_camera_receiver.is_active)
+        self.assertEqual(self.instance.phone_camera_receiver.lens, "front")
+        self.assertEqual(self.instance.phone_camera_receiver.width, 1280)
+        self.assertEqual(self.instance.phone_camera_receiver.height, 720)
+
+    def test_phone_cam_frame_updates_receiver_and_dispatches_callback(self):
+        dispatched = []
+        self.instance.on_phone_cam_callback = lambda raw, w, h, lens: dispatched.append((raw, w, h, lens))
+        test_frame = b"\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xFF\xDB\x00C\x00\xFF\xD9"
+        b64 = base64.b64encode(test_frame).decode("ascii")
+
+        self.instance.handle_packet(
+            {"type": "phone_cam_frame", "token": "123456", "lens": "back", "w": 640, "h": 360, "frame": b64},
+            ("127.0.0.1", 9999),
+            lambda r: None
+        )
+
+        self.assertEqual(self.instance.phone_camera_receiver.latest_jpeg, test_frame)
+        self.assertEqual(self.instance.phone_camera_receiver.frame_count, 1)
+        self.assertEqual(len(dispatched), 1)
+        self.assertEqual(dispatched[0], (test_frame, 640, 360, "back"))
+
+        status = self.instance.phone_camera_receiver.get_status()
+        self.assertTrue(status["active"])
+        self.assertTrue(status["has_frame"])
+        self.assertEqual(status["width"], 640)
+        self.assertEqual(status["height"], 360)
+
+    def test_phone_cam_stop_resets_state(self):
+        self.instance.phone_camera_receiver.start("back", 640, 360)
+        self.instance.phone_camera_receiver.update_frame(b"dummy_jpeg", 640, 360, "back")
+        self.assertTrue(self.instance.phone_camera_receiver.is_active)
+
+        responses = []
+        self.instance.handle_packet(
+            {"type": "phone_cam_stop", "token": "123456"},
+            ("127.0.0.1", 9999),
+            responses.append
+        )
+        self.assertEqual(responses, [{"type": "phone_cam_stop_ack", "success": True}])
+        self.assertFalse(self.instance.phone_camera_receiver.is_active)
+        self.assertIsNone(self.instance.phone_camera_receiver.latest_jpeg)
+
+
 if __name__ == "__main__":
     unittest.main()

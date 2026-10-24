@@ -22,6 +22,7 @@ import urllib.error
 from pathlib import Path
 from datetime import datetime
 import shutil
+import webbrowser
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -57,7 +58,7 @@ from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_crea
                     save_pairing_pin, load_quick_apps, save_quick_apps,
                     load_media_preview_region, save_media_preview_region)
 
-APP_VERSION = "1.3.13"
+APP_VERSION = "1.3.14"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -132,6 +133,11 @@ class CompanionApp(tk.Tk):
         self.title(f"BT Mouse Companion v{APP_VERSION} — {executable_path}")
         self.after(500, self._show_update_recovery_notice)
         self.after(3000, self._refresh_recordings_loop)
+        self.phone_cam_photo = None
+        self.phone_cam_pending_update = False
+        if hasattr(self.server, "phone_camera_receiver") and self.server.phone_camera_receiver:
+            self.server.phone_camera_receiver.register_callback(self._on_phone_cam_frame_received)
+        self.after(2000, self._check_phone_cam_active)
 
         # System Tray setup
         self.tray_icon = None
@@ -405,6 +411,10 @@ class CompanionApp(tk.Tk):
         self.tab_recordings = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
         self.notebook.add(self.tab_recordings, text="🎬 Recordings")
         self._build_recordings_tab()
+
+        self.tab_phone_cam = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
+        self.notebook.add(self.tab_phone_cam, text="📷 Phone as Webcam")
+        self._build_phone_cam_tab()
 
         self.tab_tablet = tk.Frame(self.notebook, bg=BG_DARK, padx=12, pady=12)
         self.notebook.add(self.tab_tablet, text="✍️ Tablet Writing Pad")
@@ -1583,6 +1593,218 @@ class CompanionApp(tk.Tk):
             relief="flat", padx=10, pady=6, cursor="hand2",
             command=self.delete_selected_recording
         ).pack(side="left", padx=(4, 0))
+
+    def _build_phone_cam_tab(self):
+        container = tk.Frame(self.tab_phone_cam, bg=BG_DARK)
+        container.pack(fill="both", expand=True)
+
+        preview_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
+                                highlightbackground=CARD_BORDER, highlightthickness=1)
+        preview_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        preview_header = tk.Frame(preview_card, bg=CARD_BG)
+        preview_header.pack(fill="x", pady=(0, 10))
+
+        tk.Label(
+            preview_header, text="📹 Phone Camera Stream",
+            font=("Segoe UI", 12, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
+        ).pack(side="left")
+
+        self.lbl_phone_cam_status = tk.Label(
+            preview_header, text="○ STANDBY",
+            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED
+        )
+        self.lbl_phone_cam_status.pack(side="right")
+
+        viewfinder_container = tk.Frame(preview_card, bg="#050811", highlightbackground=CARD_BORDER, highlightthickness=1)
+        viewfinder_container.pack(fill="both", expand=True, pady=6)
+
+        self.lbl_phone_cam_preview = tk.Label(
+            viewfinder_container,
+            text="📷 Phone Camera Standby\n\nOpen BT Mouse mobile app\nGo to Camera & Mic ➔ Start Phone Camera\nto broadcast live video to this PC.",
+            font=("Segoe UI", 10), bg="#050811", fg=TEXT_MUTED, justify="center"
+        )
+        self.lbl_phone_cam_preview.pack(fill="both", expand=True, padx=8, pady=8)
+
+        telemetry_bar = tk.Frame(preview_card, bg=CARD_BG)
+        telemetry_bar.pack(fill="x", pady=(8, 0))
+
+        self.lbl_phone_cam_telemetry = tk.Label(
+            telemetry_bar, text="Waiting for stream from phone...",
+            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
+        )
+        self.lbl_phone_cam_telemetry.pack(side="left", fill="x", expand=True)
+
+        self.lbl_phone_cam_counter = tk.Label(
+            telemetry_bar, text="0 frames",
+            font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN, anchor="e"
+        )
+        self.lbl_phone_cam_counter.pack(side="right")
+
+        controls_card = tk.Frame(container, bg=CARD_BG, padx=16, pady=16, relief="flat",
+                                 highlightbackground=CARD_BORDER, highlightthickness=1, width=380)
+        controls_card.pack(side="right", fill="both", padx=(8, 0))
+        controls_card.pack_propagate(False)
+
+        tk.Label(
+            controls_card, text="⚙️ PC Virtual Camera & Loopback",
+            font=("Segoe UI", 12, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
+        ).pack(anchor="w", pady=(0, 4))
+
+        tk.Label(
+            controls_card, text="Stream your phone camera directly into OBS, Zoom, Teams, Discord, and browsers.",
+            font=("Segoe UI", 9), bg=CARD_BG, fg=TEXT_MUTED, wraplength=340, justify="left"
+        ).pack(anchor="w", pady=(0, 12))
+
+        mjpeg_group = tk.LabelFrame(controls_card, text=" Localhost MJPEG Stream URL ", font=("Segoe UI", 9, "bold"),
+                                    bg=CARD_BG, fg=ACCENT_CYAN, padx=10, pady=10)
+        mjpeg_group.pack(fill="x", pady=(0, 12))
+
+        port = getattr(getattr(self.server, "phone_camera_http", None), "port", 8766)
+        mjpeg_url = f"http://127.0.0.1:{port}/phone_cam/mjpeg"
+
+        self.lbl_phone_mjpeg_url = tk.Label(
+            mjpeg_group, text=mjpeg_url,
+            font=("Consolas", 9, "bold"), bg=CARD_BORDER, fg=TEXT_PRIMARY,
+            padx=8, pady=6, anchor="w"
+        )
+        self.lbl_phone_mjpeg_url.pack(fill="x", pady=(0, 8))
+
+        btn_row = tk.Frame(mjpeg_group, bg=CARD_BG)
+        btn_row.pack(fill="x")
+
+        tk.Button(
+            btn_row, text="📋 Copy URL", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=5, cursor="hand2",
+            command=self._copy_phone_mjpeg_url
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            btn_row, text="🌐 Open in Browser", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_CYAN, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=5, cursor="hand2",
+            command=lambda: webbrowser.open(self.lbl_phone_mjpeg_url.cget("text"))
+        ).pack(side="left")
+
+        setup_group = tk.LabelFrame(controls_card, text=" 3-Step Setup for Zoom / Teams / Meet ",
+                                    font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY,
+                                    padx=10, pady=10)
+        setup_group.pack(fill="x", pady=(0, 12))
+
+        steps_text = (
+            "1. Open OBS Studio (or VLC / ManyCam).\n"
+            "2. Add Source ➔ Media Source ➔ Uncheck 'Local file' ➔ Paste the MJPEG URL above.\n"
+            "3. Click 'Start Virtual Camera' in OBS Studio.\n\n"
+            "Now select 'OBS Virtual Camera' inside Zoom, Teams, Discord, or Google Meet!"
+        )
+        tk.Label(
+            setup_group, text=steps_text,
+            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED,
+            justify="left", wraplength=330
+        ).pack(anchor="w")
+
+        vcam_group = tk.LabelFrame(controls_card, text=" Direct Virtual Camera Driver ",
+                                   font=("Segoe UI", 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY,
+                                   padx=10, pady=10)
+        vcam_group.pack(fill="x", pady=(0, 12))
+
+        vcam_status = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_status", "MJPEG_STREAM")
+        vcam_err = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_error", "MJPEG stream ready.")
+
+        self.lbl_vcam_status = tk.Label(
+            vcam_group, text=f"Backend: {vcam_status}",
+            font=("Segoe UI", 9, "bold"), bg=CARD_BG,
+            fg=ACCENT_GREEN if vcam_status.startswith("ACTIVE") else ACCENT_CYAN
+        )
+        self.lbl_vcam_status.pack(anchor="w")
+
+        tk.Label(
+            vcam_group, text=vcam_err,
+            font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED,
+            justify="left", wraplength=330
+        ).pack(anchor="w", pady=(2, 0))
+
+        snapshot_group = tk.Frame(controls_card, bg=CARD_BG)
+        snapshot_group.pack(fill="x", pady=(4, 0))
+
+        tk.Button(
+            snapshot_group, text="📸 Save Snapshot", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=ACCENT_GREEN, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=6, cursor="hand2",
+            command=self._save_phone_cam_snapshot
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            snapshot_group, text="📁 Open Snapshots", font=("Segoe UI", 9, "bold"),
+            bg=BUTTON_BG, fg=TEXT_PRIMARY, activebackground=CARD_BORDER,
+            relief="flat", padx=10, pady=6, cursor="hand2",
+            command=self.open_snapshots_folder
+        ).pack(side="left")
+
+    def _copy_phone_mjpeg_url(self):
+        try:
+            url = self.lbl_phone_mjpeg_url.cget("text")
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            self.lbl_phone_cam_telemetry.config(text="✓ Copied MJPEG stream URL to clipboard!")
+        except Exception:
+            pass
+
+    def _save_phone_cam_snapshot(self):
+        receiver = getattr(self.server, "phone_camera_receiver", None)
+        frame = receiver.latest_jpeg if receiver else None
+        if not frame:
+            self.lbl_phone_cam_telemetry.config(text="No live frame to save as snapshot.")
+            return
+        try:
+            snapshots_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".config"))) / "BTMouse" / "Snapshots"
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"phone_snapshot_{timestamp}.jpg"
+            target = snapshots_dir / filename
+            target.write_bytes(frame)
+            self.lbl_phone_cam_telemetry.config(text=f"✓ Saved snapshot: {filename}")
+        except Exception as e:
+            self.lbl_phone_cam_telemetry.config(text=f"Could not save snapshot: {e}")
+
+    def _on_phone_cam_frame_received(self, raw_jpeg, w, h, lens, fps, bitrate_kbps):
+        if not getattr(self, "phone_cam_pending_update", False):
+            self.phone_cam_pending_update = True
+            self.after(0, lambda: self._update_phone_cam_gui(raw_jpeg, w, h, lens, fps, bitrate_kbps))
+
+    def _update_phone_cam_gui(self, raw_jpeg, w, h, lens, fps, bitrate_kbps):
+        self.phone_cam_pending_update = False
+        try:
+            import io
+            img = Image.open(io.BytesIO(raw_jpeg))
+            max_w, max_h = 480, 270
+            img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self.phone_cam_photo = photo
+            if hasattr(self, "lbl_phone_cam_preview"):
+                self.lbl_phone_cam_preview.config(image=photo, text="")
+            if hasattr(self, "lbl_phone_cam_status"):
+                self.lbl_phone_cam_status.config(text=f"● LIVE · {lens.upper()} CAMERA", fg=ACCENT_GREEN)
+            if hasattr(self, "lbl_phone_cam_telemetry"):
+                self.lbl_phone_cam_telemetry.config(text=f"{w}x{h} · {fps} FPS · {bitrate_kbps} kbps")
+            if hasattr(self, "lbl_phone_cam_counter"):
+                count = getattr(self.server.phone_camera_receiver, "frame_count", 0)
+                self.lbl_phone_cam_counter.config(text=f"{count:,} frames")
+        except Exception:
+            pass
+
+    def _check_phone_cam_active(self):
+        receiver = getattr(self.server, "phone_camera_receiver", None)
+        if receiver:
+            now = time.monotonic()
+            if receiver.latest_timestamp and now - receiver.latest_timestamp > 4.0:
+                receiver.is_active = False
+                if hasattr(self, "lbl_phone_cam_status"):
+                    self.lbl_phone_cam_status.config(text="○ STANDBY", fg=TEXT_MUTED)
+                if hasattr(self, "lbl_phone_cam_telemetry"):
+                    self.lbl_phone_cam_telemetry.config(text="Stream paused / standby")
+        self.after(2000, self._check_phone_cam_active)
 
     def _build_logs_tab(self):
         container = tk.Frame(self.tab_logs, bg=BG_DARK)

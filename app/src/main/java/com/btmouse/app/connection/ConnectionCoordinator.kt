@@ -34,6 +34,7 @@ class ConnectionCoordinator(
     val bluetoothRfcommManager = BluetoothRfcommManager(context, scope)
     val wifiClientManager = WifiClientManager(context.applicationContext, settings, scope)
     val remoteWanManager = RemoteWanManager(context.applicationContext, settings, scope)
+    val phoneCameraStreamer = PhoneCameraStreamer(context.applicationContext, scope)
 
     val clientSessionId: String = java.util.UUID.randomUUID().toString()
     private val commandSequence = java.util.concurrent.atomic.AtomicLong(1L)
@@ -229,6 +230,10 @@ class ConnectionCoordinator(
         remoteWanManager.clientSessionId = clientSessionId
         remoteWanManager.nextSeqSupplier = { commandSequence.getAndIncrement() }
 
+        phoneCameraStreamer.onFrameAvailable = { bytes, width, height, lens ->
+            currentInputConnection.sendPhoneCameraFrame(bytes, width, height, lens)
+        }
+
         bluetoothHidManager.initialize()
         bluetoothRfcommManager.refreshPairedDevices()
         monitorTransportTransitions()
@@ -302,16 +307,22 @@ class ConnectionCoordinator(
     }
 
     private fun monitorSessionAndMedia() {
+        val hasActiveMediaFlow = combine(
+            isPcLiveAudioActive,
+            isPhoneLiveAudioActive,
+            isCameraStreaming,
+            phoneCameraStreamer.isStreaming
+        ) { pcAudio, phoneAudio, camera, phoneCam ->
+            pcAudio || phoneAudio || camera || phoneCam
+        }
+
         sessionMonitorJob?.cancel()
         sessionMonitorJob = scope.launch {
             combine(
-                isPcLiveAudioActive,
-                isPhoneLiveAudioActive,
-                isCameraStreaming,
+                hasActiveMediaFlow,
                 isConnected,
                 settings.backgroundSessionEnabled
-            ) { pcAudio, phoneAudio, camera, connected, bgEnabled ->
-                val hasActiveMedia = pcAudio || phoneAudio || camera
+            ) { hasActiveMedia, connected, bgEnabled ->
                 Triple(hasActiveMedia, connected, bgEnabled)
             }.collect { (hasActiveMedia, connected, bgEnabled) ->
                 if (bgEnabled && hasActiveMedia) {
@@ -632,6 +643,56 @@ class ConnectionCoordinator(
         currentInputConnection.stopAudioRecord()
     }
 
+    override val isPhoneCameraStreaming: StateFlow<Boolean> = phoneCameraStreamer.isStreaming
+    override val phoneCameraLocalPreview: StateFlow<ByteArray?> = phoneCameraStreamer.localPreviewFrame
+    override val phoneCameraStats: StateFlow<PhoneCameraTelemetry> = phoneCameraStreamer.telemetry
+    override val phoneCameraLens: StateFlow<String> = phoneCameraStreamer.currentLens
+    override val phoneCameraResolution: StateFlow<Pair<Int, Int>> = phoneCameraStreamer.currentResolution
+    override val phoneCameraFps: StateFlow<Int> = phoneCameraStreamer.targetFps
+    override val phoneCameraStatusMessage: StateFlow<String> = phoneCameraStreamer.statusMessage
+
+    override fun startPhoneCameraStream(lens: String, width: Int, height: Int, fps: Int) {
+        currentInputConnection.startPhoneCameraStream(lens, width, height, fps)
+        phoneCameraStreamer.start(lens, width, height, fps)
+        CompanionSessionService.start(context)
+    }
+
+    override fun switchPhoneCameraLens() {
+        phoneCameraStreamer.switchLens()
+        currentInputConnection.startPhoneCameraStream(
+            phoneCameraStreamer.currentLens.value,
+            phoneCameraStreamer.currentResolution.value.first,
+            phoneCameraStreamer.currentResolution.value.second,
+            phoneCameraStreamer.targetFps.value
+        )
+    }
+
+    override fun setPhoneCameraResolution(width: Int, height: Int) {
+        phoneCameraStreamer.setResolution(width, height)
+        if (phoneCameraStreamer.isStreaming.value) {
+            currentInputConnection.startPhoneCameraStream(
+                phoneCameraStreamer.currentLens.value,
+                width,
+                height,
+                phoneCameraStreamer.targetFps.value
+            )
+        }
+    }
+
+    override fun setPhoneCameraFps(fps: Int) {
+        phoneCameraStreamer.setTargetFps(fps)
+    }
+
+    override fun stopPhoneCameraStream() {
+        phoneCameraStreamer.stop()
+        currentInputConnection.stopPhoneCameraStream()
+        CompanionSessionService.update(context)
+    }
+
+    override fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {
+        currentInputConnection.sendPhoneCameraFrame(data, width, height, lens)
+    }
+
     fun cleanup() {
         if (activeInstance === this) {
             activeInstance = null
@@ -640,6 +701,7 @@ class ConnectionCoordinator(
         transportTransitionJob?.cancel()
         sessionMonitorJob?.cancel()
         supervisionJob?.cancel()
+        phoneCameraStreamer.stop()
         CompanionSessionService.stop(context)
         remoteWanManager.disconnect()
         bluetoothRfcommManager.disconnect()

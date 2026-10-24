@@ -1922,6 +1922,248 @@ class RemoteWebSocketServer:
         self.running = False
 
 
+class PhoneCameraReceiver:
+    """Manages live incoming video frames streamed from the Android phone camera."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.is_active = False
+        self.latest_jpeg = None
+        self.latest_timestamp = 0.0
+        self.width = 640
+        self.height = 360
+        self.lens = "back"
+        self.frame_count = 0
+        self.bytes_received = 0
+        self.fps = 0.0
+        self.bitrate_kbps = 0.0
+        self._fps_window = []
+        self._bitrate_window = []
+        self.on_frame_callbacks = []
+        self.virtual_cam = None
+        self.virtual_cam_status = "MJPEG_STREAM"
+        self.virtual_cam_error = "DirectShow/MediaFoundation stream active at /phone_cam/mjpeg"
+
+    def register_callback(self, callback):
+        with self._lock:
+            if callback not in self.on_frame_callbacks:
+                self.on_frame_callbacks.append(callback)
+
+    def unregister_callback(self, callback):
+        with self._lock:
+            if callback in self.on_frame_callbacks:
+                self.on_frame_callbacks.remove(callback)
+
+    def start(self, lens="back", width=640, height=360):
+        with self._lock:
+            self.is_active = True
+            self.lens = lens
+            self.width = width
+            self.height = height
+            self.frame_count = 0
+            self.bytes_received = 0
+            self._fps_window.clear()
+            self._bitrate_window.clear()
+            self._init_virtual_cam(width, height)
+
+    def stop(self):
+        with self._lock:
+            self.is_active = False
+            self.latest_jpeg = None
+            self._release_virtual_cam()
+
+    def update_frame(self, raw_jpeg, width=None, height=None, lens=None):
+        if not raw_jpeg:
+            return
+        now = time.monotonic()
+        with self._lock:
+            self.is_active = True
+            self.latest_jpeg = raw_jpeg
+            self.latest_timestamp = now
+            if width and width > 0: self.width = width
+            if height and height > 0: self.height = height
+            if lens: self.lens = lens
+            self.frame_count += 1
+            frame_len = len(raw_jpeg)
+            self.bytes_received += frame_len
+
+            self._fps_window.append(now)
+            self._bitrate_window.append((now, frame_len))
+            cutoff = now - 2.0
+            self._fps_window = [t for t in self._fps_window if t >= cutoff]
+            self._bitrate_window = [item for item in self._bitrate_window if item[0] >= cutoff]
+
+            if len(self._fps_window) > 1:
+                dt = self._fps_window[-1] - self._fps_window[0]
+                self.fps = round((len(self._fps_window) - 1) / dt, 1) if dt > 0 else 0.0
+                total_bytes = sum(b for _, b in self._bitrate_window)
+                self.bitrate_kbps = round((total_bytes * 8 / 1000.0) / dt, 1) if dt > 0 else 0.0
+
+            callbacks = list(self.on_frame_callbacks)
+            vcam = self.virtual_cam
+
+        for cb in callbacks:
+            try:
+                cb(raw_jpeg, self.width, self.height, self.lens, self.fps, self.bitrate_kbps)
+            except Exception:
+                pass
+
+        if vcam:
+            try:
+                self._feed_virtual_cam(raw_jpeg)
+            except Exception:
+                pass
+
+    def _init_virtual_cam(self, width, height):
+        try:
+            import pyvirtualcam
+            self.virtual_cam = pyvirtualcam.Camera(width=width, height=height, fps=30, fmt=pyvirtualcam.PixelFormat.RGB)
+            self.virtual_cam_status = f"ACTIVE ({self.virtual_cam.device})"
+            self.virtual_cam_error = ""
+        except ImportError:
+            self.virtual_cam = None
+            self.virtual_cam_status = "MJPEG_STREAM"
+            self.virtual_cam_error = "DirectShow/MediaFoundation stream active via localhost MJPEG."
+        except Exception as e:
+            self.virtual_cam = None
+            self.virtual_cam_status = "MJPEG_STREAM"
+            self.virtual_cam_error = f"Virtual camera backend: {e}. MJPEG active."
+
+    def _release_virtual_cam(self):
+        if self.virtual_cam:
+            try:
+                self.virtual_cam.close()
+            except Exception:
+                pass
+            self.virtual_cam = None
+        if self.virtual_cam_status.startswith("ACTIVE"):
+            self.virtual_cam_status = "IDLE"
+
+    def _feed_virtual_cam(self, raw_jpeg):
+        if not self.virtual_cam:
+            return
+        try:
+            import numpy as np
+            import cv2
+            nparr = np.frombuffer(raw_jpeg, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is not None:
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                if (img_rgb.shape[1], img_rgb.shape[0]) != (self.virtual_cam.width, self.virtual_cam.height):
+                    img_rgb = cv2.resize(img_rgb, (self.virtual_cam.width, self.virtual_cam.height))
+                self.virtual_cam.send(img_rgb)
+        except Exception:
+            pass
+
+    def get_status(self):
+        with self._lock:
+            return {
+                "active": self.is_active,
+                "width": self.width,
+                "height": self.height,
+                "lens": self.lens,
+                "fps": self.fps,
+                "bitrate_kbps": self.bitrate_kbps,
+                "virtual_cam_status": self.virtual_cam_status,
+                "virtual_cam_error": self.virtual_cam_error,
+                "has_frame": self.latest_jpeg is not None
+            }
+
+
+class PhoneCameraHttpServer:
+    """Lightweight HTTP server providing MJPEG stream and single-frame snapshots on localhost."""
+    def __init__(self, receiver, port=8766):
+        self.receiver = receiver
+        self.port = port
+        self.server = None
+        self.thread = None
+        self.running = False
+
+    def start(self):
+        if self.running:
+            return
+        from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+
+        receiver = self.receiver
+        parent = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_GET(self):
+                if self.path in ("/phone_cam/mjpeg", "/phone_cam", "/mjpeg"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                    self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    self.send_header("Pragma", "no-cache")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+
+                    last_sent = None
+                    try:
+                        while parent.running:
+                            frame = receiver.latest_jpeg
+                            if frame and frame is not last_sent:
+                                last_sent = frame
+                                self.wfile.write(b"--frame\r\n")
+                                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                                self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
+                                self.wfile.write(frame)
+                                self.wfile.write(b"\r\n")
+                                self.wfile.flush()
+                            time.sleep(0.02)
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        pass
+
+                elif self.path in ("/phone_cam/snapshot.jpg", "/snapshot.jpg"):
+                    frame = receiver.latest_jpeg
+                    if frame:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "image/jpeg")
+                        self.send_header("Content-Length", str(len(frame)))
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.end_headers()
+                        self.wfile.write(frame)
+                    else:
+                        self.send_response(503)
+                        self.end_headers()
+                        self.wfile.write(b"No frame available")
+
+                elif self.path == "/phone_cam/status":
+                    status = json.dumps(receiver.get_status()).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(status)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(status)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b"Not Found")
+
+        for p in range(self.port, self.port + 10):
+            try:
+                self.server = ThreadingHTTPServer(("0.0.0.0", p), Handler)
+                self.port = p
+                self.running = True
+                self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="PhoneCamHttpServer")
+                self.thread.start()
+                break
+            except OSError:
+                continue
+
+    def stop(self):
+        self.running = False
+        if self.server:
+            try:
+                self.server.shutdown()
+                self.server.server_close()
+            except Exception:
+                pass
+            self.server = None
+
+
 class Server:
     def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token=None):
         ensure_interactive_desktop()
@@ -1996,11 +2238,18 @@ class Server:
         self.camera_manager = CameraManager()
         self.audio_manager = AudioManager()
         self.live_audio_manager = LiveAudioManager(self.audio_manager.recordings_dir)
+        self.phone_camera_receiver = PhoneCameraReceiver()
+        self.phone_camera_http = PhoneCameraHttpServer(self.phone_camera_receiver)
+        try:
+            self.phone_camera_http.start()
+        except Exception as e:
+            print(f"[!] Could not start phone camera HTTP server: {e}")
 
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
         self.on_client_callback = None
         self.on_status_callback = None
+        self.on_phone_cam_callback = None
 
     def _is_authorized(self, addr, data):
         if addr and addr[0] in ("Bluetooth", "WebSocket"):
@@ -2334,7 +2583,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.13"
+                    "version": "1.3.14"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2366,6 +2615,8 @@ class Server:
             if cmd_type == "path_switch":
                 respond({"type": "path_switch_ack", "success": True})
                 return
+            if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
+                self.phone_camera_receiver.stop()
             owner_key = self._camera_client_key(addr)
             self._stop_camera_stream_for_client(owner_key)
             self.live_audio_manager.stop_pc_to_phone(owner_key)
@@ -2761,6 +3012,45 @@ class Server:
                 respond({"type": "camera_recording_status", "recording": False})
                 respond({"type": "camera_stream_status", "streaming": False, "recording": False})
             threading.Thread(target=_stop_camera, name="StopCameraStream", daemon=True).start()
+
+        elif cmd_type in ("phone_cam_start", "start_phone_camera"):
+            lens = str(data.get("lens", "back"))
+            w = int(data.get("width", data.get("w", 640)))
+            h = int(data.get("height", data.get("h", 360)))
+            if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
+                self.phone_camera_receiver.start(lens=lens, width=w, height=h)
+            primary_ip = self.get_local_ip()
+            port = getattr(getattr(self, "phone_camera_http", None), "port", 8766)
+            mjpeg_url = f"http://{primary_ip}:{port}/phone_cam/mjpeg"
+            vcam_status = getattr(getattr(self, "phone_camera_receiver", None), "virtual_cam_status", "MJPEG_STREAM")
+            vcam_err = getattr(getattr(self, "phone_camera_receiver", None), "virtual_cam_error", "")
+            respond({
+                "type": "phone_cam_start_ack",
+                "success": True,
+                "mjpeg_url": mjpeg_url,
+                "virtual_cam_status": vcam_status,
+                "virtual_cam_error": vcam_err
+            })
+
+        elif cmd_type in ("phone_cam_frame", "phone_camera_frame"):
+            lens = str(data.get("lens", "back"))
+            w = int(data.get("w", data.get("width", 0)))
+            h = int(data.get("h", data.get("height", 0)))
+            b64_data = data.get("frame") or data.get("data")
+            if b64_data and isinstance(b64_data, str):
+                try:
+                    raw_jpeg = base64.b64decode(b64_data)
+                    if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
+                        self.phone_camera_receiver.update_frame(raw_jpeg, width=w, height=h, lens=lens)
+                    if hasattr(self, "on_phone_cam_callback") and self.on_phone_cam_callback:
+                        self.on_phone_cam_callback(raw_jpeg, w, h, lens)
+                except Exception:
+                    pass
+
+        elif cmd_type in ("phone_cam_stop", "stop_phone_camera"):
+            if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
+                self.phone_camera_receiver.stop()
+            respond({"type": "phone_cam_stop_ack", "success": True})
 
         elif cmd_type in ("audio_record_start", "start_audio_record"):
             rec_file = self.audio_manager.start_recording()
@@ -3786,6 +4076,16 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
         if hasattr(self, "audio_manager") and self.audio_manager:
             try:
                 self.audio_manager.stop_recording()
+            except Exception:
+                pass
+        if hasattr(self, "phone_camera_http") and self.phone_camera_http:
+            try:
+                self.phone_camera_http.stop()
+            except Exception:
+                pass
+        if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
+            try:
+                self.phone_camera_receiver.stop()
             except Exception:
                 pass
         if self.sock:

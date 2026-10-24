@@ -107,4 +107,19 @@ interface InputConnection {
     fun startPhoneLiveAudio(record: Boolean = false): Boolean = false
     fun stopPhoneLiveAudio() {}
     fun sendPhoneAudioFrame(pcm: ByteArray) {}
+
+    // Phone Camera as PC Webcam
+    val isPhoneCameraStreaming: StateFlow<Boolean>? get() = null
+    val phoneCameraLocalPreview: StateFlow<ByteArray?>? get() = null
+    val phoneCameraStats: StateFlow<PhoneCameraTelemetry>? get() = null
+    val phoneCameraLens: StateFlow<String>? get() = null
+    val phoneCameraResolution: StateFlow<Pair<Int, Int>>? get() = null
+    val phoneCameraFps: StateFlow<Int>? get() = null
+    val phoneCameraStatusMessage: StateFlow<String>? get() = null
+    fun startPhoneCameraStream(lens: String = "back", width: Int = 640, height: Int = 360, fps: Int = 24) {}
+    fun switchPhoneCameraLens() {}
+    fun setPhoneCameraResolution(width: Int, height: Int) {}
+    fun setPhoneCameraFps(fps: Int) {}
+    fun stopPhoneCameraStream() {}
+    fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {}
 }

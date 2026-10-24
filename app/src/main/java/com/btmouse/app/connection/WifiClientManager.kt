@@ -930,6 +930,32 @@ class WifiClientManager(
         ))
     }
 
+    override fun startPhoneCameraStream(lens: String, width: Int, height: Int, fps: Int) {
+        sendPacket(mapOf(
+            "type" to "phone_cam_start",
+            "lens" to lens,
+            "width" to width,
+            "height" to height,
+            "fps" to fps
+        ))
+    }
+
+    override fun stopPhoneCameraStream() {
+        sendPacket(mapOf("type" to "phone_cam_stop"))
+    }
+
+    override fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {
+        if (!_isConnected.value || data.isEmpty()) return
+        val b64 = Base64.encodeToString(data, Base64.NO_WRAP)
+        sendPacket(mapOf(
+            "type" to "phone_cam_frame",
+            "lens" to lens,
+            "w" to width,
+            "h" to height,
+            "frame" to b64
+        ))
+    }
+
     fun cleanup() {
         heartbeatJob?.cancel()
         connectJob?.cancel()

@@ -48,6 +48,7 @@ class CompanionSessionService : Service() {
                     it.stopPcLiveAudio()
                     it.stopPhoneLiveAudio()
                     it.stopCameraStream()
+                    it.stopPhoneCameraStream()
                 }
                 updateNotification()
                 return START_STICKY
@@ -71,6 +72,11 @@ class CompanionSessionService : Service() {
             }
             if (coord?.isPcLiveAudioActive?.value == true) {
                 type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            }
+            if (coord?.isPhoneCameraStreaming?.value == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
             }
             type
         } else 0
@@ -125,7 +131,9 @@ class CompanionSessionService : Service() {
     private fun buildSessionNotification(): Notification {
         val coord = ConnectionCoordinator.activeInstance
         val isAudioActive = (coord?.isPcLiveAudioActive?.value == true || coord?.isPhoneLiveAudioActive?.value == true)
-        val isCameraActive = coord?.isCameraStreaming?.value == true
+        val isPcCameraActive = coord?.isCameraStreaming?.value == true
+        val isPhoneCameraActive = coord?.isPhoneCameraStreaming?.value == true
+        val isAnyMediaActive = isAudioActive || isPcCameraActive || isPhoneCameraActive
         val deviceName = coord?.connectedDeviceName?.value ?: "PC Companion"
 
         val openIntent = PendingIntent.getActivity(
@@ -153,9 +161,10 @@ class CompanionSessionService : Service() {
         )
 
         val statusText = when {
-            isAudioActive && isCameraActive -> "Camera feed & Live Audio active"
+            isPhoneCameraActive -> "Phone Camera as Webcam streaming to PC"
+            isAudioActive && isPcCameraActive -> "PC Camera feed & Live Audio active"
             isAudioActive -> "Live Audio active"
-            isCameraActive -> "PC Camera stream active"
+            isPcCameraActive -> "PC Camera stream active"
             else -> "Companion connection active"
         }
 
@@ -168,7 +177,7 @@ class CompanionSessionService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
 
-        if (isAudioActive || isCameraActive) {
+        if (isAnyMediaActive) {
             builder.addAction(0, "Stop Stream", stopMediaIntent)
         }
         builder.addAction(0, "Disconnect", disconnectIntent)

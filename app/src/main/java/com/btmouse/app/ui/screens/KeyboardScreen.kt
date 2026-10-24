@@ -1,8 +1,13 @@
 package com.btmouse.app.ui.screens
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
 import androidx.compose.animation.AnimatedVisibility
@@ -110,6 +115,7 @@ import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.AppInfo
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.connection.CustomAppEntry
+import com.btmouse.app.connection.PhoneCameraTelemetry
 import com.btmouse.app.connection.ProcessInfo
 import com.btmouse.app.data.HidConstants
 import com.btmouse.app.data.SettingsRepository
@@ -1375,6 +1381,9 @@ fun CameraAndRecorderSection(
             Text(cameraStreamMessage, color = AccentRose, fontSize = 11.sp)
         }
 
+        // Phone Camera as PC Webcam Card
+        PhoneCameraWebcamCard(coordinator)
+
         // Webcam Card
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1589,6 +1598,297 @@ fun CameraAndRecorderSection(
             }
         }
         LiveAudioSection(coordinator)
+    }
+}
+
+@Composable
+fun PhoneCameraWebcamCard(
+    coordinator: ConnectionCoordinator
+) {
+    val context = LocalContext.current
+    val isStreaming by (coordinator.isPhoneCameraStreaming ?: remember { mutableStateOf(false) }).collectAsState()
+    val localPreviewBytes by (coordinator.phoneCameraLocalPreview ?: remember { mutableStateOf<ByteArray?>(null) }).collectAsState()
+    val telemetry by (coordinator.phoneCameraStats ?: remember { mutableStateOf(PhoneCameraTelemetry()) }).collectAsState()
+    val currentLens by (coordinator.phoneCameraLens ?: remember { mutableStateOf("back") }).collectAsState()
+    val currentRes by (coordinator.phoneCameraResolution ?: remember { mutableStateOf(640 to 360) }).collectAsState()
+    val currentFps by (coordinator.phoneCameraFps ?: remember { mutableStateOf(24) }).collectAsState()
+    val statusMsg by (coordinator.phoneCameraStatusMessage ?: remember { mutableStateOf("Phone camera standby") }).collectAsState()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            coordinator.startPhoneCameraStream(
+                lens = currentLens,
+                width = currentRes.first,
+                height = currentRes.second,
+                fps = currentFps
+            )
+        }
+    }
+
+    val previewBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, localPreviewBytes) {
+        value = localPreviewBytes?.let { bytes ->
+            withContext(Dispatchers.Default) {
+                try {
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentEmerald else DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Videocam,
+                        contentDescription = null,
+                        tint = if (isStreaming) AccentEmerald else AccentCyan
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Phone as PC Webcam",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        if (isStreaming) "● LIVE TO PC" else "STANDBY",
+                        color = if (isStreaming) AccentEmerald else TextMuted,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Text(
+                "Broadcast this phone's camera directly into your PC Companion as a virtual webcam (OBS, Zoom, Teams, Meet) or local MJPEG feed.",
+                color = TextSecondary,
+                fontSize = 11.sp
+            )
+
+            // Viewfinder
+            if (isStreaming && previewBitmap != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                ) {
+                    Image(
+                        bitmap = previewBitmap!!,
+                        contentDescription = "Phone camera viewfinder preview",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(DarkBackground.copy(alpha = 0.75f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            "${currentRes.first}x${currentRes.second} · ${"%.1f".format(telemetry.fps)} FPS · ${"%.0f".format(telemetry.kbps)} kbps · #${telemetry.frameCount}",
+                            color = AccentCyan,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(130.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(DarkSurfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint = TextMuted,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            if (isStreaming) "Starting phone camera capture..." else "Phone camera standby",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            "Select lens, resolution, and target FPS below",
+                            color = TextMuted,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+
+            // Lens & Format Selectors
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = currentLens == "back",
+                    onClick = {
+                        if (currentLens != "back") coordinator.switchPhoneCameraLens()
+                    },
+                    label = { Text("📷 Rear Lens", fontSize = 10.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                        selectedLabelColor = AccentCyan,
+                        containerColor = DarkSurfaceVariant,
+                        labelColor = TextMuted
+                    )
+                )
+                FilterChip(
+                    selected = currentLens == "front",
+                    onClick = {
+                        if (currentLens != "front") coordinator.switchPhoneCameraLens()
+                    },
+                    label = { Text("🤳 Front Lens", fontSize = 10.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                        selectedLabelColor = AccentCyan,
+                        containerColor = DarkSurfaceVariant,
+                        labelColor = TextMuted
+                    )
+                )
+
+                listOf(
+                    (640 to 360) to "360p (Fast)",
+                    (854 to 480) to "480p",
+                    (1280 to 720) to "720p HD"
+                ).forEach { (res, label) ->
+                    FilterChip(
+                        selected = currentRes == res,
+                        onClick = { coordinator.setPhoneCameraResolution(res.first, res.second) },
+                        label = { Text(label, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                            selectedLabelColor = AccentCyan,
+                            containerColor = DarkSurfaceVariant,
+                            labelColor = TextMuted
+                        )
+                    )
+                }
+
+                listOf(15, 24, 30).forEach { fps ->
+                    FilterChip(
+                        selected = currentFps == fps,
+                        onClick = { coordinator.setPhoneCameraFps(fps) },
+                        label = { Text("${fps}fps", fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                            selectedLabelColor = AccentCyan,
+                            containerColor = DarkSurfaceVariant,
+                            labelColor = TextMuted
+                        )
+                    )
+                }
+            }
+
+            // Main Action Button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        if (isStreaming) {
+                            coordinator.stopPhoneCameraStream()
+                        } else {
+                            val hasPermission = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.CAMERA
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (hasPermission) {
+                                coordinator.startPhoneCameraStream(
+                                    lens = currentLens,
+                                    width = currentRes.first,
+                                    height = currentRes.second,
+                                    fps = currentFps
+                                )
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isStreaming) AccentRose else AccentEmerald
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isStreaming) Icons.Default.Stop else Icons.Default.Videocam,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = if (isStreaming) TextPrimary else DarkBackground
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        if (isStreaming) "Stop Streaming to PC" else "Start Phone Webcam",
+                        color = if (isStreaming) TextPrimary else DarkBackground,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                if (isStreaming) {
+                    OutlinedButton(
+                        onClick = { coordinator.switchPhoneCameraLens() },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentCyan)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Switch Camera",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Flip", fontSize = 11.sp)
+                    }
+                }
+            }
+
+            if (isStreaming) {
+                Text(
+                    "PC MJPEG Endpoint: http://127.0.0.1:8766/phone_cam/mjpeg (open in PC browser or OBS)",
+                    color = AccentCyan,
+                    fontSize = 10.sp
+                )
+            } else if (statusMsg.isNotBlank()) {
+                Text(statusMsg, color = TextSecondary, fontSize = 10.sp)
+            }
+        }
     }
 }
 

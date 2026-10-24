@@ -745,4 +745,31 @@ class RemoteWanManager(
             addProperty("data", Base64.encodeToString(pcm, Base64.NO_WRAP))
         })
     }
+
+    override fun startPhoneCameraStream(lens: String, width: Int, height: Int, fps: Int) {
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_cam_start")
+            addProperty("lens", lens)
+            addProperty("width", width)
+            addProperty("height", height)
+            addProperty("fps", fps)
+        })
+    }
+
+    override fun stopPhoneCameraStream() {
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_cam_stop")
+        })
+    }
+
+    override fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {
+        if (!_isConnected.value || data.isEmpty()) return
+        sendJson(JsonObject().apply {
+            addProperty("type", "phone_cam_frame")
+            addProperty("lens", lens)
+            addProperty("w", width)
+            addProperty("h", height)
+            addProperty("frame", Base64.encodeToString(data, Base64.NO_WRAP))
+        })
+    }
 }
