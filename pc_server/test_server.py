@@ -566,7 +566,7 @@ class StartupSelfHealingTests(unittest.TestCase):
         mock_winreg.KEY_SET_VALUE = 2
         mock_winreg.REG_SZ = 3
 
-        with patch.dict(sys.modules, {"winreg": mock_winreg}):
+        with patch("os.name", "nt"), patch.dict(sys.modules, {"winreg": mock_winreg}):
             app_mock._heal_startup_path_if_registered()
 
         mock_winreg.SetValueEx.assert_called_once_with(
@@ -582,7 +582,7 @@ class StartupSelfHealingTests(unittest.TestCase):
         app_mock.log = Mock()
 
         mock_winreg = Mock()
-        with patch.dict(sys.modules, {"winreg": mock_winreg}):
+        with patch("os.name", "nt"), patch.dict(sys.modules, {"winreg": mock_winreg}):
             app_mock._heal_startup_path_if_registered()
 
         mock_winreg.SetValueEx.assert_not_called()
