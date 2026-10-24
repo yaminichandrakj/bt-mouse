@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active | **Updated:** 2026-10-24 | **Source version:** 1.3.8 (release candidate)
-**Owner:** Codex | **Release:** No release for the current working-tree changes
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.8
+**Owner:** Codex | **Release:** [v1.3.8 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8)
 
 ## Product objective
 
@@ -9,7 +9,7 @@ Make the Android phone a dependable PC input and companion device over Bluetooth
 
 ## Current implementation snapshot
 
-Source status below is not a claim of successful build, device validation, or release.
+Source status below distinguishes CI/build verification from physical-device verification. v1.3.8 passed the GitHub Actions version check, 17 companion regression tests, Android release build, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
 
 | Area | Present in source | Remaining |
 |---|---|---|
@@ -43,11 +43,11 @@ Phases are ordered from integration and verification toward larger platform work
 
 1. Review server command paths, Kotlin protocol signatures, and loading/error UI for the current working-tree changes.
 2. Build Android and Windows companion from the same version; fix compile, packaging, and protocol mismatches before adding more features.
-3. Run Python security/protocol and camera/telemetry checks, Android build checks, release-version consistency, and diff review.
+3. Run Python security/protocol and camera/telemetry checks, Android build checks, release-version consistency, and diff review. CI passed for v1.3.8; continue physical-device checks for the remaining integration gaps.
 4. Smoke-test Bluetooth HID without the companion and each companion transport independently.
-5. Keep version 1.3.7 until integration and release gates pass.
+5. Version 1.3.8 is published after version, regression, Android build, and Windows packaging gates passed.
 
-**Acceptance:** both platform builds succeed; all transport managers accept the same response fields; authorization remains intact; checks pass. No claim of hardware reliability without device tests.
+**Acceptance:** CI platform builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
 
 ### Phase 1 - Webcam video recording, recordings library, and browser video preview (medium effort; high priority)
 
@@ -154,10 +154,10 @@ Phases are ordered from integration and verification toward larger platform work
 - On Windows, verify packaged update staging, closing the running app, replacing the exact install path, relaunching that same path, version acknowledgement, rollback, and second launch.
 - Compare the displayed running EXE path with the user's shortcut to diagnose the stale-version report.
 - Keep Android versionName/versionCode, PC version, release tag, workflow checks, and asset names consistent.
-- Build APK and Windows EXE in Actions; run protocol/security checks and version checks. Move signing material to protected CI secrets while preserving the existing Android key.
-- Publish only tested artifacts; verify Actions and GitHub Release after publication.
+- **Implemented and verified in v1.3.8:** Actions version check, 17 Python regression tests, signed Android APK build, Windows companion EXE packaging, gated release publication, and asset verification. Release: [v1.3.8](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8).
+- **Still open:** validate Android and Windows in-app updater installation, relaunch, rollback, and installed-version acknowledgement on target devices. Move signing material to protected CI secrets while preserving the existing Android key.
 
-**Acceptance:** in-app update reaches the new version on both platforms, interruption rolls back safely, and published APK/EXE match the audited source tag.
+**Acceptance:** release artifacts match the versioned source and both CI builds pass. Full updater acceptance remains pending real installation and rollback checks.
 
 ## Research notes and references
 
@@ -172,13 +172,13 @@ Phases are ordered from integration and verification toward larger platform work
 ## Release checklist
 
 - [ ] Review working-tree changes and preserve unrelated user edits.
-- [ ] Build Android and Windows companion from the same source version.
-- [ ] Run protocol/security, camera, and telemetry checks; verify release-version consistency.
+- [x] Build Android and Windows companion from the same source version in GitHub Actions.
+- [x] Run companion protocol regression checks and release-version consistency in Actions (17 tests passed).
 - [ ] Check Quick Apps, tasks/stats, volume/media, webcam snapshot/live/recording, audio, and recordings library on target PC and phone.
 - [ ] Check BT, Wi-Fi, and WAN independently; use TLS for Internet access.
 - [ ] Check selected-region preview privacy and stop behavior.
 - [ ] Check both updater flows, rollback, and correct relaunch path.
 - [ ] Check startup/reconnect without auto-starting capture.
 - [ ] Compare disk/GPU readings with Task Manager.
-- [ ] Verify CI artifacts, signing identity, version/tag consistency, release notes, and assets.
-- [ ] Publish only after release-blocking checks pass; identify hardware checks unavailable in CI.
+- [x] Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.8.
+- [x] Publish v1.3.8 after both CI builds passed; hardware checks unavailable in CI remain open.
