@@ -81,6 +81,9 @@ class BluetoothRfcommManager(
     private val _installedApps = MutableStateFlow<List<AppInfo>>(emptyList())
     override val installedApps: StateFlow<List<AppInfo>> = _installedApps.asStateFlow()
 
+    private val _appIcons = MutableStateFlow<Map<String, String>>(emptyMap())
+    override val appIcons: StateFlow<Map<String, String>> = _appIcons.asStateFlow()
+
     private val _latestCameraFrame = MutableStateFlow<ByteArray?>(null)
     override val latestCameraFrame: StateFlow<ByteArray?> = _latestCameraFrame.asStateFlow()
 
@@ -298,6 +301,9 @@ class BluetoothRfcommManager(
                         artist = artist,
                         album = album,
                         playerName = root.get("player")?.asString ?: "",
+                        playerKey = root.get("player_key")?.asString ?: "",
+                        playerIconBase64 = root.get("player_icon")?.asString?.takeIf { it.isNotBlank() }
+                            ?: if (old.playerName == (root.get("player")?.asString ?: "")) old.playerIconBase64 else "",
                         status = status,
                         position = position,
                         duration = duration,
@@ -345,17 +351,31 @@ class BluetoothRfcommManager(
                 "installed_apps_response" -> {
                     val array = root.getAsJsonArray("apps") ?: JsonArray()
                     val list = mutableListOf<AppInfo>()
+                    val iconMap = _appIcons.value.toMutableMap()
                     for (elem in array) {
                         val obj = elem.asJsonObject
+                        val name = obj.get("name")?.asString ?: ""
+                        val path = obj.get("path")?.asString ?: ""
+                        val cmd = obj.get("cmd")?.asString ?: ""
+                        val isQuick = obj.get("is_quick")?.asBoolean ?: false
+                        val iconB64 = obj.get("icon")?.asString?.takeIf { it.isNotBlank() } ?: iconMap[path] ?: iconMap[name.lowercase()] ?: ""
+                        val brandKey = obj.get("brand_key")?.asString ?: ""
+                        if (iconB64.isNotBlank()) {
+                            if (path.isNotBlank()) iconMap[path] = iconB64
+                            if (name.isNotBlank()) iconMap[name.lowercase()] = iconB64
+                        }
                         list.add(
                             AppInfo(
-                                name = obj.get("name")?.asString ?: "",
-                                path = obj.get("path")?.asString ?: "",
-                                cmd = obj.get("cmd")?.asString ?: "",
-                                isQuick = obj.get("is_quick")?.asBoolean ?: false
+                                name = name,
+                                path = path,
+                                cmd = cmd,
+                                isQuick = isQuick,
+                                iconBase64 = iconB64,
+                                brandKey = brandKey
                             )
                         )
                     }
+                    _appIcons.value = iconMap
                     _installedApps.value = list
                     val loading = root.get("loading")?.asBoolean ?: false
                     val message = root.get("message")?.asString.orEmpty()
@@ -364,6 +384,32 @@ class BluetoothRfcommManager(
                         message.isNotBlank() -> message
                         _statusMessage.value.startsWith("Loading installed PC apps") -> ""
                         else -> _statusMessage.value
+                    }
+                }
+                "app_icons_response" -> {
+                    val iconsObj = root.getAsJsonObject("icons")
+                    if (iconsObj != null) {
+                        val updatedMap = _appIcons.value.toMutableMap()
+                        for ((k, v) in iconsObj.entrySet()) {
+                            if (v.isJsonObject) {
+                                val iconStr = v.asJsonObject.get("icon")?.asString.orEmpty()
+                                if (iconStr.isNotBlank()) {
+                                    updatedMap[k] = iconStr
+                                    updatedMap[k.lowercase()] = iconStr
+                                }
+                            } else if (v.isJsonPrimitive) {
+                                val iconStr = v.asString
+                                if (iconStr.isNotBlank()) {
+                                    updatedMap[k] = iconStr
+                                    updatedMap[k.lowercase()] = iconStr
+                                }
+                            }
+                        }
+                        _appIcons.value = updatedMap
+                        _installedApps.value = _installedApps.value.map { app ->
+                            val hit = updatedMap[app.path] ?: updatedMap[app.name.lowercase()] ?: app.iconBase64
+                            if (hit.isNotBlank() && hit != app.iconBase64) app.copy(iconBase64 = hit) else app
+                        }
                     }
                 }
                 "quick_apps_update_response" -> {
@@ -637,6 +683,17 @@ class BluetoothRfcommManager(
     override fun queryInstalledApps() {
         val obj = JsonObject().apply { addProperty("type", "query_apps") }
         sendJson(obj, includeSeq = false)
+    }
+
+    override fun queryAppIcons(items: List<String>) {
+        val clean = items.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(40)
+        if (clean.isNotEmpty()) {
+            val obj = JsonObject().apply {
+                addProperty("type", "query_app_icons")
+                add("items", com.google.gson.Gson().toJsonTree(clean))
+            }
+            sendJson(obj, includeSeq = false)
+        }
     }
 
     override fun updateQuickApps(paths: List<String>) {

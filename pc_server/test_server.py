@@ -804,3 +804,118 @@ class DpiAndQrRemediationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V1317ArchitectureAndFailoverTests(unittest.TestCase):
+    def test_media_dirs_separated_into_videos_audios_snapshots_and_migrated(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir) / "BTMouse"
+            legacy_rec = base / "Recordings"
+            legacy_rec.mkdir(parents=True, exist_ok=True)
+            (legacy_rec / "webcam_20261024_120000.mp4").write_bytes(b"video-data")
+            (legacy_rec / "audio_20261024_120000.wav").write_bytes(b"audio-data")
+            (legacy_rec / "snapshot_20261024_120000.jpg").write_bytes(b"image-data")
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": tmpdir}):
+                dirs = server.get_btmouse_media_dirs()
+
+            self.assertTrue(Path(dirs["videos"]).is_dir())
+            self.assertTrue(Path(dirs["audios"]).is_dir())
+            self.assertTrue(Path(dirs["snapshots"]).is_dir())
+            self.assertTrue((Path(dirs["videos"]) / "webcam_20261024_120000.mp4").is_file())
+            self.assertTrue((Path(dirs["audios"]) / "audio_20261024_120000.wav").is_file())
+            self.assertTrue((Path(dirs["snapshots"]) / "snapshot_20261024_120000.jpg").is_file())
+
+    def test_camera_stream_responder_migrates_seamlessly_on_failover(self):
+        import time as _time
+        instance = object.__new__(server.Server)
+        instance._camera_stream_owner_lock = threading.Lock()
+        wifi_responses = []
+        bt_responses = []
+        instance._camera_stream_owner = {
+            "key": ("192.168.1.25", 53530),
+            "session_id": "cam-sess-1",
+            "respond": wifi_responses.append,
+            "last_seen": _time.monotonic() - 2.0,
+        }
+        instance.live_audio_manager = Mock()
+
+        instance._refresh_camera_stream_lease(
+            ("bluetooth", "AA:BB:CC:DD:EE:FF"),
+            {"type": "path_switch"},
+            bt_responses.append,
+        )
+
+        self.assertEqual(instance._camera_stream_owner["key"], ("bluetooth", None))
+        self.assertEqual(instance._camera_stream_owner["respond"], bt_responses.append)
+        instance.live_audio_manager.touch_owner.assert_called_once()
+
+    def test_live_audio_responder_migrates_seamlessly_on_failover(self):
+        import time as _time
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = server.LiveAudioManager(tmpdir)
+            wifi_resp = Mock()
+            bt_resp = Mock()
+            mgr.capture_running = True
+            mgr.capture_owner = ("192.168.1.25", None)
+            mgr.capture_respond = wifi_resp
+            mgr.touch_owner(("bluetooth", None), respond=bt_resp, migrate=True)
+            self.assertEqual(mgr.capture_owner, ("bluetooth", None))
+            self.assertEqual(mgr.capture_respond, bt_resp)
+
+    def test_phone_camera_rotation_and_orientation_mode(self):
+        receiver = server.PhoneCameraReceiver()
+        receiver.start("back", 640, 360, orientation="portrait")
+        self.assertEqual(receiver.orientation, "portrait")
+        self.assertEqual(receiver.rotation_degrees, 0)
+        self.assertEqual(receiver.rotate_90(), 90)
+        self.assertEqual(receiver.rotate_90(), 180)
+        self.assertEqual(receiver.rotate_90(), 270)
+        self.assertEqual(receiver.rotate_90(), 0)
+
+    def test_pyqt6_native_companion_architecture_present(self):
+        import app_gui
+        gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertEqual(app_gui.APP_VERSION, "1.3.17")
+        self.assertIn("PyQt6", gui_source)
+        self.assertIn("FullscreenVideoWindow", gui_source)
+        self.assertIn("AspectRatioVideoWidget", gui_source)
+
+    def test_ott_platform_and_app_icon_identification(self):
+        label, key = server.MediaController._identify_player_and_key(
+            app_id="chrome.exe",
+            title="Solo Leveling Episode 12",
+            extra_titles="Solo Leveling - Watch on Crunchyroll - Google Chrome"
+        )
+        self.assertEqual(label, "Crunchyroll")
+        self.assertEqual(key, "crunchyroll")
+
+        label2, key2 = server.MediaController._identify_player_and_key(
+            app_id="msedge.exe",
+            title="The Boys - Season 4",
+            extra_titles="Prime Video: The Boys - Microsoft Edge"
+        )
+        self.assertEqual(label2, "Prime Video")
+        self.assertEqual(key2, "prime_video")
+
+        label3, key3 = server.MediaController._identify_player_and_key(
+            app_id="brave.exe",
+            title="Stranger Things",
+            extra_titles="Netflix - Brave"
+        )
+        self.assertEqual(label3, "Netflix")
+        self.assertEqual(key3, "netflix")
+
+        self.assertEqual(server.infer_app_brand_key("Steam", r"C:\Program Files\Steam\steam.exe"), "steam")
+        self.assertEqual(server.infer_app_brand_key("Visual Studio Code", "code.exe"), "vscode")
+
+    def test_query_app_icons_returns_batched_response(self):
+        instance = object.__new__(server.Server)
+        responses = []
+        with patch("server.extract_windows_app_icon_base64", return_value="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="):
+            instance._respond_app_icons_async(["steam", "chrome"], responses.append)
+        self.assertEqual(len(responses), 1)
+        self.assertEqual(responses[0]["type"], "app_icons_response")
+        self.assertIn("steam", responses[0]["icons"])
+        self.assertEqual(responses[0]["icons"]["steam"]["brand_key"], "steam")
+        self.assertTrue(responses[0]["icons"]["steam"]["icon"])

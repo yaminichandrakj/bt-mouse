@@ -6,15 +6,19 @@ datas = [('icon.ico', '.'), ('icon.png', '.')]
 binaries = []
 hiddenimports = []
 for package in (
+    'PyQt6', 'imageio_ffmpeg',
     'sounddevice', 'cv2', 'numpy', 'pycaw', 'comtypes',
     'winrt.windows.media.control', 'winrt.windows.foundation',
     'winrt.windows.devices.bluetooth.rfcomm', 'winrt.windows.networking.sockets',
     'winrt.windows.storage.streams',
 ):
-    package_datas, package_binaries, package_hiddenimports = collect_all(package)
-    datas += package_datas
-    binaries += package_binaries
-    hiddenimports += package_hiddenimports
+    try:
+        package_datas, package_binaries, package_hiddenimports = collect_all(package)
+        datas += package_datas
+        binaries += package_binaries
+        hiddenimports += package_hiddenimports
+    except Exception:
+        pass
 
 a = Analysis(
     ['app_gui.py'],

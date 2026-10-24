@@ -12,8 +12,8 @@ android {
         applicationId = "com.btmouse.app"
         minSdk = 28
         targetSdk = 34
-        versionCode = 23
-        versionName = "1.3.16"
+        versionCode = 24
+        versionName = "1.3.17"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -35,7 +35,6 @@ android {
                 keyAlias = kAlias
                 keyPassword = kPassword
             } else if (keystoreFile.exists()) {
-                // Legacy local/CI fallback until GitHub Actions secrets are populated
                 storeFile = keystoreFile
                 storePassword = ksPassword ?: "btmouse123"
                 keyAlias = kAlias ?: "btmouse"

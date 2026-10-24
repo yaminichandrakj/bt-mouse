@@ -3,7 +3,10 @@ package com.btmouse.app.connection
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -17,11 +20,11 @@ import android.util.Log
 import android.util.Size
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicInteger
 
 data class PhoneCameraTelemetry(
     val active: Boolean = false,
@@ -30,12 +33,14 @@ data class PhoneCameraTelemetry(
     val height: Int = 0,
     val fps: Double = 0.0,
     val kbps: Double = 0.0,
-    val frameCount: Long = 0L
+    val frameCount: Long = 0L,
+    val orientation: String = "landscape",
+    val rotationDegrees: Int = 0
 )
 
 /**
- * Manages phone camera capture using Android Camera2 API, outputting bounded JPEG frames
- * for wireless streaming to the PC Companion server.
+ * Manages phone camera capture using Android Camera2 API, outputting bounded,
+ * properly-oriented JPEG frames (< 34 KB) guaranteed to fit within UDP and RFCOMM limits.
  */
 class PhoneCameraStreamer(
     private val context: Context,
@@ -56,6 +61,17 @@ class PhoneCameraStreamer(
     private val _targetFps = MutableStateFlow(24)
     val targetFps: StateFlow<Int> = _targetFps.asStateFlow()
 
+    /** "landscape" (16:9 horizontal) or "portrait" (9:16 vertical) */
+    private val _orientationMode = MutableStateFlow("landscape")
+    val orientationMode: StateFlow<String> = _orientationMode.asStateFlow()
+
+    /** Additional user rotation offset (0, 90, 180, 270) */
+    private val _rotationOffset = MutableStateFlow(0)
+    val rotationOffset: StateFlow<Int> = _rotationOffset.asStateFlow()
+
+    private val _mirrorFront = MutableStateFlow(true)
+    val mirrorFront: StateFlow<Boolean> = _mirrorFront.asStateFlow()
+
     private val _localPreviewFrame = MutableStateFlow<ByteArray?>(null)
     val localPreviewFrame: StateFlow<ByteArray?> = _localPreviewFrame.asStateFlow()
 
@@ -67,11 +83,13 @@ class PhoneCameraStreamer(
 
     var onFrameAvailable: ((ByteArray, Int, Int, String) -> Unit)? = null
 
+    private val sessionGeneration = AtomicInteger(0)
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var imageReader: ImageReader? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+    private var sensorOrientationDegrees: Int = 90
 
     private var lastSentMs: Long = 0L
     private var frameCount: Long = 0L
@@ -86,12 +104,13 @@ class PhoneCameraStreamer(
     }
 
     @Synchronized
-    fun start(lens: String = "back", width: Int = 640, height: Int = 360, fps: Int = 24) {
+    fun start(lens: String = _currentLens.value, width: Int = _currentResolution.value.first, height: Int = _currentResolution.value.second, fps: Int = _targetFps.value) {
         if (!hasCameraPermission()) {
             _statusMessage.value = "Camera permission not granted"
             return
         }
-        stop()
+        val gen = sessionGeneration.incrementAndGet()
+        closeCameraResourcesInternal()
 
         _currentLens.value = lens
         _currentResolution.value = width to height
@@ -100,22 +119,30 @@ class PhoneCameraStreamer(
         _statusMessage.value = "Starting ${lens.uppercase()} camera..."
 
         startBackgroundThread()
-        openCamera(lens, width, height)
+        // Post with a brief delay if reopening to let the Android camera HAL release the previous session cleanly
+        backgroundHandler?.postDelayed({
+            if (sessionGeneration.get() == gen) {
+                openCamera(gen, lens, width, height)
+            }
+        }, 120L)
     }
 
     @Synchronized
     fun switchLens() {
         val nextLens = if (_currentLens.value == "back") "front" else "back"
         val (w, h) = _currentResolution.value
-        start(nextLens, w, h, _targetFps.value)
+        if (_isStreaming.value) {
+            start(nextLens, w, h, _targetFps.value)
+        } else {
+            _currentLens.value = nextLens
+        }
     }
 
     @Synchronized
     fun setResolution(width: Int, height: Int) {
+        _currentResolution.value = width to height
         if (_isStreaming.value) {
             start(_currentLens.value, width, height, _targetFps.value)
-        } else {
-            _currentResolution.value = width to height
         }
     }
 
@@ -125,10 +152,25 @@ class PhoneCameraStreamer(
     }
 
     @Synchronized
-    fun stop() {
-        _isStreaming.value = false
-        _statusMessage.value = "Phone camera stopped"
+    fun setOrientationMode(mode: String) {
+        val clean = if (mode == "portrait") "portrait" else "landscape"
+        _orientationMode.value = clean
+    }
 
+    @Synchronized
+    fun rotate90() {
+        _rotationOffset.value = (_rotationOffset.value + 90) % 360
+    }
+
+    @Synchronized
+    fun setMirrorFront(mirror: Boolean) {
+        _mirrorFront.value = mirror
+    }
+
+    private fun closeCameraResourcesInternal() {
+        try {
+            captureSession?.stopRepeating()
+        } catch (_: Exception) {}
         try {
             captureSession?.close()
         } catch (_: Exception) {}
@@ -145,6 +187,14 @@ class PhoneCameraStreamer(
         imageReader = null
 
         stopBackgroundThread()
+    }
+
+    @Synchronized
+    fun stop() {
+        sessionGeneration.incrementAndGet()
+        _isStreaming.value = false
+        _statusMessage.value = "Phone camera stopped"
+        closeCameraResourcesInternal()
 
         _localPreviewFrame.value = null
         _telemetry.value = PhoneCameraTelemetry(active = false)
@@ -161,14 +211,15 @@ class PhoneCameraStreamer(
     private fun stopBackgroundThread() {
         backgroundThread?.quitSafely()
         try {
-            backgroundThread?.join(500)
+            backgroundThread?.join(400)
         } catch (_: Exception) {}
         backgroundThread = null
         backgroundHandler = null
     }
 
     @SuppressLint("MissingPermission")
-    private fun openCamera(lens: String, reqWidth: Int, reqHeight: Int) {
+    private fun openCamera(gen: Int, lens: String, reqWidth: Int, reqHeight: Int) {
+        if (sessionGeneration.get() != gen) return
         val mgr = cameraManager ?: run {
             _statusMessage.value = "CameraManager unavailable"
             _isStreaming.value = false
@@ -190,6 +241,7 @@ class PhoneCameraStreamer(
                 val facing = chars.get(CameraCharacteristics.LENS_FACING)
                 if (facing == targetFacing) {
                     selectedCameraId = id
+                    sensorOrientationDegrees = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
                     val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                     val sizes = map?.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
                     bestSize = findClosestSize(sizes, reqWidth, reqHeight)
@@ -209,33 +261,43 @@ class PhoneCameraStreamer(
             return
         }
 
-        _currentResolution.value = bestSize.width to bestSize.height
-
         try {
-            val reader = ImageReader.newInstance(bestSize.width, bestSize.height, ImageFormat.JPEG, 2)
+            val reader = ImageReader.newInstance(bestSize.width, bestSize.height, ImageFormat.JPEG, 3)
             reader.setOnImageAvailableListener({ ir ->
-                handleImage(ir, bestSize.width, bestSize.height, lens)
+                if (sessionGeneration.get() == gen) {
+                    handleImage(ir, lens)
+                } else {
+                    try { ir.acquireLatestImage()?.close() } catch (_: Exception) {}
+                }
             }, backgroundHandler)
             imageReader = reader
 
             mgr.openCamera(selectedCameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    if (sessionGeneration.get() != gen) {
+                        try { camera.close() } catch (_: Exception) {}
+                        return
+                    }
                     cameraDevice = camera
-                    createCaptureSession(camera, reader.surface)
+                    createCaptureSession(gen, camera, reader.surface)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
-                    camera.close()
-                    cameraDevice = null
-                    _isStreaming.value = false
-                    _statusMessage.value = "Camera disconnected"
+                    try { camera.close() } catch (_: Exception) {}
+                    if (cameraDevice === camera && sessionGeneration.get() == gen) {
+                        cameraDevice = null
+                        _isStreaming.value = false
+                        _statusMessage.value = "Camera disconnected"
+                    }
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
-                    camera.close()
-                    cameraDevice = null
-                    _isStreaming.value = false
-                    _statusMessage.value = "Camera hardware error: $error"
+                    try { camera.close() } catch (_: Exception) {}
+                    if (cameraDevice === camera && sessionGeneration.get() == gen) {
+                        cameraDevice = null
+                        _isStreaming.value = false
+                        _statusMessage.value = "Camera hardware error ($error) — tap Start to retry"
+                    }
                 }
             }, backgroundHandler)
         } catch (e: Exception) {
@@ -255,22 +317,28 @@ class PhoneCameraStreamer(
         } ?: sizes[0]
     }
 
-    private fun createCaptureSession(camera: CameraDevice, surface: android.view.Surface) {
+    private fun createCaptureSession(gen: Int, camera: CameraDevice, surface: android.view.Surface) {
+        if (sessionGeneration.get() != gen) return
         try {
+            @Suppress("DEPRECATION")
             camera.createCaptureSession(
                 listOf(surface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
-                        if (cameraDevice == null) return
+                        if (sessionGeneration.get() != gen || cameraDevice !== camera) {
+                            try { session.close() } catch (_: Exception) {}
+                            return
+                        }
                         captureSession = session
                         try {
                             val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                                 addTarget(surface)
                                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                                set(CaptureRequest.JPEG_QUALITY, 72.toByte())
                             }
                             session.setRepeatingRequest(requestBuilder.build(), null, backgroundHandler)
-                            _statusMessage.value = "Streaming ${bestLensName()}"
+                            _statusMessage.value = "Streaming ${bestLensName()} (${_orientationMode.value.uppercase()})"
                         } catch (e: Exception) {
                             Log.e(tag, "Failed to set repeating request", e)
                             _statusMessage.value = "Session request error: ${e.message}"
@@ -278,8 +346,10 @@ class PhoneCameraStreamer(
                     }
 
                     override fun onConfigureFailed(session: CameraCaptureSession) {
-                        _statusMessage.value = "Camera session configuration failed"
-                        stop()
+                        if (sessionGeneration.get() == gen) {
+                            _statusMessage.value = "Camera session configuration failed"
+                            stop()
+                        }
                     }
                 },
                 backgroundHandler
@@ -291,7 +361,66 @@ class PhoneCameraStreamer(
         }
     }
 
-    private fun handleImage(reader: ImageReader, width: Int, height: Int, lens: String) {
+    private fun processAndOrientFrame(rawBytes: ByteArray, lens: String): Triple<ByteArray, Int, Int>? {
+        val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: return null
+        val mode = _orientationMode.value
+        val extraRot = _rotationOffset.value
+
+        // On Android phones, sensor buffer is landscape (width >= height).
+        // In Portrait mode, rotate by sensorOrientationDegrees so upright phone produces upright 9:16 video.
+        // In Landscape mode, keep horizontal 16:9 alignment, plus any manual 90° user rotation offset.
+        val baseRotation = if (mode == "portrait") {
+            sensorOrientationDegrees
+        } else {
+            0
+        }
+        val totalRotation = (baseRotation + extraRot) % 360
+        val shouldMirror = (lens == "front" && _mirrorFront.value)
+
+        val (targetBaseW, targetBaseH) = _currentResolution.value
+        val desiredW = if (mode == "portrait") minOf(targetBaseW, targetBaseH) else maxOf(targetBaseW, targetBaseH)
+        val desiredH = if (mode == "portrait") maxOf(targetBaseW, targetBaseH) else minOf(targetBaseW, targetBaseH)
+
+        val matrix = Matrix()
+        if (totalRotation != 0) {
+            matrix.postRotate(totalRotation.toFloat())
+        }
+        if (shouldMirror) {
+            matrix.postScale(-1f, 1f)
+        }
+
+        val rotated = if (totalRotation != 0 || shouldMirror) {
+            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        } else {
+            bitmap
+        }
+
+        val scaled = if (rotated.width != desiredW || rotated.height != desiredH) {
+            Bitmap.createScaledBitmap(rotated, desiredW, desiredH, true)
+        } else {
+            rotated
+        }
+
+        // Compress with adaptive quality so UDP datagrams NEVER exceed 36 KB
+        var quality = if (desiredW * desiredH > 500_000) 58 else 70
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        while (out.size() > 35_000 && quality > 30) {
+            out.reset()
+            quality -= 12
+            scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        }
+
+        val finalW = scaled.width
+        val finalH = scaled.height
+        if (scaled !== rotated) scaled.recycle()
+        if (rotated !== bitmap) rotated.recycle()
+        bitmap.recycle()
+
+        return Triple(out.toByteArray(), finalW, finalH)
+    }
+
+    private fun handleImage(reader: ImageReader, lens: String) {
         val image = try {
             reader.acquireLatestImage() ?: return
         } catch (_: Exception) {
@@ -310,8 +439,11 @@ class PhoneCameraStreamer(
 
             val plane = image.planes.getOrNull(0) ?: return
             val buffer = plane.buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
+            val rawBytes = ByteArray(buffer.remaining())
+            buffer.get(rawBytes)
+
+            val processed = processAndOrientFrame(rawBytes, lens) ?: return
+            val (bytes, outW, outH) = processed
 
             frameCount++
             fpsWindow.add(now)
@@ -329,15 +461,19 @@ class PhoneCameraStreamer(
             _telemetry.value = PhoneCameraTelemetry(
                 active = true,
                 lens = lens,
-                width = width,
-                height = height,
+                width = outW,
+                height = outH,
                 fps = currentFps,
                 kbps = currentKbps,
-                frameCount = frameCount
+                frameCount = frameCount,
+                orientation = _orientationMode.value,
+                rotationDegrees = _rotationOffset.value
             )
 
             _localPreviewFrame.value = bytes
-            onFrameAvailable?.invoke(bytes, width, height, lens)
+            onFrameAvailable?.invoke(bytes, outW, outH, lens)
+        } catch (e: Exception) {
+            Log.w(tag, "Frame processing warning: ${e.message}")
         } finally {
             try {
                 image.close()

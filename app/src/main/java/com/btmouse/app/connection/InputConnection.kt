@@ -31,13 +31,17 @@ data class AppInfo(
     val name: String = "",
     val path: String = "",
     val cmd: String = "",
-    val isQuick: Boolean = false
+    val isQuick: Boolean = false,
+    val iconBase64: String = "",
+    val brandKey: String = ""
 )
 
 data class CustomAppEntry(
     val name: String = "",
     val cmd: String = "",
-    val icon: String = "🚀"
+    val icon: String = "🚀",
+    val iconBase64: String = "",
+    val brandKey: String = ""
 )
 
 interface InputConnection {
@@ -73,6 +77,7 @@ interface InputConnection {
     val systemStats: StateFlow<SystemStats?>? get() = null
     val runningProcesses: StateFlow<List<ProcessInfo>>? get() = null
     val installedApps: StateFlow<List<AppInfo>>? get() = null
+    val appIcons: StateFlow<Map<String, String>>? get() = null
     val latestCameraFrame: StateFlow<ByteArray?>? get() = null
     val cameraSnapshots: StateFlow<List<SnapshotEntry>>? get() = null
     val isCameraStreaming: StateFlow<Boolean>? get() = null
@@ -90,6 +95,7 @@ interface InputConnection {
     fun queryRunningProcesses() {}
     fun killProcess(pid: Int) {}
     fun queryInstalledApps() {}
+    fun queryAppIcons(items: List<String>) {}
     fun updateQuickApps(paths: List<String>) {}
     fun requestCameraSnapshot() {}
     fun startCameraStream() {}
@@ -115,11 +121,15 @@ interface InputConnection {
     val phoneCameraLens: StateFlow<String>? get() = null
     val phoneCameraResolution: StateFlow<Pair<Int, Int>>? get() = null
     val phoneCameraFps: StateFlow<Int>? get() = null
+    val phoneCameraOrientation: StateFlow<String>? get() = null
+    val phoneCameraRotation: StateFlow<Int>? get() = null
     val phoneCameraStatusMessage: StateFlow<String>? get() = null
     fun startPhoneCameraStream(lens: String = "back", width: Int = 640, height: Int = 360, fps: Int = 24) {}
     fun switchPhoneCameraLens() {}
     fun setPhoneCameraResolution(width: Int, height: Int) {}
     fun setPhoneCameraFps(fps: Int) {}
+    fun setPhoneCameraOrientation(mode: String) {}
+    fun rotatePhoneCamera90() {}
     fun stopPhoneCameraStream() {}
     fun sendPhoneCameraFrame(data: ByteArray, width: Int, height: Int, lens: String) {}
 }

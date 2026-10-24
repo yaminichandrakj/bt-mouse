@@ -7,13 +7,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
-data class SnapshotEntry(val path: String, val capturedAt: Long)
+data class SnapshotEntry(val path: String, val capturedAt: Long, val folder: String = "Snapshots")
 
-/** Gallery for full-quality PC webcam snapshots stored in accessible Pictures directory. */
+/** Gallery for full-quality webcam snapshots stored in the phone's dedicated Snapshots folder. */
 class SnapshotGallery(context: Context) {
     private val directory: File = run {
-        val external = context.applicationContext.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-        val dir = if (external != null) File(external, "Snapshots") else File(context.applicationContext.filesDir, "camera_snapshots")
+        val baseExternal = context.applicationContext.getExternalFilesDir(null)
+        val dir = if (baseExternal != null) {
+            File(baseExternal, "Snapshots")
+        } else {
+            val picExternal = context.applicationContext.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+            if (picExternal != null) File(picExternal, "Snapshots") else File(context.applicationContext.filesDir, "Snapshots")
+        }
         dir.apply { mkdirs() }
     }
 
@@ -23,17 +28,24 @@ class SnapshotGallery(context: Context) {
     val snapshots: StateFlow<List<SnapshotEntry>> = _snapshots.asStateFlow()
 
     init {
+        // Migrate snapshots from legacy internal or Pictures locations into files/Snapshots
         try {
-            val legacy = File(context.applicationContext.filesDir, "camera_snapshots")
-            if (legacy.exists() && legacy.isDirectory && legacy.canonicalPath != directory.canonicalPath) {
-                legacy.listFiles()?.forEach { file ->
-                    if (file.isFile && file.extension.equals("jpg", ignoreCase = true)) {
-                        val dest = File(directory, file.name)
-                        if (!dest.exists()) file.renameTo(dest) else file.delete()
+            val legacyDirs = listOfNotNull(
+                File(context.applicationContext.filesDir, "camera_snapshots"),
+                context.applicationContext.getExternalFilesDir(Environment.DIRECTORY_PICTURES)?.let { File(it, "Snapshots") }
+            )
+            for (legacy in legacyDirs) {
+                if (legacy.exists() && legacy.isDirectory && legacy.canonicalPath != directory.canonicalPath) {
+                    legacy.listFiles()?.forEach { file ->
+                        if (file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png")) {
+                            val dest = File(directory, file.name)
+                            if (!dest.exists()) file.renameTo(dest) else file.delete()
+                        }
                     }
                 }
             }
         } catch (_: Exception) {}
+        _snapshots.value = scan()
     }
 
     @Synchronized
@@ -71,10 +83,10 @@ class SnapshotGallery(context: Context) {
                 return false
             }
             val oldFiles = directory.listFiles()
-                ?.filter { it.isFile && it.extension.equals("jpg", ignoreCase = true) }
+                ?.filter { it.isFile && it.extension.lowercase() in setOf("jpg", "jpeg", "png") }
                 ?.sortedByDescending { it.lastModified() }
                 .orEmpty()
-            oldFiles.drop(40).forEach { it.delete() }
+            oldFiles.drop(60).forEach { it.delete() }
             _snapshots.value = scan()
             true
         } catch (_: Exception) {
@@ -83,9 +95,9 @@ class SnapshotGallery(context: Context) {
     }
 
     private fun scan(): List<SnapshotEntry> = directory.listFiles()
-        ?.filter { it.isFile && it.extension.equals("jpg", ignoreCase = true) }
+        ?.filter { it.isFile && it.extension.lowercase() in setOf("jpg", "jpeg", "png") }
         ?.sortedByDescending { it.lastModified() }
-        ?.take(40)
-        ?.map { SnapshotEntry(it.absolutePath, it.lastModified()) }
+        ?.take(60)
+        ?.map { SnapshotEntry(it.absolutePath, it.lastModified(), "Snapshots") }
         .orEmpty()
 }

@@ -80,6 +80,7 @@ import com.btmouse.app.ui.theme.DarkBackground
 import com.btmouse.app.ui.theme.DarkBorder
 import com.btmouse.app.ui.theme.DarkSurface
 import com.btmouse.app.ui.theme.DarkSurfaceVariant
+import com.btmouse.app.ui.components.AppOrPlatformIconBadge
 import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
@@ -179,26 +180,11 @@ fun MediaRemoteScreen(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Track Info Header
+                // Track Info Header with Authentic OTT Site & Laptop App Icons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val playerName = mediaStatus.playerName.lowercase()
-                    val playerMark = when {
-                        "youtube music" in playerName -> "YTM"
-                        "youtube" in playerName -> "YT"
-                        "netflix" in playerName -> "N"
-                        "prime" in playerName -> "P"
-                        "disney" in playerName -> "D+"
-                        "spotify" in playerName -> "S"
-                        "apple music" in playerName -> "AM"
-                        "vlc" in playerName -> "VLC"
-                        "chrome" in playerName -> "C"
-                        "edge" in playerName -> "E"
-                        "firefox" in playerName -> "F"
-                        else -> mediaStatus.playerName.take(3).uppercase()
-                    }
                     val artworkBitmap = remember(mediaStatus.artworkBase64) {
                         runCatching {
                             if (mediaStatus.artworkBase64.isNotBlank()) {
@@ -208,38 +194,54 @@ fun MediaRemoteScreen(
                         }.getOrNull()
                     }
                     Box(
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(PrimaryIndigo, AccentCyan.copy(alpha = 0.5f))
-                                )
-                            ),
+                        modifier = Modifier.size(58.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         if (artworkBitmap != null) {
                             Image(
                                 bitmap = artworkBitmap,
                                 contentDescription = "Album Artwork",
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(14.dp)),
                                 contentScale = ContentScale.Crop
                             )
-                        } else if (playerMark.isNotBlank()) {
-                            Text(playerMark, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black)
+                            // Overlay small OTT / Player App badge in bottom-right corner
+                            if (mediaStatus.playerName.isNotBlank() || mediaStatus.playerKey.isNotBlank() || mediaStatus.playerIconBase64.isNotBlank()) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(DarkBackground)
+                                        .padding(1.5.dp)
+                                ) {
+                                    AppOrPlatformIconBadge(
+                                        name = mediaStatus.playerName.ifBlank { mediaStatus.title },
+                                        pathOrCmd = "${mediaStatus.title} ${mediaStatus.artist}",
+                                        iconBase64 = mediaStatus.playerIconBase64,
+                                        brandKey = mediaStatus.playerKey,
+                                        preferOttBrand = true,
+                                        size = 20.dp,
+                                        cornerRadius = 5.dp
+                                    )
+                                }
+                            }
                         } else {
-                            Icon(
-                                imageVector = Icons.Default.MusicNote,
-                                contentDescription = "Music",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                            AppOrPlatformIconBadge(
+                                name = mediaStatus.playerName.ifBlank { mediaStatus.title.ifBlank { "Media" } },
+                                pathOrCmd = "${mediaStatus.title} ${mediaStatus.artist}",
+                                iconBase64 = mediaStatus.playerIconBase64,
+                                brandKey = mediaStatus.playerKey,
+                                preferOttBrand = true,
+                                size = 56.dp,
+                                cornerRadius = 14.dp
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
 
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             text = if (mediaStatus.hasMedia && mediaStatus.title.isNotEmpty()) mediaStatus.title else "No Media Playing",
                             color = TextPrimary,
@@ -256,6 +258,30 @@ fun MediaRemoteScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (mediaStatus.playerName.isNotBlank()) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                AppOrPlatformIconBadge(
+                                    name = mediaStatus.playerName,
+                                    pathOrCmd = "${mediaStatus.title} ${mediaStatus.artist}",
+                                    iconBase64 = mediaStatus.playerIconBase64,
+                                    brandKey = mediaStatus.playerKey,
+                                    preferOttBrand = true,
+                                    size = 14.dp,
+                                    cornerRadius = 4.dp
+                                )
+                                Text(
+                                    text = mediaStatus.playerName,
+                                    color = AccentCyan,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(6.dp))

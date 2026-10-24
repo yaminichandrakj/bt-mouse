@@ -6,6 +6,8 @@ data class MediaStatus(
     val artist: String = "",
     val album: String = "",
     val playerName: String = "",
+    val playerKey: String = "",
+    val playerIconBase64: String = "",
     val status: String = "Stopped",
     val position: Float = 0f,
     val duration: Float = 0f,

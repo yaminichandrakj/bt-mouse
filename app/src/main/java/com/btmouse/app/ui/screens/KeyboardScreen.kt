@@ -74,6 +74,11 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -127,6 +132,7 @@ import com.btmouse.app.ui.theme.DarkBackground
 import com.btmouse.app.ui.theme.DarkBorder
 import com.btmouse.app.ui.theme.DarkSurface
 import com.btmouse.app.ui.theme.DarkSurfaceVariant
+import com.btmouse.app.ui.components.AppOrPlatformIconBadge
 import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
@@ -602,6 +608,7 @@ fun QuickAppsSection(
     }
 
     val installedApps by coordinator.installedApps.collectAsState()
+    val appIcons by coordinator.appIcons.collectAsState()
     val isConnected by coordinator.isConnected.collectAsState()
     val connectionMessage by coordinator.statusMessage.collectAsState()
     val quickApps = installedApps.filter { it.isQuick }
@@ -609,6 +616,33 @@ fun QuickAppsSection(
     LaunchedEffect(isConnected) {
         if (isConnected) {
             coordinator.queryInstalledApps()
+        }
+    }
+
+    // Automatically request real laptop icons for Quick Apps, Pinned Custom Apps, and Installed Apps
+    LaunchedEffect(isConnected, installedApps.size, customApps.size, showBrowseDialog) {
+        if (isConnected) {
+            val needed = mutableListOf<String>()
+            customApps.forEach { ca ->
+                if (appIcons[ca.cmd].isNullOrBlank() && appIcons[ca.name.lowercase()].isNullOrBlank()) {
+                    needed.add(ca.cmd)
+                }
+            }
+            quickApps.forEach { qa ->
+                if (qa.iconBase64.isBlank() && appIcons[qa.path].isNullOrBlank()) {
+                    needed.add(qa.path)
+                }
+            }
+            if (showBrowseDialog) {
+                installedApps.take(35).forEach { ia ->
+                    if (ia.iconBase64.isBlank() && appIcons[ia.path].isNullOrBlank()) {
+                        needed.add(ia.path)
+                    }
+                }
+            }
+            if (needed.isNotEmpty()) {
+                coordinator.queryAppIcons(needed.distinct())
+            }
         }
     }
 
@@ -669,9 +703,26 @@ fun QuickAppsSection(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(app.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1)
-                                            Text(app.path, color = TextMuted, fontSize = 10.sp, maxLines = 1)
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            val rowIcon = app.iconBase64.ifBlank {
+                                                appIcons[app.path] ?: appIcons[app.name.lowercase()].orEmpty()
+                                            }
+                                            AppOrPlatformIconBadge(
+                                                name = app.name,
+                                                pathOrCmd = app.path,
+                                                iconBase64 = rowIcon,
+                                                brandKey = app.brandKey,
+                                                size = 34.dp,
+                                                cornerRadius = 8.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(app.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1)
+                                                Text(app.path, color = TextMuted, fontSize = 10.sp, maxLines = 1)
+                                            }
                                         }
                                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                             TextButton(
@@ -896,15 +947,23 @@ fun QuickAppsSection(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(32.dp)
-                                                .clip(CircleShape)
-                                                .background(AccentEmerald.copy(alpha = 0.2f)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(Icons.Default.PushPin, contentDescription = null, tint = AccentEmerald, modifier = Modifier.size(16.dp))
+                                        val customIconB64 = app.iconBase64.ifBlank {
+                                            appIcons[app.cmd]
+                                                ?: appIcons[app.cmd.lowercase()]
+                                                ?: appIcons[app.name.lowercase()]
+                                                ?: installedApps.firstOrNull {
+                                                    it.path.equals(app.cmd, ignoreCase = true) ||
+                                                        it.name.equals(app.name, ignoreCase = true)
+                                                }?.iconBase64.orEmpty()
                                         }
+                                        AppOrPlatformIconBadge(
+                                            name = app.name,
+                                            pathOrCmd = app.cmd,
+                                            iconBase64 = customIconB64,
+                                            brandKey = app.brandKey,
+                                            size = 36.dp,
+                                            cornerRadius = 10.dp
+                                        )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(app.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
@@ -960,15 +1019,17 @@ fun QuickAppsSection(
                                 modifier = Modifier.padding(14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(PrimaryIndigo.copy(alpha = 0.25f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = app.name, tint = AccentCyan, modifier = Modifier.size(20.dp))
+                                val quickIconB64 = app.iconBase64.ifBlank {
+                                    appIcons[app.path] ?: appIcons[app.name.lowercase()].orEmpty()
                                 }
+                                AppOrPlatformIconBadge(
+                                    name = app.name,
+                                    pathOrCmd = app.path,
+                                    iconBase64 = quickIconB64,
+                                    brandKey = app.brandKey,
+                                    size = 38.dp,
+                                    cornerRadius = 10.dp
+                                )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(app.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
@@ -1250,8 +1311,164 @@ fun TasksAndHardwareSection(
 }
 
 @Composable
+fun FullscreenVideoModal(
+    title: String,
+    subtitle: String,
+    bitmap: androidx.compose.ui.graphics.ImageBitmap?,
+    onDismiss: () -> Unit,
+    onRotate90: (() -> Unit)? = null,
+    onFlipLens: (() -> Unit)? = null,
+    onSnapshot: (() -> Unit)? = null,
+    onStopStream: (() -> Unit)? = null
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF04070D))
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = title,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable { /* keep interactive */ },
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Videocam,
+                        contentDescription = null,
+                        tint = TextMuted,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Waiting for live video frame…", color = TextSecondary, fontSize = 14.sp)
+                }
+            }
+
+            // Top Floating HUD Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(DarkBackground.copy(alpha = 0.82f))
+                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = subtitle,
+                        color = AccentCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(DarkSurfaceVariant)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FullscreenExit,
+                        contentDescription = "Exit Fullscreen",
+                        tint = TextPrimary
+                    )
+                }
+            }
+
+            // Bottom Floating Action Bar
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(DarkBackground.copy(alpha = 0.85f))
+                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onRotate90 != null) {
+                    OutlinedButton(
+                        onClick = onRotate90,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentCyan)
+                    ) {
+                        Icon(Icons.Default.ScreenRotation, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Rotate 90°", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (onFlipLens != null) {
+                    OutlinedButton(
+                        onClick = onFlipLens,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Flip Lens", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (onSnapshot != null) {
+                    Button(
+                        onClick = onSnapshot,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
+                    ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Snapshot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (onStopStream != null) {
+                    Button(
+                        onClick = {
+                            onStopStream()
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun CameraAndRecorderSection(
-    coordinator: ConnectionCoordinator
+    coordinator: ConnectionCoordinator,
+    initialTab: String = "all"
 ) {
     val rawBytes by coordinator.latestCameraFrame.collectAsState()
     val isStreaming by coordinator.isCameraStreaming.collectAsState()
@@ -1260,14 +1477,23 @@ fun CameraAndRecorderSection(
     val snapshotEntries by coordinator.cameraSnapshots.collectAsState()
     val cameraRecording by coordinator.isCameraRecording.collectAsState()
     var cameraStreamMessage by remember { mutableStateOf("") }
+    var showPcCamFullscreen by remember { mutableStateOf(false) }
     val context = LocalContext.current
     var selectedSnapshot by remember { mutableStateOf<String?>(null) }
     var showSnapshotDeleteConfirm by remember { mutableStateOf(false) }
+
     val selectedSnapshotBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, selectedSnapshot) {
-        value = selectedSnapshot?.let { path -> withContext(Dispatchers.IO) {
-            try { BitmapFactory.decodeFile(path)?.asImageBitmap() } catch (_: Exception) { null }
-        } }
+        value = selectedSnapshot?.let { path ->
+            withContext(Dispatchers.IO) {
+                try {
+                    BitmapFactory.decodeFile(path)?.asImageBitmap()
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
     }
+
     if (selectedSnapshotBitmap != null && selectedSnapshot != null) {
         val currentSnapPath = selectedSnapshot!!
         val snapName = File(currentSnapPath).name
@@ -1284,12 +1510,17 @@ fun CameraAndRecorderSection(
                     Image(
                         bitmap = selectedSnapshotBitmap!!,
                         contentDescription = "Saved webcam snapshot",
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
                         contentScale = ContentScale.Fit
                     )
-                    Text("Saved in Pictures/Snapshots directory", color = AccentCyan, fontSize = 11.sp)
+                    Text("Saved in phone Snapshots/ folder", color = AccentCyan, fontSize = 11.sp)
                     if (showSnapshotDeleteConfirm) {
-                        Text("Permanently delete this snapshot from this phone?", color = AccentRose, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Permanently delete this snapshot from this phone?",
+                            color = AccentRose,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             },
@@ -1348,12 +1579,13 @@ fun CameraAndRecorderSection(
         )
     }
 
+    // Allow generous 15s grace window so transport failover handoffs never abort the stream
     LaunchedEffect(isStreaming, rawBytes) {
         if (!isStreaming) return@LaunchedEffect
         val observedFrame = rawBytes
-        delay(7000)
+        delay(15000)
         if (coordinator.isCameraStreaming.value && coordinator.latestCameraFrame.value === observedFrame) {
-            cameraStreamMessage = "No live frame arrived for 7 seconds. Stopping the stalled stream; reconnect and try again."
+            cameraStreamMessage = "No live frame arrived for 15 seconds. Stopping the stalled stream; tap Start Live to retry."
             coordinator.stopCameraStream()
         }
     }
@@ -1370,234 +1602,309 @@ fun CameraAndRecorderSection(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Camera & Microphone Control", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        if (connectionStatus.startsWith("Microphone") || connectionStatus.startsWith("Camera stream") || connectionStatus.startsWith("Camera recording")) {
-            Text(connectionStatus, color = if (connectionStatus.contains("error", ignoreCase = true) ||
-                connectionStatus.contains("stopped", ignoreCase = true) || connectionStatus.contains("unavailable", ignoreCase = true)) AccentRose else AccentEmerald,
-                fontSize = 11.sp)
+    if (showPcCamFullscreen) {
+        val bmp = imageBitmap
+        val dimText = if (bmp != null) "${bmp.width}×${bmp.height} px · Live PC Webcam" else "Connecting to PC Webcam…"
+        FullscreenVideoModal(
+            title = "PC Webcam Live Stream",
+            subtitle = if (cameraRecording) "$dimText · ● Recording Video+Audio to PC Videos/" else dimText,
+            bitmap = bmp,
+            onDismiss = { showPcCamFullscreen = false },
+            onSnapshot = { coordinator.requestCameraSnapshot() },
+            onStopStream = if (isStreaming) ({ coordinator.stopCameraStream() }) else null
+        )
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        if (connectionStatus.startsWith("Microphone") || connectionStatus.startsWith("Camera stream") || connectionStatus.startsWith("Camera recording") || connectionStatus.startsWith("Snapshot")) {
+            Text(
+                connectionStatus,
+                color = if (connectionStatus.contains("error", ignoreCase = true) ||
+                    connectionStatus.contains("stopped", ignoreCase = true) ||
+                    connectionStatus.contains("unavailable", ignoreCase = true)
+                ) AccentRose else AccentEmerald,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
         if (cameraStreamMessage.isNotBlank()) {
             Text(cameraStreamMessage, color = AccentRose, fontSize = 11.sp)
         }
 
-        // Phone Camera as PC Webcam Card
-        PhoneCameraWebcamCard(coordinator)
-
-        // Webcam Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Videocam, contentDescription = null, tint = AccentCyan)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Webcam Viewfinder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            if (isStreaming) if (cameraRecording) "LIVE · RECORDING" else "LIVE · NOT RECORDING" else "STANDBY",
-                            color = if (isStreaming) AccentEmerald else TextMuted,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                // Viewfinder Screen
-                val currentImageBitmap = imageBitmap
-                if (currentImageBitmap != null) {
-                    Image(
-                        bitmap = currentImageBitmap,
-                        contentDescription = "Webcam frame",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp)
-                            .clip(RoundedCornerShape(10.dp)),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(DarkSurfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = TextMuted, modifier = Modifier.size(36.dp))
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                if (isStreaming) "Waiting for the first live frame…" else "Camera stream standby",
-                                color = TextSecondary, fontSize = 12.sp
-                            )
-                            Text(
-                                if (isStreaming) "The camera is connecting. This view will update as soon as a frame arrives."
-                                else "Tap 'Capture Snapshot' or 'Live Stream' below",
-                                color = TextMuted, fontSize = 10.sp
-                            )
-                        }
-                    }
-                }
-
-                // Camera Action Buttons
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { coordinator.requestCameraSnapshot() },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Snapshot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    Button(
-                        onClick = {
-                            if (isStreaming) coordinator.stopCameraStream()
-                            else {
-                                cameraStreamMessage = ""
-                                coordinator.startCameraStream()
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = if (isStreaming) AccentRose else AccentCyan),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isStreaming) Icons.Default.Stop else Icons.Default.Videocam,
-                            contentDescription = null,
-                            tint = if (isStreaming) TextPrimary else DarkBackground,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            if (isStreaming) "Stop Live" else "Start Live",
-                            color = if (isStreaming) TextPrimary else DarkBackground,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
+        if (initialTab == "all" || initialTab == "phone_cam") {
+            PhoneCameraWebcamCard(coordinator)
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Snapshot Gallery · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("Pictures/Snapshots", color = AccentCyan, fontSize = 10.sp)
-                }
-                if (snapshotEntries.isEmpty()) {
-                    Text("Snapshots captured from the PC are saved to the phone's Pictures/Snapshots directory.", color = TextSecondary, fontSize = 11.sp)
-                } else {
-                    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        snapshotEntries.forEach { entry ->
-                            val thumbnail by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, entry.path) {
-                                value = withContext(Dispatchers.IO) {
-                                    try { BitmapFactory.decodeFile(entry.path)?.asImageBitmap() } catch (_: Exception) { null }
-                                }
+        if (initialTab == "all" || initialTab == "pc_cam") {
+            // PC Webcam Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentCyan else DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Videocam, contentDescription = null, tint = AccentCyan)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("PC Webcam Viewfinder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Saves combined video+audio to PC Videos/ folder", color = TextMuted, fontSize = 10.sp)
                             }
-                            thumbnail?.let { bitmap ->
-                                Image(
-                                    bitmap = bitmap,
-                                    contentDescription = "Open snapshot",
-                                    modifier = Modifier.size(100.dp, 76.dp).clip(RoundedCornerShape(8.dp)).clickable { selectedSnapshot = entry.path },
-                                    contentScale = ContentScale.Crop
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    if (isStreaming) if (cameraRecording) "● LIVE · REC (A+V)" else "● LIVE" else "STANDBY",
+                                    color = if (isStreaming) AccentEmerald else TextMuted,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { showPcCamFullscreen = true },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(DarkSurfaceVariant)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Fullscreen,
+                                    contentDescription = "Fullscreen PC Webcam",
+                                    tint = AccentCyan,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
                         }
                     }
-                }
-            }
-        }
 
-        // Microphone Recorder Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Mic, contentDescription = null, tint = AccentRose)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Microphone Recorder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-
-                    if (isRecording) {
+                    val currentImageBitmap = imageBitmap
+                    if (currentImageBitmap != null) {
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(AccentRose.copy(alpha = 0.2f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .fillMaxWidth()
+                                .height(230.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF050811))
+                                .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+                                .clickable { showPcCamFullscreen = true }
                         ) {
-                            Text("● RECORDING (16kHz WAV)", color = AccentRose, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Image(
+                                bitmap = currentImageBitmap,
+                                contentDescription = "Webcam frame",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(DarkBackground.copy(alpha = 0.8f))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    "⛶ Tap for Fullscreen (${currentImageBitmap.width}×${currentImageBitmap.height})",
+                                    color = AccentCyan,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(DarkSurfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.CameraAlt, contentDescription = null, tint = TextMuted, modifier = Modifier.size(36.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    if (isStreaming) "Waiting for first live frame…" else "PC Webcam Standby",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    "Tap 'Snapshot' or 'Start Live' below",
+                                    color = TextMuted,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { coordinator.requestCameraSnapshot() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Snapshot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = {
+                                if (isStreaming) coordinator.stopCameraStream()
+                                else {
+                                    cameraStreamMessage = ""
+                                    coordinator.startCameraStream()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = if (isStreaming) AccentRose else AccentCyan),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isStreaming) Icons.Default.Stop else Icons.Default.Videocam,
+                                contentDescription = null,
+                                tint = if (isStreaming) TextPrimary else DarkBackground,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (isStreaming) "Stop Live" else "Start Live",
+                                color = if (isStreaming) TextPrimary else DarkBackground,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
+            }
 
-                Text(
-                    "Record high-clarity microphone audio on your PC remotely. Recordings are saved in your Windows BTMouse recordings folder and appear in the Recordings section.",
-                    color = TextSecondary,
-                    fontSize = 11.sp
-                )
-
-                Button(
-                    onClick = {
-                        if (isRecording) coordinator.stopAudioRecord()
-                        else coordinator.startAudioRecord()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = if (isRecording) AccentRose else PrimaryIndigo),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        if (isRecording) "Stop Microphone Recording" else "Start Microphone Recording",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
+            // Snapshot Gallery Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Phone Snapshots · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("📁 Snapshots/", color = AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (snapshotEntries.isEmpty()) {
+                        Text("Snapshots captured from the PC are saved to your phone's Snapshots/ folder and PC Snapshots/ folder.", color = TextSecondary, fontSize = 11.sp)
+                    } else {
+                        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            snapshotEntries.forEach { entry ->
+                                val thumbnail by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, entry.path) {
+                                    value = withContext(Dispatchers.IO) {
+                                        try { BitmapFactory.decodeFile(entry.path)?.asImageBitmap() } catch (_: Exception) { null }
+                                    }
+                                }
+                                thumbnail?.let { bitmap ->
+                                    Image(
+                                        bitmap = bitmap,
+                                        contentDescription = "Open snapshot",
+                                        modifier = Modifier
+                                            .size(110.dp, 82.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                                            .clickable { selectedSnapshot = entry.path },
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        LiveAudioSection(coordinator)
+
+        if (initialTab == "all" || initialTab == "audio") {
+            // Microphone Recorder Card
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Mic, contentDescription = null, tint = AccentRose)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("PC Microphone Recorder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Saves WAV recordings to PC Audios/ folder", color = TextMuted, fontSize = 10.sp)
+                            }
+                        }
+
+                        if (isRecording) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(AccentRose.copy(alpha = 0.2f))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("● RECORDING TO AUDIOS/", color = AccentRose, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Text(
+                        "Record standalone audio from your PC's microphone directly into your PC's BTMouse/Audios folder.",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+
+                    Button(
+                        onClick = {
+                            if (isRecording) coordinator.stopAudioRecord()
+                            else coordinator.startAudioRecord()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isRecording) AccentRose else PrimaryIndigo),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (isRecording) "Stop Microphone Recording" else "Start Microphone Recording",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+            LiveAudioSection(coordinator)
+        }
     }
 }
 
@@ -1612,7 +1919,10 @@ fun PhoneCameraWebcamCard(
     val currentLens by coordinator.phoneCameraLens.collectAsState()
     val currentRes by coordinator.phoneCameraResolution.collectAsState()
     val currentFps by coordinator.phoneCameraFps.collectAsState()
+    val currentOrientation = coordinator.phoneCameraOrientation?.collectAsState()?.value ?: "landscape"
+    val currentRotation = coordinator.phoneCameraRotation?.collectAsState()?.value ?: 0
     val statusMsg by coordinator.phoneCameraStatusMessage.collectAsState()
+    var showPhoneCamFullscreen by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -1640,6 +1950,24 @@ fun PhoneCameraWebcamCard(
         } else null
     }
 
+    val alignmentDescription = if (currentOrientation == "portrait") {
+        "PORTRAIT 9:16 (Vertical)"
+    } else {
+        "LANDSCAPE 16:9 (Horizontal)"
+    } + if (currentRotation != 0) " · Rot ${currentRotation}°" else ""
+
+    if (showPhoneCamFullscreen) {
+        FullscreenVideoModal(
+            title = "Phone Camera Live Broadcast (${currentLens.uppercase()})",
+            subtitle = "$alignmentDescription · ${telemetry.width}×${telemetry.height} · ${"%.1f".format(telemetry.fps)} FPS",
+            bitmap = previewBitmap,
+            onDismiss = { showPhoneCamFullscreen = false },
+            onRotate90 = { coordinator.rotatePhoneCamera90() },
+            onFlipLens = { coordinator.switchPhoneCameraLens() },
+            onStopStream = if (isStreaming) ({ coordinator.stopPhoneCameraStream() }) else null
+        )
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -1647,72 +1975,94 @@ fun PhoneCameraWebcamCard(
         border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentEmerald else DarkBorder)
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Header
+            // Header with Live Badge & Fullscreen Button
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Icon(
                         imageVector = Icons.Default.Videocam,
                         contentDescription = null,
                         tint = if (isStreaming) AccentEmerald else AccentCyan
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "Phone as PC Webcam",
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
+                    Column {
+                        Text(
+                            "Phone as PC Webcam",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            "Alignment: $alignmentDescription",
+                            color = AccentCyan,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        if (isStreaming) "● LIVE TO PC" else "STANDBY",
-                        color = if (isStreaming) AccentEmerald else TextMuted,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            if (isStreaming) "● LIVE TO PC" else "STANDBY",
+                            color = if (isStreaming) AccentEmerald else TextMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showPhoneCamFullscreen = true },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DarkSurfaceVariant)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Fullscreen,
+                            contentDescription = "Fullscreen Phone Camera",
+                            tint = AccentCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
-            Text(
-                "Broadcast this phone's camera directly into your PC Companion as a virtual webcam (OBS, Zoom, Teams, Meet) or local MJPEG feed.",
-                color = TextSecondary,
-                fontSize = 11.sp
-            )
-
-            // Viewfinder
+            // Viewfinder (Uncropped ContentScale.Fit so exact alignment/orientation is visible!)
             if (isStreaming && previewBitmap != null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp)
+                        .height(if (currentOrientation == "portrait") 270.dp else 210.dp)
                         .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF050811))
+                        .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+                        .clickable { showPhoneCamFullscreen = true }
                 ) {
                     Image(
                         bitmap = previewBitmap!!,
                         contentDescription = "Phone camera viewfinder preview",
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Fit
                     )
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
                             .padding(8.dp)
                             .clip(RoundedCornerShape(6.dp))
-                            .background(DarkBackground.copy(alpha = 0.75f))
+                            .background(DarkBackground.copy(alpha = 0.82f))
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            "${currentRes.first}x${currentRes.second} · ${"%.1f".format(telemetry.fps)} FPS · ${"%.0f".format(telemetry.kbps)} kbps · #${telemetry.frameCount}",
+                            "${telemetry.width}×${telemetry.height} ($alignmentDescription) · ${"%.1f".format(telemetry.fps)} FPS · ${"%.0f".format(telemetry.kbps)} kbps",
                             color = AccentCyan,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium
@@ -1723,7 +2073,7 @@ fun PhoneCameraWebcamCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(130.dp)
+                        .height(140.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(DarkSurfaceVariant),
                     contentAlignment = Alignment.Center
@@ -1742,7 +2092,7 @@ fun PhoneCameraWebcamCard(
                             fontSize = 12.sp
                         )
                         Text(
-                            "Select lens, resolution, and target FPS below",
+                            "Choose Landscape (16:9) or Portrait (9:16) below, then tap Start",
                             color = TextMuted,
                             fontSize = 10.sp
                         )
@@ -1750,7 +2100,48 @@ fun PhoneCameraWebcamCard(
                 }
             }
 
-            // Lens & Format Selectors
+            // Orientation & Rotation Selector Row
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = currentOrientation == "landscape",
+                    onClick = { coordinator.setPhoneCameraOrientation("landscape") },
+                    label = { Text("↔ Landscape 16:9", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                        selectedLabelColor = AccentCyan,
+                        containerColor = DarkSurfaceVariant,
+                        labelColor = TextSecondary
+                    )
+                )
+                FilterChip(
+                    selected = currentOrientation == "portrait",
+                    onClick = { coordinator.setPhoneCameraOrientation("portrait") },
+                    label = { Text("↕ Portrait 9:16", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                        selectedLabelColor = AccentCyan,
+                        containerColor = DarkSurfaceVariant,
+                        labelColor = TextSecondary
+                    )
+                )
+                FilterChip(
+                    selected = currentRotation != 0,
+                    onClick = { coordinator.rotatePhoneCamera90() },
+                    label = { Text("↻ Rotate 90° (${currentRotation}°)", fontSize = 10.sp, fontWeight = FontWeight.SemiBold) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
+                        selectedLabelColor = AccentCyan,
+                        containerColor = DarkSurfaceVariant,
+                        labelColor = TextSecondary
+                    )
+                )
+            }
+
+            // Lens, Resolution & FPS Selectors
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1816,7 +2207,7 @@ fun PhoneCameraWebcamCard(
                 }
             }
 
-            // Main Action Button
+            // Main Action Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1863,26 +2254,34 @@ fun PhoneCameraWebcamCard(
                     )
                 }
 
-                if (isStreaming) {
-                    OutlinedButton(
-                        onClick = { coordinator.switchPhoneCameraLens() },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentCyan)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Switch Camera",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Flip", fontSize = 11.sp)
-                    }
+                OutlinedButton(
+                    onClick = { coordinator.rotatePhoneCamera90() },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentCyan)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ScreenRotation,
+                        contentDescription = "Rotate 90°",
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { coordinator.switchPhoneCameraLens() },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Switch Camera",
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
 
             if (isStreaming) {
                 Text(
-                    "PC MJPEG Endpoint: http://127.0.0.1:8766/phone_cam/mjpeg (open in PC browser or OBS)",
+                    "Streaming to PC Companion ('Phone as Webcam' tab & http://127.0.0.1:8766/phone_cam/mjpeg)",
                     color = AccentCyan,
                     fontSize = 10.sp
                 )
@@ -1952,11 +2351,12 @@ fun PowerAndUnlockSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Desktop Security & Power", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        Text("Windows requires sign-in at the PC to unlock its secure desktop. Remote unlock is unavailable.",
-            color = TextMuted, fontSize = 11.sp)
+        Text(
+            "Windows requires sign-in at the PC to unlock its secure desktop. Remote unlock is unavailable.",
+            color = TextMuted,
+            fontSize = 11.sp
+        )
 
-        // Lock the workstation. Unlocking a Windows secure desktop by injected credentials
-        // is not supported safely by this companion.
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -1983,7 +2383,6 @@ fun PowerAndUnlockSection(
             }
         }
 
-        // Sleep, Restart & Shutdown Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = DarkSurface),

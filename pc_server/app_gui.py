@@ -1,55 +1,27 @@
 """
-BT Mouse & Keyboard - PC Companion Application
-Modern Windows 11 Fluent-Styled Desktop GUI with DWM Dark Titlebar,
-Sidebar Navigation, System Tray integration, instant QR Code pairing,
-and zero heavy third-party UI dependencies.
+BT Mouse & Keyboard - Windows 11 Native Qt6 Desktop Companion Application
+Built on PyQt6 (Qt6 C++ hardware-accelerated rendering) with Windows 11 DWM
+Dark Titlebar, DPI-independent Fluent Sidebar Navigation, Fullscreen Video
+Monitor for both Phone & PC Webcams, and separated Videos / Audios / Snapshots folders.
 """
 
-try:
-    import tkinter as tk
-    from tkinter import ttk, messagebox
-    HAS_TK = True
-except ImportError:
-    HAS_TK = False
-
-    class _DummyTkModule:
-        Tk = object
-        Toplevel = object
-        Frame = object
-        Label = object
-        Button = object
-        Entry = object
-        Text = object
-        Canvas = object
-        Listbox = object
-        Checkbutton = object
-        LabelFrame = object
-        Menu = object
-        BooleanVar = object
-        StringVar = object
-        END = "end"
-
-    tk = _DummyTkModule()
-    ttk = None
-    messagebox = None
-
-import threading
-import socket
-import json
-import base64
 import os
 import sys
 import time
+import json
 import re
+import socket
+import base64
+import shutil
 import hashlib
 import tempfile
+import threading
 import subprocess
+import webbrowser
 import urllib.request
 import urllib.error
 from pathlib import Path
 from datetime import datetime
-import shutil
-import webbrowser
 
 # Prevent crash when running as a windowed GUI application without a console attached
 if sys.stdout is None:
@@ -71,17 +43,50 @@ def get_asset_path(filename):
 
 try:
     import qrcode
-    from PIL import Image, ImageTk
+    from PIL import Image
     HAS_QR = True
 except ImportError:
     HAS_QR = False
 
 try:
-    import pystray
-    from pystray import MenuItem as item
-    HAS_TRAY = True
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize, QRect
+    from PyQt6.QtGui import QIcon, QPixmap, QImage, QFont, QColor, QAction, QPainter, QPen, QBrush, QCursor
+    from PyQt6.QtWidgets import (
+        QApplication,
+        QMainWindow,
+        QWidget,
+        QVBoxLayout,
+        QHBoxLayout,
+        QGridLayout,
+        QLabel,
+        QPushButton,
+        QFrame,
+        QStackedWidget,
+        QComboBox,
+        QLineEdit,
+        QCheckBox,
+        QSpinBox,
+        QListWidget,
+        QListWidgetItem,
+        QTableWidget,
+        QTableWidgetItem,
+        QHeaderView,
+        QAbstractItemView,
+        QPlainTextEdit,
+        QScrollArea,
+        QSystemTrayIcon,
+        QMenu,
+        QMessageBox,
+        QDialog,
+        QSizePolicy,
+    )
+    HAS_QT = True
 except ImportError:
-    HAS_TRAY = False
+    HAS_QT = False
+    QMainWindow = object
+    QWidget = object
+    QDialog = object
+    QLabel = object
 
 from server import (
     Server,
@@ -93,11 +98,12 @@ from server import (
     save_quick_apps,
     load_media_preview_region,
     save_media_preview_region,
+    get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.3.16"
+APP_VERSION = "1.3.17"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
-MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
+MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
 
 
@@ -106,17 +112,14 @@ def set_windows_dpi_awareness():
         return
     try:
         import ctypes
-        # Per-Monitor V2 DPI awareness context (-4)
         ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
     except Exception:
         try:
             import ctypes
-            # Per-Monitor DPI aware fallback
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
             try:
                 import ctypes
-                # System DPI aware fallback
                 ctypes.windll.user32.SetProcessDPIAware()
             except Exception:
                 pass
@@ -143,222 +146,431 @@ def get_windows_dpi_scale():
     return 1.0, 96
 
 
-def apply_windows_dwm_styling(widget):
-    """Apply native Windows 11 DWM immersive dark titlebar, rounded corners, and caption colors."""
-    if not IS_WINDOWS:
+def apply_windows_dwm_dark_frame(hwnd):
+    """Enable Windows 11 native DWM dark caption bar and rounded window corners."""
+    if not IS_WINDOWS or not hwnd:
         return
     try:
         import ctypes
-        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id()) or widget.winfo_id()
         dwmapi = ctypes.windll.dwmapi
-
-        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (fallback 19 on older Win10 builds)
-        dark_mode = ctypes.c_int(1)
-        if dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode)) != 0:
-            dwmapi.DwmSetWindowAttribute(hwnd, 19, ctypes.byref(dark_mode), ctypes.sizeof(dark_mode))
-
-        # DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
-        corner_pref = ctypes.c_int(2)
-        dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner_pref), ctypes.sizeof(corner_pref))
-
-        # DWMWA_CAPTION_COLOR = 35 (COLORREF 0x00BBGGRR matching #111622)
-        caption_color = ctypes.c_int(0x00221611)
-        dwmapi.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(caption_color), ctypes.sizeof(caption_color))
-
-        # DWMWA_TEXT_COLOR = 36 (COLORREF 0x00BBGGRR matching #F8FAFC)
-        text_color = ctypes.c_int(0x00FCF8F8)
-        dwmapi.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(text_color), ctypes.sizeof(text_color))
+        dark = ctypes.c_int(1)
+        if dwmapi.DwmSetWindowAttribute(int(hwnd), 20, ctypes.byref(dark), ctypes.sizeof(dark)) != 0:
+            dwmapi.DwmSetWindowAttribute(int(hwnd), 19, ctypes.byref(dark), ctypes.sizeof(dark))
+        corner = ctypes.c_int(2)  # DWMWCP_ROUND
+        dwmapi.DwmSetWindowAttribute(int(hwnd), 33, ctypes.byref(corner), ctypes.sizeof(corner))
+        caption_col = ctypes.c_int(0x001E130C)  # #0C131E
+        dwmapi.DwmSetWindowAttribute(int(hwnd), 35, ctypes.byref(caption_col), ctypes.sizeof(caption_col))
+        text_col = ctypes.c_int(0x00FCF8F8)
+        dwmapi.DwmSetWindowAttribute(int(hwnd), 36, ctypes.byref(text_col), ctypes.sizeof(text_col))
     except Exception:
         pass
 
 
-# Windows 11 Fluent Dark Palette
-BG_DARK = "#0B0F17"
-SIDEBAR_BG = "#111622"
-SIDEBAR_HOVER = "#1A2234"
-SIDEBAR_ACTIVE = "#1E293B"
-CARD_BG = "#151C28"
-CARD_SURFACE = "#1C2536"
-CARD_BORDER = "#263248"
-ACCENT_CYAN = "#38BDF8"
-ACCENT_CYAN_HOVER = "#0EA5E9"
-ACCENT_INDIGO = "#6366F1"
-ACCENT_INDIGO_HOVER = "#4F46E5"
-ACCENT_GREEN = "#10B981"
-ACCENT_RED = "#F43F5E"
-ACCENT_AMBER = "#F59E0B"
-TEXT_PRIMARY = "#F8FAFC"
-TEXT_SECONDARY = "#CBD5E1"
-TEXT_MUTED = "#94A3B8"
-BUTTON_BG = "#1E293B"
-BUTTON_HOVER = "#2B3A55"
+FLUENT_QSS = """
+QMainWindow, QDialog {
+    background-color: #0B0F17;
+    color: #F8FAFC;
+    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+}
+QWidget {
+    color: #F8FAFC;
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+QScrollArea {
+    background-color: transparent;
+    border: none;
+}
+QFrame#HeaderBar {
+    background-color: #0F1623;
+    border-bottom: 1px solid #1E293B;
+}
+QFrame#Sidebar {
+    background-color: #0F1623;
+    border-right: 1px solid #1E293B;
+}
+QFrame#SidebarFooter {
+    background-color: #151F30;
+    border: 1px solid #26354D;
+    border-radius: 10px;
+}
+QFrame#Card {
+    background-color: #131B29;
+    border: 1px solid #222F44;
+    border-radius: 12px;
+}
+QFrame#SubCard {
+    background-color: #182234;
+    border: 1px solid #283750;
+    border-radius: 10px;
+}
+QFrame#StatusBar {
+    background-color: #0F1623;
+    border-top: 1px solid #1E293B;
+}
+QPushButton {
+    background-color: #1E293B;
+    color: #F8FAFC;
+    border: 1px solid #2E3F59;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background-color: #283750;
+    border-color: #38BDF8;
+}
+QPushButton:pressed {
+    background-color: #151F30;
+}
+QPushButton:disabled {
+    background-color: #141B26;
+    color: #64748B;
+    border-color: #1E293B;
+}
+QPushButton#PrimaryBtn {
+    background-color: #6366F1;
+    border: 1px solid #818CF8;
+    color: #FFFFFF;
+}
+QPushButton#PrimaryBtn:hover {
+    background-color: #4F46E5;
+}
+QPushButton#CyanBtn {
+    background-color: #0284C7;
+    border: 1px solid #38BDF8;
+    color: #FFFFFF;
+}
+QPushButton#CyanBtn:hover {
+    background-color: #0369A1;
+}
+QPushButton#SuccessBtn {
+    background-color: #059669;
+    border: 1px solid #10B981;
+    color: #FFFFFF;
+}
+QPushButton#SuccessBtn:hover {
+    background-color: #047857;
+}
+QPushButton#DangerBtn {
+    background-color: #2A1621;
+    border: 1px solid #F43F5E;
+    color: #FDA4AF;
+}
+QPushButton#DangerBtn:hover {
+    background-color: #F43F5E;
+    color: #FFFFFF;
+}
+QPushButton#NavBtn {
+    background-color: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    padding: 10px 14px;
+    text-align: left;
+    color: #CBD5E1;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#NavBtn:hover {
+    background-color: #172133;
+    color: #F8FAFC;
+}
+QPushButton#NavBtn[active="true"] {
+    background-color: #1D2B42;
+    border-left: 3px solid #38BDF8;
+    color: #38BDF8;
+    font-weight: 700;
+}
+QLineEdit, QComboBox, QSpinBox {
+    background-color: #182234;
+    color: #F8FAFC;
+    border: 1px solid #2C3D57;
+    border-radius: 8px;
+    padding: 7px 10px;
+    selection-background-color: #6366F1;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border-color: #38BDF8;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+QComboBox QAbstractItemView {
+    background-color: #151F30;
+    color: #F8FAFC;
+    border: 1px solid #2C3D57;
+    selection-background-color: #6366F1;
+    outline: none;
+}
+QListWidget, QPlainTextEdit, QTableWidget {
+    background-color: #0E1420;
+    color: #F8FAFC;
+    border: 1px solid #243248;
+    border-radius: 10px;
+    padding: 4px;
+    gridline-color: #1E293B;
+    selection-background-color: #4F46E5;
+}
+QHeaderView::section {
+    background-color: #151F30;
+    color: #38BDF8;
+    font-weight: 700;
+    border: none;
+    border-bottom: 1px solid #26354D;
+    padding: 8px 10px;
+}
+QCheckBox {
+    spacing: 8px;
+    color: #E2E8F0;
+    font-weight: 500;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1px solid #3B4F6B;
+    background-color: #182234;
+}
+QCheckBox::indicator:checked {
+    background-color: #6366F1;
+    border-color: #818CF8;
+}
+QScrollBar:vertical {
+    background: #0B0F17;
+    width: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #283750;
+    min-height: 24px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #38BDF8;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+"""
 
-UI_FONT = "Segoe UI"
+
+if HAS_QT:
+    class _UiBridge(QObject):
+        log_signal = pyqtSignal(str)
+        client_signal = pyqtSignal(str, bool)
+        status_signal = pyqtSignal(bool)
+        packet_signal = pyqtSignal(int)
+        phone_cam_signal = pyqtSignal(bytes, int, int, str, float, float)
+        pc_cam_signal = pyqtSignal(bytes)
+
+    class AspectRatioVideoWidget(QLabel):
+        """Responsive video surface that scales frames smoothly to fill available space and supports double-click fullscreen."""
+        double_clicked = pyqtSignal()
+
+        def __init__(self, placeholder_text="", parent=None):
+            super().__init__(parent)
+            self._placeholder_text = placeholder_text
+            self._pixmap = None
+            self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.setMinimumSize(320, 220)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.setStyleSheet(
+                "background-color: #050811; border: 1px solid #243248; border-radius: 10px; color: #94A3B8; font-size: 13px; padding: 16px;"
+            )
+            self.setText(placeholder_text)
+            self.setWordWrap(True)
+
+        def set_frame_bytes(self, jpeg_bytes):
+            if not jpeg_bytes:
+                return
+            img = QImage.fromData(jpeg_bytes)
+            if not img.isNull():
+                self._pixmap = QPixmap.fromImage(img)
+                self.setText("")
+                self._render_scaled()
+
+        def clear_frame(self):
+            self._pixmap = None
+            self.setPixmap(QPixmap())
+            self.setText(self._placeholder_text)
+
+        def _render_scaled(self):
+            if self._pixmap and not self._pixmap.isNull():
+                avail = self.size() - QSize(12, 12)
+                if avail.width() > 10 and avail.height() > 10:
+                    scaled = self._pixmap.scaled(
+                        avail,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    super().setPixmap(scaled)
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            if self._pixmap is not None:
+                self._render_scaled()
+
+        def mouseDoubleClickEvent(self, event):
+            super().mouseDoubleClickEvent(event)
+            self.double_clicked.emit()
+
+    class FullscreenVideoWindow(QDialog):
+        """Edge-to-edge Fullscreen/Maximizable Video Monitor for Phone or PC Camera streams."""
+
+        def __init__(self, title, on_rotate=None, on_snapshot=None, on_toggle_record=None, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle(title)
+            self.resize(1280, 760)
+            self.setModal(False)
+            apply_windows_dwm_dark_frame(self.winId())
+
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(10)
+
+            # Top Control Bar
+            top_bar = QFrame()
+            top_bar.setObjectName("SubCard")
+            top_row = QHBoxLayout(top_bar)
+            top_row.setContentsMargins(14, 8, 14, 8)
+
+            self.lbl_title = QLabel(f"📹  {title}")
+            self.lbl_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #F8FAFC;")
+            top_row.addWidget(self.lbl_title)
+
+            self.lbl_meta = QLabel("LIVE VIEW")
+            self.lbl_meta.setStyleSheet("color: #38BDF8; font-weight: 700; margin-left: 12px;")
+            top_row.addWidget(self.lbl_meta)
+            top_row.addStretch()
+
+            if on_rotate:
+                btn_rot = QPushButton("↻ Rotate 90°")
+                btn_rot.clicked.connect(on_rotate)
+                top_row.addWidget(btn_rot)
+
+            if on_snapshot:
+                btn_snap = QPushButton("📸 Save Snapshot")
+                btn_snap.setObjectName("SuccessBtn")
+                btn_snap.clicked.connect(on_snapshot)
+                top_row.addWidget(btn_snap)
+
+            if on_toggle_record:
+                self.btn_rec = QPushButton("⏺ Record Video")
+                self.btn_rec.setObjectName("PrimaryBtn")
+                self.btn_rec.clicked.connect(on_toggle_record)
+                top_row.addWidget(self.btn_rec)
+
+            btn_fs = QPushButton("⛶ Toggle Fullscreen")
+            btn_fs.clicked.connect(self._toggle_fullscreen_state)
+            top_row.addWidget(btn_fs)
+
+            btn_close = QPushButton("✕ Close (Esc)")
+            btn_close.setObjectName("DangerBtn")
+            btn_close.clicked.connect(self.close)
+            top_row.addWidget(btn_close)
+
+            layout.addWidget(top_bar)
+
+            self.video_surface = AspectRatioVideoWidget("Waiting for live video stream...", self)
+            self.video_surface.double_clicked.connect(self._toggle_fullscreen_state)
+            layout.addWidget(self.video_surface, 1)
+
+        def _toggle_fullscreen_state(self):
+            if self.isFullScreen():
+                self.showMaximized()
+            else:
+                self.showFullScreen()
 
 
-class _NotebookCompatibilityShim:
-    """Provides .select(tab_frame) compatibility while using a modern Fluent sidebar stack."""
-
-    def __init__(self, app):
-        self._app = app
-        self._tabs = []
-
-    def add(self, frame, text=""):
-        self._tabs.append((frame, text))
-
-    def select(self, target_frame):
-        self._app._select_page(target_frame)
-
-
-class CompanionApp(tk.Tk):
+class CompanionApp(QMainWindow):
     def __init__(self):
+        if not HAS_QT:
+            return
         super().__init__()
         ensure_interactive_desktop()
 
-        self.title("BT Mouse & Keyboard — Windows Companion")
-
-        # Calibrate window geometry for high-DPI displays without double-scaling fonts
         self.dpi_scale, self.system_dpi = get_windows_dpi_scale()
-        effective_scale = min(max(self.dpi_scale, 1.0), 1.65)
-
-        base_w = int(980 * effective_scale)
-        base_h = int(760 * effective_scale)
-        min_w = int(860 * effective_scale)
-        min_h = int(660 * effective_scale)
-
-        # Center window on primary monitor
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        pos_x = max(0, (screen_w - base_w) // 2)
-        pos_y = max(0, (screen_h - base_h) // 2)
-
-        self.geometry(f"{base_w}x{base_h}+{pos_x}+{pos_y}")
-        self.minsize(min_w, min_h)
-        self.configure(bg=BG_DARK)
-
-        # Apply Windows 11 native DWM dark titlebar & rounded window corners
-        self.update_idletasks()
-        apply_windows_dwm_styling(self)
-
-        # Set window icon if available
-        self.icon_path = get_asset_path("icon.ico")
-        self.icon_png_path = get_asset_path("icon.png")
-        if os.path.exists(self.icon_path):
-            try:
-                self.iconbitmap(self.icon_path)
-            except Exception:
-                pass
-
-        # Server management
-        self.server = None
-        self.server_thread = None
-        self.is_server_running = False
-
         self.current_port = 53530
         self.ws_port = 53531
         self.auth_token = load_or_create_pairing_pin()
-        self._init_server()
 
-        # Stats
+        self.server = None
+        self.server_thread = None
+        self.is_server_running = False
         self.packet_count = 0
         self.last_client = "None"
+        self.pc_webcam_preview_active = False
 
-        # Setup styling
-        self._setup_styles()
+        self.bridge = _UiBridge()
+        self.bridge.log_signal.connect(self._append_log)
+        self.bridge.client_signal.connect(self._update_client_ui)
+        self.bridge.status_signal.connect(self._update_status_ui)
+        self.bridge.packet_signal.connect(self._update_packet_ui)
+        self.bridge.phone_cam_signal.connect(self._update_phone_cam_ui)
+        self.bridge.pc_cam_signal.connect(self._update_pc_cam_ui)
 
-        # Build Fluent Desktop Shell
-        self._build_header()
-        self._build_notebook()
-        self._build_statusbar()
+        self.phone_fullscreen_win = None
+        self.pc_fullscreen_win = None
+
+        self._init_server()
 
         executable_path = Path(sys.executable).resolve()
-        self.title(f"BT Mouse Companion v{APP_VERSION} — {executable_path}")
-        self.after(500, self._show_update_recovery_notice)
-        self.after(3000, self._refresh_recordings_loop)
-        self.phone_cam_photo = None
-        self.phone_cam_pending_update = False
-        if hasattr(self.server, "phone_camera_receiver") and self.server.phone_camera_receiver:
-            self.server.phone_camera_receiver.register_callback(self._on_phone_cam_frame_received)
-        self.after(2000, self._check_phone_cam_active)
+        self.setWindowTitle(f"BT Mouse Companion v{APP_VERSION} — {executable_path}")
+        self.setMinimumSize(1040, 720)
+        self.resize(1160, 780)
 
-        # System Tray setup
+        self.icon_path = get_asset_path("icon.ico")
+        self.icon_png_path = get_asset_path("icon.png")
+        if os.path.exists(self.icon_png_path):
+            self.setWindowIcon(QIcon(self.icon_png_path))
+        elif os.path.exists(self.icon_path):
+            self.setWindowIcon(QIcon(self.icon_path))
+
+        self.setStyleSheet(FLUENT_QSS)
+        apply_windows_dwm_dark_frame(self.winId())
+
+        # Build Fluent Main Layout
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self._build_header(root_layout)
+        self._build_body(root_layout)
+        self._build_statusbar(root_layout)
+
+        # System Tray
         self.tray_icon = None
         self._setup_system_tray()
 
-        # Start server automatically
-        self.start_server()
+        # Timers
+        self.recordings_timer = QTimer(self)
+        self.recordings_timer.timeout.connect(self.refresh_recordings)
+        self.recordings_timer.start(4000)
 
-        # Handle window close: minimize to tray instead of quitting
-        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+        self.phone_cam_timer = QTimer(self)
+        self.phone_cam_timer.timeout.connect(self._check_phone_cam_active)
+        self.phone_cam_timer.start(2000)
+
+        QTimer.singleShot(400, self._show_update_recovery_notice)
+        QTimer.singleShot(250, self.refresh_quick_apps)
+
+        self.start_server()
         self._write_update_ready_marker()
         self._heal_startup_path_if_registered()
+
         if "--minimized" in sys.argv:
-            self.after(700, self.hide_to_tray if self.tray_icon else self.iconify)
+            QTimer.singleShot(500, self.hide_to_tray)
 
-    @staticmethod
-    def _bind_hover(widget, normal_bg, hover_bg, normal_fg=None, hover_fg=None):
-        """Attach smooth mouse-hover color transitions to a Tkinter widget."""
-        def _on_enter(_event):
-            try:
-                if str(widget.cget("state")) != "disabled":
-                    widget.configure(bg=hover_bg)
-                    if hover_fg:
-                        widget.configure(fg=hover_fg)
-            except Exception:
-                pass
-
-        def _on_leave(_event):
-            try:
-                if str(widget.cget("state")) != "disabled":
-                    widget.configure(bg=normal_bg)
-                    if normal_fg:
-                        widget.configure(fg=normal_fg)
-            except Exception:
-                pass
-
-        widget.bind("<Enter>", _on_enter, add="+")
-        widget.bind("<Leave>", _on_leave, add="+")
-
-    def _make_button(self, parent, text, command, bg=BUTTON_BG, fg=TEXT_PRIMARY,
-                     hover_bg=BUTTON_HOVER, font_size=9, bold=True, padx=12, pady=6):
-        weight = "bold" if bold else "normal"
-        btn = tk.Button(
-            parent,
-            text=text,
-            font=(UI_FONT, font_size, weight),
-            bg=bg,
-            fg=fg,
-            activebackground=hover_bg,
-            activeforeground=TEXT_PRIMARY,
-            disabledforeground=TEXT_MUTED,
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=CARD_BORDER,
-            highlightcolor=ACCENT_CYAN,
-            padx=padx,
-            pady=pady,
-            command=command,
-            cursor="hand2",
-        )
-        self._bind_hover(btn, bg, hover_bg, fg, TEXT_PRIMARY if bg in (ACCENT_INDIGO, ACCENT_CYAN) else fg)
-        return btn
-
-    def _make_card(self, parent, padx=18, pady=16, bg=CARD_BG):
-        return tk.Frame(
-            parent,
-            bg=bg,
-            padx=padx,
-            pady=pady,
-            relief="flat",
-            bd=0,
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-        )
-
+    # ------------------------------------------------------------------
+    # Startup & Self-Healing Helpers (also tested directly in unit tests)
+    # ------------------------------------------------------------------
     @staticmethod
     def _write_update_ready_marker():
-        """Acknowledge that the replacement reached app initialization."""
         try:
             marker_arg = sys.argv.index("--btmouse-update-ready")
             marker_path = Path(sys.argv[marker_arg + 1])
@@ -368,7 +580,6 @@ class CompanionApp(tk.Tk):
 
     @staticmethod
     def _startup_registry_value():
-        """Return the current-user sign-in command, if one is registered."""
         if os.name != "nt":
             return None
         try:
@@ -407,11 +618,13 @@ class CompanionApp(tk.Tk):
                     except FileNotFoundError:
                         pass
         except (OSError, ImportError) as exc:
-            self.startup_var.set(not enabled)
-            messagebox.showerror("Startup setting", f"Could not update the Windows sign-in setting.\n\n{exc}", parent=self)
+            if hasattr(self, "chk_startup"):
+                self.chk_startup.blockSignals(True)
+                self.chk_startup.setChecked(not enabled)
+                self.chk_startup.blockSignals(False)
+            QMessageBox.critical(self, "Startup setting", f"Could not update the Windows sign-in setting.\n\n{exc}")
 
     def _heal_startup_path_if_registered(self):
-        """If startup is enabled in the registry, ensure the registered command matches current binary and args."""
         if os.name != "nt":
             return
         reg_val = self._startup_registry_value()
@@ -428,14 +641,17 @@ class CompanionApp(tk.Tk):
             except (OSError, ImportError) as exc:
                 self.log(f"Warning: could not update Windows startup path: {exc}")
 
+    # ------------------------------------------------------------------
+    # Server Initialization & Media Folders
+    # ------------------------------------------------------------------
     def _init_server(self):
-        """Initializes a clean Server instance with bound callbacks"""
+        self.media_dirs = get_btmouse_media_dirs()
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
         self.available_apps = []
         self.quick_apps = []
         self.adapters = self.server.get_all_ips()
         self.current_ip = self.server.get_local_ip()
-        self.recording_settings_path = Path(self.server.audio_manager.recordings_dir).parent / "recording_settings.json"
+        self.recording_settings_path = Path(self.media_dirs["base"]) / "recording_settings.json"
         try:
             preferences = json.loads(self.recording_settings_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
@@ -448,7 +664,7 @@ class CompanionApp(tk.Tk):
                 return default
 
         self.auto_record_video = bool(preferences.get("auto_record_video", True))
-        self.auto_record_audio = bool(preferences.get("auto_record_audio", False))
+        self.auto_record_audio = bool(preferences.get("auto_record_audio", True))
         self.recording_retention_days = _preference_int("recording_retention_days", 0, 3650)
         self.recording_max_storage_mb = _preference_int("recording_max_storage_mb", 0, 500000)
         self.recording_min_free_mb = _preference_int("recording_min_free_mb", 512, 100000)
@@ -466,1194 +682,1493 @@ class CompanionApp(tk.Tk):
         self.server.on_packet_callback = self._on_packet
         self.server.on_client_callback = self._on_client
         self.server.on_status_callback = self._on_status
+        self.server.on_pc_cam_frame_callback = self._on_pc_cam_frame_received
+        if hasattr(self.server, "phone_camera_receiver") and self.server.phone_camera_receiver:
+            self.server.phone_camera_receiver.register_callback(self._on_phone_cam_frame_received)
 
-    def _setup_styles(self):
-        style = ttk.Style(self)
-        style.theme_use("clam")
+    # ------------------------------------------------------------------
+    # Fluent Shell Construction
+    # ------------------------------------------------------------------
+    def _build_header(self, root_layout):
+        header = QFrame()
+        header.setObjectName("HeaderBar")
+        header.setFixedHeight(72)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(22, 10, 22, 10)
 
-        # Combobox & Spinbox dark theme
-        self.option_add("*TCombobox*Listbox.background", CARD_SURFACE)
-        self.option_add("*TCombobox*Listbox.foreground", TEXT_PRIMARY)
-        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT_INDIGO)
-        self.option_add("*TCombobox*Listbox.selectForeground", TEXT_PRIMARY)
-        self.option_add("*TCombobox*Listbox.font", (UI_FONT, 9))
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
 
-        style.configure(
-            "TCombobox",
-            fieldbackground=BUTTON_BG,
-            background=CARD_SURFACE,
-            foreground=TEXT_PRIMARY,
-            arrowcolor=ACCENT_CYAN,
-            bordercolor=CARD_BORDER,
-            lightcolor=CARD_BORDER,
-            darkcolor=CARD_BORDER,
-            padding=5,
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", BUTTON_BG)],
-            selectbackground=[("readonly", BUTTON_BG)],
-            selectforeground=[("readonly", TEXT_PRIMARY)],
-            foreground=[("readonly", TEXT_PRIMARY)],
-        )
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        lbl_title = QLabel("🖱️  BT Mouse & Keyboard")
+        lbl_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #F8FAFC;")
+        title_row.addWidget(lbl_title)
 
-        style.configure(
-            "TSpinbox",
-            fieldbackground=BUTTON_BG,
-            background=CARD_SURFACE,
-            foreground=TEXT_PRIMARY,
-            arrowcolor=ACCENT_CYAN,
-            bordercolor=CARD_BORDER,
-            padding=4,
+        lbl_ver = QLabel(f"v{APP_VERSION}")
+        lbl_ver.setStyleSheet(
+            "background-color: #1E293B; color: #38BDF8; border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; font-size: 11px; font-weight: 700;"
         )
+        title_row.addWidget(lbl_ver)
+        title_row.addStretch()
+        title_col.addLayout(title_row)
 
-        style.configure(
-            "Vertical.TScrollbar",
-            background=CARD_SURFACE,
-            troughcolor=BG_DARK,
-            bordercolor=BG_DARK,
-            arrowcolor=TEXT_MUTED,
-            relief="flat",
-        )
-        style.map("Vertical.TScrollbar", background=[("active", CARD_BORDER)])
+        lbl_sub = QLabel("Windows 11 Desktop Companion  ·  Seamless Wi-Fi, Bluetooth & Remote WAN Failover")
+        lbl_sub.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        title_col.addWidget(lbl_sub)
+        h_layout.addLayout(title_col)
 
-        # Treeview styling for recordings
-        style.configure(
-            "Recordings.Treeview",
-            background=CARD_BG,
-            foreground=TEXT_PRIMARY,
-            fieldbackground=CARD_BG,
-            rowheight=32,
-            font=(UI_FONT, 9),
-            borderwidth=0,
-        )
-        style.configure(
-            "Recordings.Treeview.Heading",
-            background=SIDEBAR_BG,
-            foreground=ACCENT_CYAN,
-            font=(UI_FONT, 9, "bold"),
-            relief="flat",
-            padding=[10, 8],
-        )
-        style.map(
-            "Recordings.Treeview",
-            background=[("selected", ACCENT_INDIGO)],
-            foreground=[("selected", TEXT_PRIMARY)],
-        )
-        style.map(
-            "Recordings.Treeview.Heading",
-            background=[("active", CARD_SURFACE)],
-            foreground=[("active", ACCENT_CYAN)],
-        )
+        h_layout.addStretch()
 
+        self.lbl_status_pill = QLabel("● SERVER LISTENING")
+        self.lbl_status_pill.setStyleSheet(
+            "background-color: #062E22; color: #10B981; border: 1px solid #059669; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
+        )
+        h_layout.addWidget(self.lbl_status_pill)
+
+        self.btn_toggle = QPushButton("Stop Server")
+        self.btn_toggle.setObjectName("DangerBtn")
+        self.btn_toggle.clicked.connect(self.toggle_server)
+        h_layout.addWidget(self.btn_toggle)
+
+        self.btn_restart = QPushButton("Restart")
+        self.btn_restart.clicked.connect(self.restart_server)
+        h_layout.addWidget(self.btn_restart)
+
+        self.btn_update = QPushButton("Check for Updates")
+        self.btn_update.setObjectName("PrimaryBtn")
+        self.btn_update.clicked.connect(self.check_for_companion_updates)
+        h_layout.addWidget(self.btn_update)
+
+        root_layout.addWidget(header)
+
+    def _build_body(self, root_layout):
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        # Left Navigation Sidebar (Wide enough on all DPIs so nothing ever clips!)
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setMinimumWidth(250)
+        sidebar.setMaximumWidth(270)
+        sb_layout = QVBoxLayout(sidebar)
+        sb_layout.setContentsMargins(12, 16, 12, 16)
+        sb_layout.setSpacing(4)
+
+        lbl_nav = QLabel("WORKSPACE")
+        lbl_nav.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 700; padding-left: 10px; margin-bottom: 4px;")
+        sb_layout.addWidget(lbl_nav)
+
+        self.stack = QStackedWidget()
+        self.nav_buttons = []
+
+        pages = [
+            ("📱  Wi-Fi & QR Pairing", self._create_wifi_page),
+            ("📷  Phone as Webcam", self._create_phone_cam_page),
+            ("🎬  Media Library (Videos / Audios)", self._create_recordings_page),
+            ("🚀  Desktop, Webcam & Quick Apps", self._create_desktop_page),
+            ("📶  Bluetooth Mode", self._create_bt_page),
+            ("🌐  Remote Access (WAN)", self._create_wan_page),
+            ("✍️  Tablet Drawing Slate", self._create_tablet_page),
+            ("📊  Live Activity Monitor", self._create_logs_page),
+        ]
+
+        for idx, (label, builder) in enumerate(pages):
+            btn = QPushButton(label)
+            btn.setObjectName("NavBtn")
+            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.clicked.connect(lambda _checked=False, i=idx: self._switch_page(i))
+            sb_layout.addWidget(btn)
+            self.nav_buttons.append(btn)
+
+            page_widget = builder()
+            self.stack.addWidget(page_widget)
+
+        sb_layout.addStretch()
+
+        # Quick Folders Bar in Sidebar
+        folders_card = QFrame()
+        folders_card.setObjectName("SidebarFooter")
+        fc_layout = QVBoxLayout(folders_card)
+        fc_layout.setContentsMargins(12, 10, 12, 10)
+        fc_layout.setSpacing(6)
+
+        lbl_qf = QLabel("QUICK MEDIA FOLDERS")
+        lbl_qf.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        fc_layout.addWidget(lbl_qf)
+
+        folder_btn_row = QHBoxLayout()
+        folder_btn_row.setSpacing(4)
+        btn_vid_f = QPushButton("📹 Videos")
+        btn_vid_f.setStyleSheet("padding: 5px 6px; font-size: 11px;")
+        btn_vid_f.clicked.connect(self.open_videos_folder)
+        folder_btn_row.addWidget(btn_vid_f)
+
+        btn_aud_f = QPushButton("🎙️ Audios")
+        btn_aud_f.setStyleSheet("padding: 5px 6px; font-size: 11px;")
+        btn_aud_f.clicked.connect(self.open_audios_folder)
+        folder_btn_row.addWidget(btn_aud_f)
+
+        btn_snap_f = QPushButton("📷 Snaps")
+        btn_snap_f.setStyleSheet("padding: 5px 6px; font-size: 11px;")
+        btn_snap_f.clicked.connect(self.open_snapshots_folder)
+        folder_btn_row.addWidget(btn_snap_f)
+        fc_layout.addLayout(folder_btn_row)
+
+        self.lbl_sidebar_ip = QLabel(f"IP: {self.current_ip}:{self.current_port}")
+        self.lbl_sidebar_ip.setStyleSheet("font-family: Consolas, monospace; font-size: 12px; font-weight: 700; color: #38BDF8; margin-top: 4px;")
+        fc_layout.addWidget(self.lbl_sidebar_ip)
+
+        self.lbl_sidebar_pin = QLabel(f"PIN: {self.auth_token}")
+        self.lbl_sidebar_pin.setStyleSheet("font-family: Consolas, monospace; font-size: 13px; font-weight: 700; color: #10B981;")
+        fc_layout.addWidget(self.lbl_sidebar_pin)
+
+        sb_layout.addWidget(folders_card)
+
+        body_layout.addWidget(sidebar)
+        body_layout.addWidget(self.stack, 1)
+        root_layout.addWidget(body, 1)
+
+        self._switch_page(0)
+
+    def _switch_page(self, index):
+        self.stack.setCurrentIndex(index)
+        for i, btn in enumerate(self.nav_buttons):
+            btn.setProperty("active", "true" if i == index else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def switch_to_recordings_tab(self):
+        self._switch_page(2)
+
+    def _build_statusbar(self, root_layout):
+        bar = QFrame()
+        bar.setObjectName("StatusBar")
+        bar.setFixedHeight(32)
+        b_layout = QHBoxLayout(bar)
+        b_layout.setContentsMargins(20, 0, 20, 0)
+
+        self.lbl_footer_left = QLabel(
+            f"BT Mouse Companion v{APP_VERSION}  ·  Minimizes to system tray on close  ·  Folders: Videos / Audios / Snapshots"
+        )
+        self.lbl_footer_left.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        b_layout.addWidget(self.lbl_footer_left)
+        b_layout.addStretch()
+
+        self.lbl_footer_client = QLabel("Client: Disconnected")
+        self.lbl_footer_client.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 700;")
+        b_layout.addWidget(self.lbl_footer_client)
+
+        root_layout.addWidget(bar)
+
+    # ------------------------------------------------------------------
+    # Page 1: Wi-Fi & Instant QR Pairing
+    # ------------------------------------------------------------------
+    def _create_wifi_page(self):
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # Left Card: QR Code
+        qr_card = QFrame()
+        qr_card.setObjectName("Card")
+        qr_layout = QVBoxLayout(qr_card)
+        qr_layout.setContentsMargins(24, 24, 24, 24)
+        qr_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lbl_t = QLabel("Instant Wi-Fi QR Pairing")
+        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_layout.addWidget(lbl_t)
+
+        lbl_d = QLabel("Scan with the BT Mouse Android app — IP, UDP port, and 6-digit PIN auto-fill automatically.")
+        lbl_d.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        lbl_d.setWordWrap(True)
+        lbl_d.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_layout.addWidget(lbl_d)
+        qr_layout.addSpacing(12)
+
+        self.qr_label = QLabel()
+        self.qr_label.setFixedSize(240, 240)
+        self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.qr_label.setStyleSheet("background-color: #FFFFFF; border-radius: 12px; padding: 10px;")
+        qr_layout.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignCenter)
+        qr_layout.addSpacing(12)
+
+        lbl_hint = QLabel("Phone App  ➔  PC Hub / Connect  ➔  Scan QR Code")
+        lbl_hint.setStyleSheet("color: #38BDF8; font-weight: 700; font-size: 13px;")
+        lbl_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_layout.addWidget(lbl_hint)
+
+        layout.addWidget(qr_card, 1)
+
+        # Right Card: Network Details
+        info_card = QFrame()
+        info_card.setObjectName("Card")
+        info_layout = QVBoxLayout(info_card)
+        info_layout.setContentsMargins(24, 24, 24, 24)
+        info_layout.setSpacing(12)
+
+        lbl_it = QLabel("Server Network & Security")
+        lbl_it.setStyleSheet("font-size: 18px; font-weight: 700;")
+        info_layout.addWidget(lbl_it)
+
+        lbl_ad = QLabel("Network Adapter / Interface:")
+        lbl_ad.setStyleSheet("color: #94A3B8; font-weight: 600;")
+        info_layout.addWidget(lbl_ad)
+
+        self.combo_adapter = QComboBox()
+        for name, ip in self.adapters:
+            self.combo_adapter.addItem(f"{name}: {ip}", ip)
+        self.combo_adapter.currentIndexChanged.connect(self._on_adapter_selected)
+        info_layout.addWidget(self.combo_adapter)
+
+        grid = QHBoxLayout()
+        grid.setSpacing(10)
+
+        ip_box = QFrame()
+        ip_box.setObjectName("SubCard")
+        ip_l = QVBoxLayout(ip_box)
+        lbl_iph = QLabel("LOCAL IP ADDRESS")
+        lbl_iph.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        ip_l.addWidget(lbl_iph)
+        self.lbl_ip_val = QLabel(self.current_ip)
+        self.lbl_ip_val.setStyleSheet("font-family: Consolas, monospace; font-size: 20px; font-weight: 700; color: #38BDF8;")
+        ip_l.addWidget(self.lbl_ip_val)
+        grid.addWidget(ip_box, 2)
+
+        port_box = QFrame()
+        port_box.setObjectName("SubCard")
+        port_l = QVBoxLayout(port_box)
+        lbl_ph = QLabel("UDP PORT")
+        lbl_ph.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        port_l.addWidget(lbl_ph)
+        self.lbl_port_val = QLabel(str(self.current_port))
+        self.lbl_port_val.setStyleSheet("font-family: Consolas, monospace; font-size: 20px; font-weight: 700; color: #F8FAFC;")
+        port_l.addWidget(self.lbl_port_val)
+        grid.addWidget(port_box, 1)
+
+        info_layout.addLayout(grid)
+
+        pin_box = QFrame()
+        pin_box.setObjectName("SubCard")
+        pin_l = QVBoxLayout(pin_box)
+        lbl_pin_h = QLabel("6-DIGIT PAIRING PIN (EMBEDDED IN QR CODE)")
+        lbl_pin_h.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        pin_l.addWidget(lbl_pin_h)
+        self.lbl_wifi_pin = QLabel(self.auth_token)
+        self.lbl_wifi_pin.setStyleSheet("font-family: Consolas, monospace; font-size: 26px; font-weight: 700; color: #10B981;")
+        pin_l.addWidget(self.lbl_wifi_pin)
+        info_layout.addWidget(pin_box)
+
+        info_layout.addStretch()
+
+        btn_copy_ip = QPushButton("📋  Copy IP Address")
+        btn_copy_ip.clicked.connect(self.copy_ip)
+        info_layout.addWidget(btn_copy_ip)
+
+        btn_copy_pin = QPushButton("🔑  Copy Pairing PIN")
+        btn_copy_pin.clicked.connect(self.copy_pairing_pin)
+        info_layout.addWidget(btn_copy_pin)
+
+        btn_ref = QPushButton("🔄  Refresh QR Code")
+        btn_ref.setObjectName("PrimaryBtn")
+        btn_ref.clicked.connect(self.generate_qr)
+        info_layout.addWidget(btn_ref)
+
+        layout.addWidget(info_card, 1)
+        self.generate_qr()
+        return page
+
+    # ------------------------------------------------------------------
+    # Page 2: Phone as Webcam (Large Auto-Scaling Viewfinder + Fullscreen + Orientation + Recording)
+    # ------------------------------------------------------------------
+    def _create_phone_cam_page(self):
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # Left: Expansive Video Viewfinder Card
+        preview_card = QFrame()
+        preview_card.setObjectName("Card")
+        p_layout = QVBoxLayout(preview_card)
+        p_layout.setContentsMargins(18, 16, 18, 16)
+        p_layout.setSpacing(10)
+
+        header_row = QHBoxLayout()
+        lbl_t = QLabel("📹  Phone Camera Live Stream")
+        lbl_t.setStyleSheet("font-size: 16px; font-weight: 700;")
+        header_row.addWidget(lbl_t)
+
+        self.lbl_phone_cam_orientation = QLabel("ORIENTATION: AUTO")
+        self.lbl_phone_cam_orientation.setStyleSheet(
+            "background-color: #1E293B; color: #38BDF8; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700;"
+        )
+        header_row.addWidget(self.lbl_phone_cam_orientation)
+        header_row.addStretch()
+
+        self.lbl_phone_cam_status = QLabel("○ STANDBY")
+        self.lbl_phone_cam_status.setStyleSheet("color: #94A3B8; font-weight: 700;")
+        header_row.addWidget(self.lbl_phone_cam_status)
+        p_layout.addLayout(header_row)
+
+        self.lbl_phone_cam_preview = AspectRatioVideoWidget(
+            "📷 Phone Camera Standby\n\nOpen the BT Mouse mobile app ➔ Cameras & Mic ➔ Phone Cam ➔ Start Broadcast.\n"
+            "Double-click video or click '⛶ Fullscreen' below to expand.",
+            self,
+        )
+        self.lbl_phone_cam_preview.double_clicked.connect(self.open_phone_cam_fullscreen)
+        p_layout.addWidget(self.lbl_phone_cam_preview, 1)
+
+        # Viewfinder Toolbar
+        vf_bar = QHBoxLayout()
+        self.lbl_phone_cam_telemetry = QLabel("Waiting for stream from phone...")
+        self.lbl_phone_cam_telemetry.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        vf_bar.addWidget(self.lbl_phone_cam_telemetry)
+        vf_bar.addStretch()
+
+        btn_rot = QPushButton("↻ Rotate 90°")
+        btn_rot.clicked.connect(self.rotate_phone_cam_90)
+        vf_bar.addWidget(btn_rot)
+
+        self.btn_phone_cam_rec = QPushButton("⏺ Record to Videos")
+        self.btn_phone_cam_rec.clicked.connect(self.toggle_phone_cam_recording)
+        vf_bar.addWidget(self.btn_phone_cam_rec)
+
+        btn_snap = QPushButton("📸 Snapshot")
+        btn_snap.setObjectName("SuccessBtn")
+        btn_snap.clicked.connect(self._save_phone_cam_snapshot)
+        vf_bar.addWidget(btn_snap)
+
+        btn_fs = QPushButton("⛶ Fullscreen")
+        btn_fs.setObjectName("PrimaryBtn")
+        btn_fs.clicked.connect(self.open_phone_cam_fullscreen)
+        vf_bar.addWidget(btn_fs)
+
+        p_layout.addLayout(vf_bar)
+        layout.addWidget(preview_card, 3)
+
+        # Right: OBS / Virtual Camera & Folder Controls
+        ctrl_card = QFrame()
+        ctrl_card.setObjectName("Card")
+        ctrl_card.setMinimumWidth(330)
+        ctrl_card.setMaximumWidth(370)
+        c_layout = QVBoxLayout(ctrl_card)
+        c_layout.setContentsMargins(18, 16, 18, 16)
+        c_layout.setSpacing(12)
+
+        lbl_ct = QLabel("⚙️ Virtual Camera & OBS")
+        lbl_ct.setStyleSheet("font-size: 16px; font-weight: 700;")
+        c_layout.addWidget(lbl_ct)
+
+        lbl_cd = QLabel("Route your phone camera into OBS Studio, Zoom, Teams, Discord, or Google Meet.")
+        lbl_cd.setWordWrap(True)
+        lbl_cd.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        c_layout.addWidget(lbl_cd)
+
+        mjpeg_box = QFrame()
+        mjpeg_box.setObjectName("SubCard")
+        m_l = QVBoxLayout(mjpeg_box)
+        lbl_mh = QLabel("LOCALHOST MJPEG URL")
+        lbl_mh.setStyleSheet("color: #38BDF8; font-size: 10px; font-weight: 700;")
+        m_l.addWidget(lbl_mh)
+
+        port = getattr(getattr(self.server, "phone_camera_http", None), "port", 8766)
+        mjpeg_url = f"http://127.0.0.1:{port}/phone_cam/mjpeg"
+        self.lbl_phone_mjpeg_url = QLabel(mjpeg_url)
+        self.lbl_phone_mjpeg_url.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; font-weight: 700;")
+        m_l.addWidget(self.lbl_phone_mjpeg_url)
+
+        m_btns = QHBoxLayout()
+        btn_cp = QPushButton("📋 Copy URL")
+        btn_cp.clicked.connect(self._copy_phone_mjpeg_url)
+        m_btns.addWidget(btn_cp)
+
+        btn_br = QPushButton("🌐 Open in Browser")
+        btn_br.clicked.connect(lambda: webbrowser.open(self.lbl_phone_mjpeg_url.text()))
+        m_btns.addWidget(btn_br)
+        m_l.addLayout(m_btns)
+        c_layout.addWidget(mjpeg_box)
+
+        vcam_box = QFrame()
+        vcam_box.setObjectName("SubCard")
+        v_l = QVBoxLayout(vcam_box)
+        vcam_status = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_status", "MJPEG_STREAM")
+        vcam_err = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_error", "MJPEG stream ready.")
+        self.lbl_vcam_status = QLabel(f"Driver Backend: {vcam_status}")
+        self.lbl_vcam_status.setStyleSheet("font-weight: 700; color: #10B981;")
+        v_l.addWidget(self.lbl_vcam_status)
+        lbl_ve = QLabel(vcam_err)
+        lbl_ve.setWordWrap(True)
+        lbl_ve.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        v_l.addWidget(lbl_ve)
+        c_layout.addWidget(vcam_box)
+
+        c_layout.addStretch()
+
+        btn_open_vids = QPushButton("📁  Open Saved Videos Folder")
+        btn_open_vids.clicked.connect(self.open_videos_folder)
+        c_layout.addWidget(btn_open_vids)
+
+        btn_open_snaps = QPushButton("📷  Open Saved Snapshots Folder")
+        btn_open_snaps.clicked.connect(self.open_snapshots_folder)
+        c_layout.addWidget(btn_open_snaps)
+
+        layout.addWidget(ctrl_card, 1)
+        return page
+
+    # ------------------------------------------------------------------
+    # Page 3: Media Library (Videos / Audios / Snapshots in Separate Folders)
+    # ------------------------------------------------------------------
+    def _create_recordings_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(20, 18, 20, 18)
+        c_layout.setSpacing(12)
+
+        # Header
+        top_row = QHBoxLayout()
+        t_col = QVBoxLayout()
+        lbl_t = QLabel("Media & Recordings Library")
+        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        t_col.addWidget(lbl_t)
+        lbl_s = QLabel("Automatically organized into dedicated Videos, Audios, and Snapshots folders on this PC.")
+        lbl_s.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        t_col.addWidget(lbl_s)
+        top_row.addLayout(t_col)
+        top_row.addStretch()
+
+        btn_vf = QPushButton("📹 Videos Folder")
+        btn_vf.clicked.connect(self.open_videos_folder)
+        top_row.addWidget(btn_vf)
+
+        btn_af = QPushButton("🎙️ Audios Folder")
+        btn_af.clicked.connect(self.open_audios_folder)
+        top_row.addWidget(btn_af)
+
+        btn_sf = QPushButton("📷 Snapshots Folder")
+        btn_sf.clicked.connect(self.open_snapshots_folder)
+        top_row.addWidget(btn_sf)
+
+        btn_ref = QPushButton("🔄 Refresh")
+        btn_ref.setObjectName("PrimaryBtn")
+        btn_ref.clicked.connect(self.refresh_recordings)
+        top_row.addWidget(btn_ref)
+        c_layout.addLayout(top_row)
+
+        # Stats Bar
+        stats_bar = QFrame()
+        stats_bar.setObjectName("SubCard")
+        s_row = QHBoxLayout(stats_bar)
+        s_row.setContentsMargins(14, 8, 14, 8)
+        self.lbl_recordings_stats = QLabel("📊 Loading library...")
+        self.lbl_recordings_stats.setStyleSheet("font-weight: 700;")
+        s_row.addWidget(self.lbl_recordings_stats)
+
+        self.lbl_disk_free = QLabel("")
+        self.lbl_disk_free.setStyleSheet("color: #10B981; font-weight: 700; margin-left: 14px;")
+        s_row.addWidget(self.lbl_disk_free)
+        s_row.addStretch()
+
+        self.lbl_mgr_folder_path = QLabel(str(self.media_dirs["base"]))
+        self.lbl_mgr_folder_path.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; color: #94A3B8;")
+        s_row.addWidget(self.lbl_mgr_folder_path)
+        c_layout.addWidget(stats_bar)
+
+        # Filter & Search Bar
+        filter_row = QHBoxLayout()
+        self.ent_recording_search = QLineEdit()
+        self.ent_recording_search.setPlaceholderText("🔍 Search by filename, folder, or date...")
+        self.ent_recording_search.textChanged.connect(self._filter_and_render_recordings)
+        filter_row.addWidget(self.ent_recording_search, 1)
+
+        self.recording_filter_mode = "all"
+        self.btn_filter_all = QPushButton("All")
+        self.btn_filter_video = QPushButton("📹 Videos")
+        self.btn_filter_audio = QPushButton("🎙️ Audios")
+        self.btn_filter_snapshot = QPushButton("📷 Snapshots")
+
+        for mode, b in (
+            ("all", self.btn_filter_all),
+            ("video", self.btn_filter_video),
+            ("audio", self.btn_filter_audio),
+            ("snapshot", self.btn_filter_snapshot),
+        ):
+            b.clicked.connect(lambda _c=False, m=mode: self._set_recording_filter(m))
+            filter_row.addWidget(b)
+
+        self.combo_recording_sort = QComboBox()
+        self.combo_recording_sort.addItems(["Newest First", "Oldest First", "Name (A-Z)", "Size (Largest)", "Size (Smallest)"])
+        self.combo_recording_sort.currentIndexChanged.connect(self._filter_and_render_recordings)
+        filter_row.addWidget(self.combo_recording_sort)
+        c_layout.addLayout(filter_row)
+
+        # Table
+        self.tree_recordings = QTableWidget(0, 5)
+        self.tree_recordings.setHorizontalHeaderLabels(["File Name", "Folder", "Type", "Created", "Size"])
+        header = self.tree_recordings.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree_recordings.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tree_recordings.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree_recordings.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree_recordings.verticalHeader().setVisible(False)
+        self.tree_recordings.itemSelectionChanged.connect(self._on_tree_recording_selected)
+        self.tree_recordings.itemDoubleClicked.connect(lambda _item: self.open_selected_recording())
+        c_layout.addWidget(self.tree_recordings, 1)
+
+        # Bottom Action Row
+        act_row = QHBoxLayout()
+        self.lbl_selected_recording_info = QLabel("Select an item to play, inspect in Explorer, or delete.")
+        self.lbl_selected_recording_info.setStyleSheet("color: #94A3B8;")
+        act_row.addWidget(self.lbl_selected_recording_info, 1)
+
+        btn_play = QPushButton("▶️ Play / Open")
+        btn_play.setObjectName("SuccessBtn")
+        btn_play.clicked.connect(self.open_selected_recording)
+        act_row.addWidget(btn_play)
+
+        btn_rev = QPushButton("🔍 Show in Explorer")
+        btn_rev.clicked.connect(self.show_selected_in_explorer)
+        act_row.addWidget(btn_rev)
+
+        btn_cp_path = QPushButton("📋 Copy Path")
+        btn_cp_path.clicked.connect(self.copy_selected_recording_path)
+        act_row.addWidget(btn_cp_path)
+
+        btn_del = QPushButton("🗑️ Delete")
+        btn_del.setObjectName("DangerBtn")
+        btn_del.clicked.connect(self.delete_selected_recording)
+        act_row.addWidget(btn_del)
+
+        c_layout.addLayout(act_row)
+        layout.addWidget(card)
+        self._set_recording_filter("all")
+        return page
+
+    # ------------------------------------------------------------------
+    # Page 4: Desktop Controls, PC Webcam Live Preview & Quick Apps
+    # ------------------------------------------------------------------
+    def _create_desktop_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # Card 1: PC Webcam Live Preview & Fullscreen + Microphone Diagnostics
+        cam_card = QFrame()
+        cam_card.setObjectName("Card")
+        cam_l = QVBoxLayout(cam_card)
+        cam_l.setContentsMargins(20, 16, 20, 16)
+        cam_l.setSpacing(10)
+
+        cam_hdr = QHBoxLayout()
+        lbl_ct = QLabel("💻  PC Webcam Live Monitor & Combined Audio+Video Recording")
+        lbl_ct.setStyleSheet("font-size: 16px; font-weight: 700;")
+        cam_hdr.addWidget(lbl_ct)
+        cam_hdr.addStretch()
+
+        self.btn_pc_cam_live = QPushButton("📹 Start PC Webcam Preview")
+        self.btn_pc_cam_live.setObjectName("CyanBtn")
+        self.btn_pc_cam_live.clicked.connect(self.toggle_local_pc_webcam_preview)
+        cam_hdr.addWidget(self.btn_pc_cam_live)
+
+        btn_pc_snap = QPushButton("📸 Capture Snapshot")
+        btn_pc_snap.setObjectName("SuccessBtn")
+        btn_pc_snap.clicked.connect(self.test_camera_snapshot)
+        cam_hdr.addWidget(btn_pc_snap)
+
+        btn_pc_mic = QPushButton("🎙️ Test Mic (3s to Audios/)")
+        btn_pc_mic.clicked.connect(self.test_mic_record)
+        cam_hdr.addWidget(btn_pc_mic)
+
+        btn_pc_fs = QPushButton("⛶ Fullscreen")
+        btn_pc_fs.setObjectName("PrimaryBtn")
+        btn_pc_fs.clicked.connect(self.open_pc_cam_fullscreen)
+        cam_hdr.addWidget(btn_pc_fs)
+        cam_l.addLayout(cam_hdr)
+
+        self.lbl_cam_preview = AspectRatioVideoWidget(
+            "PC Webcam Standby — Click '📹 Start PC Webcam Preview', '📸 Capture Snapshot', or start Live Stream from your phone.\n"
+            "Double-click or press '⛶ Fullscreen' to expand.",
+            self,
+        )
+        self.lbl_cam_preview.setMinimumHeight(240)
+        self.lbl_cam_preview.double_clicked.connect(self.open_pc_cam_fullscreen)
+        cam_l.addWidget(self.lbl_cam_preview)
+
+        self.lbl_media_status = QLabel("PC Webcam & Microphone ready. Live recordings automatically combine video + audio into Videos/.")
+        self.lbl_media_status.setStyleSheet("color: #38BDF8; font-size: 12px;")
+        cam_l.addWidget(self.lbl_media_status)
+
+        layout.addWidget(cam_card)
+
+        # Card 2: Recording Policy & Windows Sign-In Startup
+        pol_card = QFrame()
+        pol_card.setObjectName("Card")
+        pol_l = QVBoxLayout(pol_card)
+        pol_l.setContentsMargins(20, 16, 20, 16)
+        pol_l.setSpacing(10)
+
+        pol_hdr = QHBoxLayout()
+        lbl_pt = QLabel("⚙️  Startup, Power & Combined Recording Settings")
+        lbl_pt.setStyleSheet("font-size: 16px; font-weight: 700;")
+        pol_hdr.addWidget(lbl_pt)
+        pol_hdr.addStretch()
+
+        btn_lock = QPushButton("🔒 Lock Workstation (Win+L)")
+        btn_lock.setObjectName("DangerBtn")
+        btn_lock.clicked.connect(lambda: self.server._handle_system_power("lock") if self.server else None)
+        pol_hdr.addWidget(btn_lock)
+        pol_l.addLayout(pol_hdr)
+
+        self.chk_startup = QCheckBox("Start BT Mouse Companion automatically when signing in to Windows (minimized to tray)")
+        self.chk_startup.setChecked(self._startup_registry_value() is not None)
+        self.chk_startup.toggled.connect(self._set_startup_enabled)
+        pol_l.addWidget(self.chk_startup)
+
+        self.chk_auto_video = QCheckBox("Record live PC webcam sessions into Videos/ (1280×720 MP4)")
+        self.chk_auto_video.setChecked(self.auto_record_video)
+        self.chk_auto_video.toggled.connect(self._save_recording_preferences)
+        pol_l.addWidget(self.chk_auto_video)
+
+        self.chk_auto_audio = QCheckBox("Include PC microphone audio and merge into a single combined MP4 video file")
+        self.chk_auto_audio.setChecked(self.auto_record_audio)
+        self.chk_auto_audio.toggled.connect(self._save_recording_preferences)
+        pol_l.addWidget(self.chk_auto_audio)
+
+        lim_row = QHBoxLayout()
+        lim_row.addWidget(QLabel("Auto-delete older than (days, 0=keep):"))
+        self.spin_retention = QSpinBox()
+        self.spin_retention.setRange(0, 3650)
+        self.spin_retention.setValue(self.recording_retention_days)
+        lim_row.addWidget(self.spin_retention)
+
+        lim_row.addWidget(QLabel("Max library MB (0=unlimited):"))
+        self.spin_max_mb = QSpinBox()
+        self.spin_max_mb.setRange(0, 500000)
+        self.spin_max_mb.setSingleStep(512)
+        self.spin_max_mb.setValue(self.recording_max_storage_mb)
+        lim_row.addWidget(self.spin_max_mb)
+
+        lim_row.addWidget(QLabel("Min free disk MB:"))
+        self.spin_min_free = QSpinBox()
+        self.spin_min_free.setRange(0, 100000)
+        self.spin_min_free.setSingleStep(256)
+        self.spin_min_free.setValue(self.recording_min_free_mb)
+        lim_row.addWidget(self.spin_min_free)
+
+        btn_save_lim = QPushButton("Save Limits")
+        btn_save_lim.setObjectName("PrimaryBtn")
+        btn_save_lim.clicked.connect(self._save_recording_preferences)
+        lim_row.addWidget(btn_save_lim)
+        lim_row.addStretch()
+        pol_l.addLayout(lim_row)
+
+        prev_row = QHBoxLayout()
+        btn_sel_reg = QPushButton("📐 Select Media Player Preview Area")
+        btn_sel_reg.clicked.connect(self.select_media_preview_region)
+        prev_row.addWidget(btn_sel_reg)
+        self.lbl_media_preview_region = QLabel(self._media_preview_region_description())
+        self.lbl_media_preview_region.setStyleSheet("color: #94A3B8;")
+        prev_row.addWidget(self.lbl_media_preview_region)
+        prev_row.addStretch()
+        pol_l.addLayout(prev_row)
+
+        layout.addWidget(pol_card)
+
+        # Card 3: Quick Apps Manager
+        qa_card = QFrame()
+        qa_card.setObjectName("Card")
+        qa_l = QVBoxLayout(qa_card)
+        qa_l.setContentsMargins(20, 16, 20, 16)
+        qa_l.setSpacing(10)
+
+        lbl_qat = QLabel("🚀  Curated PC Quick Apps (One-Tap Launch from Phone)")
+        lbl_qat.setStyleSheet("font-size: 16px; font-weight: 700;")
+        qa_l.addWidget(lbl_qat)
+
+        add_row = QHBoxLayout()
+        self.combo_available_apps = QComboBox()
+        add_row.addWidget(self.combo_available_apps, 1)
+        btn_add_qa = QPushButton("＋ Add Selected App")
+        btn_add_qa.setObjectName("PrimaryBtn")
+        btn_add_qa.clicked.connect(self.add_quick_app)
+        add_row.addWidget(btn_add_qa)
+        qa_l.addLayout(add_row)
+
+        self.list_quick_apps = QListWidget()
+        self.list_quick_apps.setMaximumHeight(130)
+        self.list_quick_apps.currentRowChanged.connect(self.on_quick_app_selected)
+        qa_l.addWidget(self.list_quick_apps)
+
+        edit_row = QHBoxLayout()
+        self.ent_quick_app_name = QLineEdit()
+        self.ent_quick_app_name.setPlaceholderText("Rename selected quick app...")
+        edit_row.addWidget(self.ent_quick_app_name, 1)
+
+        btn_ren = QPushButton("Save Name")
+        btn_ren.clicked.connect(self.rename_quick_app)
+        edit_row.addWidget(btn_ren)
+
+        btn_rem = QPushButton("Remove")
+        btn_rem.setObjectName("DangerBtn")
+        btn_rem.clicked.connect(self.remove_quick_app)
+        edit_row.addWidget(btn_rem)
+
+        btn_ref_qa = QPushButton("🔄 Refresh Installed Apps")
+        btn_ref_qa.clicked.connect(self.refresh_quick_apps)
+        edit_row.addWidget(btn_ref_qa)
+        qa_l.addLayout(edit_row)
+
+        self.lbl_quick_apps_status = QLabel("Quick apps are synced with your Android phone.")
+        self.lbl_quick_apps_status.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        qa_l.addWidget(self.lbl_quick_apps_status)
+
+        layout.addWidget(qa_card)
+        layout.addStretch()
+        scroll.setWidget(content)
+        return scroll
+
+    # ------------------------------------------------------------------
+    # Page 5: Bluetooth Assistant
+    # ------------------------------------------------------------------
+    def _create_bt_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        c_l = QVBoxLayout(card)
+        c_l.setContentsMargins(24, 24, 24, 24)
+        c_l.setSpacing(14)
+
+        lbl_t = QLabel("📶  Bluetooth RFCOMM & HID Hardware Emulation")
+        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        c_l.addWidget(lbl_t)
+
+        lbl_d = QLabel(
+            "Your phone connects over Bluetooth in two complementary ways:\n"
+            "• Bluetooth RFCOMM (Companion Link): Carries media controls, system stats, live audio, and camera frames.\n"
+            "• Bluetooth HID (Direct Hardware Profile): Emulates a physical Bluetooth mouse & keyboard at the OS level."
+        )
+        lbl_d.setWordWrap(True)
+        lbl_d.setStyleSheet("color: #CBD5E1; line-height: 1.4;")
+        c_l.addWidget(lbl_d)
+
+        btn_bt = QPushButton("⚙️  Open Windows Bluetooth Settings")
+        btn_bt.setObjectName("PrimaryBtn")
+        btn_bt.setFixedWidth(280)
+        btn_bt.clicked.connect(self.open_windows_bt_settings)
+        c_l.addWidget(btn_bt)
+
+        steps_box = QFrame()
+        steps_box.setObjectName("SubCard")
+        s_l = QVBoxLayout(steps_box)
+        lbl_sh = QLabel("PAIRING & FAILOVER CHECKLIST")
+        lbl_sh.setStyleSheet("color: #38BDF8; font-weight: 700; font-size: 12px;")
+        s_l.addWidget(lbl_sh)
+        lbl_st = QLabel(
+            "1. Pair your Android phone and PC in Windows Bluetooth Settings.\n"
+            "2. Open the BT Mouse app ➔ PC Hub / Connect ➔ Bluetooth ➔ Tap 'Connect' next to your PC.\n"
+            "3. Enable 'Automatic Measured Failover' in Settings to seamlessly switch between Wi-Fi and Bluetooth without dropping video or audio streams."
+        )
+        lbl_st.setWordWrap(True)
+        s_l.addWidget(lbl_st)
+        c_l.addWidget(steps_box)
+        c_l.addStretch()
+
+        layout.addWidget(card)
+        return page
+
+    # ------------------------------------------------------------------
+    # Page 6: Remote WAN
+    # ------------------------------------------------------------------
+    def _create_wan_page(self):
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        qr_card = QFrame()
+        qr_card.setObjectName("Card")
+        qr_l = QVBoxLayout(qr_card)
+        qr_l.setContentsMargins(24, 24, 24, 24)
+        qr_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lbl_t = QLabel("Remote WAN WebSocket QR")
+        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_l.addWidget(lbl_t)
+
+        lbl_d = QLabel("Scan from the Remote WAN tab on your phone to auto-fill the WebSocket URL and 6-digit PIN.")
+        lbl_d.setWordWrap(True)
+        lbl_d.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_d.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        qr_l.addWidget(lbl_d)
+        qr_l.addSpacing(12)
+
+        self.wan_qr_label = QLabel()
+        self.wan_qr_label.setFixedSize(220, 220)
+        self.wan_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.wan_qr_label.setStyleSheet("background-color: #FFFFFF; border-radius: 12px; padding: 10px;")
+        qr_l.addWidget(self.wan_qr_label, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(qr_card, 1)
+
+        info_card = QFrame()
+        info_card.setObjectName("Card")
+        in_l = QVBoxLayout(info_card)
+        in_l.setContentsMargins(24, 24, 24, 24)
+        in_l.setSpacing(12)
+
+        lbl_it = QLabel("WebSocket & PIN Settings")
+        lbl_it.setStyleSheet("font-size: 18px; font-weight: 700;")
+        in_l.addWidget(lbl_it)
+
+        url_box = QFrame()
+        url_box.setObjectName("SubCard")
+        u_l = QVBoxLayout(url_box)
+        lbl_uh = QLabel("LOCAL WEBSOCKET ENDPOINT")
+        lbl_uh.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        u_l.addWidget(lbl_uh)
+        self.lbl_wan_url = QLabel(f"ws://{self.current_ip}:{self.ws_port}")
+        self.lbl_wan_url.setStyleSheet("font-family: Consolas, monospace; font-size: 16px; font-weight: 700; color: #10B981;")
+        u_l.addWidget(self.lbl_wan_url)
+        in_l.addWidget(url_box)
+
+        in_l.addWidget(QLabel("Update 6-Digit Security PIN:"))
+        pin_row = QHBoxLayout()
+        self.ent_token = QLineEdit(self.auth_token)
+        self.ent_token.setMaxLength(6)
+        pin_row.addWidget(self.ent_token, 1)
+        btn_upd = QPushButton("Save New PIN")
+        btn_upd.setObjectName("PrimaryBtn")
+        btn_upd.clicked.connect(self._update_auth_token)
+        pin_row.addWidget(btn_upd)
+        in_l.addLayout(pin_row)
+
+        in_l.addStretch()
+
+        btn_cp_url = QPushButton("📋  Copy WebSocket URL")
+        btn_cp_url.clicked.connect(self.copy_wan_url)
+        in_l.addWidget(btn_cp_url)
+
+        btn_ref_wan = QPushButton("🔄  Refresh WAN QR Code")
+        btn_ref_wan.clicked.connect(self.generate_wan_qr)
+        in_l.addWidget(btn_ref_wan)
+
+        layout.addWidget(info_card, 1)
+        self.generate_wan_qr()
+        return page
+
+    # ------------------------------------------------------------------
+    # Page 7: Tablet Writing Pad
+    # ------------------------------------------------------------------
+    def _create_tablet_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        c_l = QVBoxLayout(card)
+        c_l.setContentsMargins(24, 24, 24, 24)
+        c_l.setSpacing(14)
+
+        lbl_t = QLabel("✍️  Tablet Writing & Graphics Drawing Slate")
+        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        c_l.addWidget(lbl_t)
+
+        lbl_d = QLabel(
+            "Use the 'Drawing Pen' mode right inside the main Control Pad tab on your Android phone or tablet:\n"
+            "• 1:1 Absolute Screen Mapping: Maps your mobile screen directly onto your primary monitor.\n"
+            "• Stylus & Palm Rejection: Supports S-Pen / active styluses with optional finger touch rejection."
+        )
+        lbl_d.setWordWrap(True)
+        c_l.addWidget(lbl_d)
+
+        btn_paint = QPushButton("🎨  Open MS Paint for Drawing Test")
+        btn_paint.setObjectName("PrimaryBtn")
+        btn_paint.setFixedWidth(260)
+        btn_paint.clicked.connect(self.open_paint)
+        c_l.addWidget(btn_paint)
+        c_l.addStretch()
+
+        layout.addWidget(card)
+        return page
+
+    # ------------------------------------------------------------------
+    # Page 8: Live Monitor
+    # ------------------------------------------------------------------
+    def _create_logs_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        top_card = QFrame()
+        top_card.setObjectName("Card")
+        t_row = QHBoxLayout(top_card)
+        t_row.setContentsMargins(18, 12, 18, 12)
+
+        self.lbl_client = QLabel("Client: Disconnected")
+        self.lbl_client.setStyleSheet("font-size: 14px; font-weight: 700; color: #94A3B8;")
+        t_row.addWidget(self.lbl_client)
+        t_row.addStretch()
+
+        self.lbl_packets = QLabel("Packets Received: 0")
+        self.lbl_packets.setStyleSheet("font-family: Consolas, monospace; font-size: 14px; font-weight: 700; color: #38BDF8;")
+        t_row.addWidget(self.lbl_packets)
+
+        btn_clr = QPushButton("🧹 Clear Log")
+        btn_clr.clicked.connect(lambda: self.txt_log.clear())
+        t_row.addWidget(btn_clr)
+
+        layout.addWidget(top_card)
+
+        self.txt_log = QPlainTextEdit()
+        self.txt_log.setReadOnly(True)
+        self.txt_log.setStyleSheet("font-family: Consolas, monospace; font-size: 12px;")
+        layout.addWidget(self.txt_log, 1)
+
+        self.log("Companion initialized. Ready for connections.")
+        return page
+
+    # ------------------------------------------------------------------
+    # System Tray & Window Lifecycle
+    # ------------------------------------------------------------------
     def _setup_system_tray(self):
-        if not HAS_TRAY:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-
+        self.tray_icon = QSystemTrayIcon(self)
         if os.path.exists(self.icon_png_path):
-            tray_img = Image.open(self.icon_png_path)
-        else:
-            tray_img = Image.new("RGBA", (64, 64), color=(14, 17, 24))
+            self.tray_icon.setIcon(QIcon(self.icon_png_path))
+        elif os.path.exists(self.icon_path):
+            self.tray_icon.setIcon(QIcon(self.icon_path))
 
-        menu = (
-            item("BT Mouse Companion", lambda: None, enabled=False),
-            item(lambda text: f"Status: {'Running' if self.is_server_running else 'Stopped'}", lambda: None, enabled=False),
-            item("Show Window", self.show_from_tray, default=True),
-            item("Open Recordings Folder", self.open_recordings_folder),
-            item("Restart Server", self.restart_server),
-            item("Start Server", self.start_server),
-            item("Stop Server", self.stop_server),
-            item("Copy Wi-Fi IP", self.copy_ip),
-            item("Bluetooth Settings", self.open_windows_bt_settings),
-            item("Exit Application", self.quit_application),
+        menu = QMenu()
+        menu.setStyleSheet(
+            "QMenu { background-color: #131B29; color: #F8FAFC; border: 1px solid #283750; padding: 6px; } "
+            "QMenu::item { padding: 6px 18px; border-radius: 4px; } "
+            "QMenu::item:selected { background-color: #6366F1; }"
         )
+        act_show = QAction("Show Companion Window", self)
+        act_show.triggered.connect(self.show_from_tray)
+        menu.addAction(act_show)
 
-        self.tray_icon = pystray.Icon("bt_mouse_companion", tray_img, "BT Mouse & Keyboard Companion", menu)
-        threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        act_vids = QAction("Open Videos Folder", self)
+        act_vids.triggered.connect(self.open_videos_folder)
+        menu.addAction(act_vids)
+
+        act_auds = QAction("Open Audios Folder", self)
+        act_auds.triggered.connect(self.open_audios_folder)
+        menu.addAction(act_auds)
+
+        act_snaps = QAction("Open Snapshots Folder", self)
+        act_snaps.triggered.connect(self.open_snapshots_folder)
+        menu.addAction(act_snaps)
+
+        menu.addSeparator()
+        act_restart = QAction("Restart Server", self)
+        act_restart.triggered.connect(self.restart_server)
+        menu.addAction(act_restart)
+
+        act_quit = QAction("Exit Application", self)
+        act_quit.triggered.connect(self.quit_application)
+        menu.addAction(act_quit)
+
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.setToolTip(f"BT Mouse Companion v{APP_VERSION}")
+        self.tray_icon.activated.connect(
+            lambda reason: self.show_from_tray() if reason == QSystemTrayIcon.ActivationReason.Trigger else None
+        )
+        self.tray_icon.show()
+
+    def closeEvent(self, event):
+        event.ignore()
+        self.hide_to_tray()
 
     def hide_to_tray(self):
-        """Hides the main window to the system tray"""
-        self.withdraw()
+        self.hide()
         if self.tray_icon:
-            try:
-                self.tray_icon.notify("Running in background", "BT Mouse Companion is still active in your system tray.")
-            except Exception:
-                pass
-
-    def show_from_tray(self, icon=None, item=None):
-        """Restores the main window from system tray"""
-        self.after(0, self._restore_window)
-
-    def _restore_window(self):
-        self.deiconify()
-        self.lift()
-        self.focus_force()
-
-    def _build_header(self):
-        header_frame = tk.Frame(
-            self,
-            bg=SIDEBAR_BG,
-            padx=20,
-            pady=12,
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-        )
-        header_frame.pack(fill="x", side="top")
-
-        # Left Brand & Version Info
-        brand_box = tk.Frame(header_frame, bg=SIDEBAR_BG)
-        brand_box.pack(side="left", fill="y")
-
-        title_row = tk.Frame(brand_box, bg=SIDEBAR_BG)
-        title_row.pack(anchor="w")
-
-        lbl_badge = tk.Label(
-            title_row,
-            text="🖱️",
-            font=(UI_FONT, 15),
-            bg=SIDEBAR_BG,
-            fg=ACCENT_CYAN,
-        )
-        lbl_badge.pack(side="left", padx=(0, 8))
-
-        lbl_title = tk.Label(
-            title_row,
-            text="BT Mouse & Keyboard",
-            font=(UI_FONT, 14, "bold"),
-            bg=SIDEBAR_BG,
-            fg=TEXT_PRIMARY,
-        )
-        lbl_title.pack(side="left")
-
-        lbl_ver = tk.Label(
-            title_row,
-            text=f"v{APP_VERSION}",
-            font=(UI_FONT, 8, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_CYAN,
-            padx=7,
-            pady=2,
-        )
-        lbl_ver.pack(side="left", padx=(10, 0))
-
-        lbl_sub = tk.Label(
-            brand_box,
-            text="Windows Desktop Companion · Low-Latency Wi-Fi, Bluetooth & Remote WAN Server",
-            font=(UI_FONT, 8),
-            bg=SIDEBAR_BG,
-            fg=TEXT_MUTED,
-        )
-        lbl_sub.pack(anchor="w", pady=(2, 0))
-
-        # Right Status Pill & Action Controls
-        right_box = tk.Frame(header_frame, bg=SIDEBAR_BG)
-        right_box.pack(side="right", fill="y")
-
-        self.lbl_status_pill = tk.Label(
-            right_box,
-            text="● SERVER READY",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_GREEN,
-            padx=12,
-            pady=6,
-        )
-        self.lbl_status_pill.pack(side="left", padx=(0, 8))
-
-        self.btn_toggle = self._make_button(
-            right_box, "Stop Server", self.toggle_server, bg=BUTTON_BG, fg=ACCENT_RED, padx=11, pady=5
-        )
-        self.btn_toggle.pack(side="left", padx=(0, 6))
-
-        self.btn_restart = self._make_button(
-            right_box, "Restart", self.restart_server, bg=BUTTON_BG, fg=ACCENT_CYAN, padx=11, pady=5
-        )
-        self.btn_restart.pack(side="left", padx=(0, 6))
-
-        self.btn_update = self._make_button(
-            right_box, "Check for Updates", self.check_for_companion_updates, bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY, hover_bg=ACCENT_INDIGO_HOVER, padx=12, pady=5
-        )
-        self.btn_update.pack(side="left")
-
-    def _build_notebook(self):
-        """Builds a modern Windows 11 Fluent left navigation rail + main page container."""
-        self.notebook = _NotebookCompatibilityShim(self)
-
-        body = tk.Frame(self, bg=BG_DARK)
-        body.pack(fill="both", expand=True)
-
-        # Left Navigation Sidebar
-        self.sidebar = tk.Frame(
-            body,
-            bg=SIDEBAR_BG,
-            width=225,
-            padx=10,
-            pady=12,
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-        )
-        self.sidebar.pack(side="left", fill="y")
-        self.sidebar.pack_propagate(False)
-
-        tk.Label(
-            self.sidebar,
-            text="NAVIGATION",
-            font=(UI_FONT, 8, "bold"),
-            bg=SIDEBAR_BG,
-            fg=TEXT_MUTED,
-            padx=8,
-        ).pack(anchor="w", pady=(0, 6))
-
-        self.nav_Container = tk.Frame(self.sidebar, bg=SIDEBAR_BG)
-        self.nav_Container.pack(fill="x")
-
-        # Main Page Stack Area
-        self.page_host = tk.Frame(body, bg=BG_DARK, padx=16, pady=14)
-        self.page_host.pack(side="left", fill="both", expand=True)
-
-        self._nav_items = {}
-        self._active_page = None
-
-        def _create_page(icon_text, title):
-            page = tk.Frame(self.page_host, bg=BG_DARK)
-            self.notebook.add(page, text=f"{icon_text} {title}")
-
-            nav_row = tk.Frame(self.nav_Container, bg=SIDEBAR_BG, cursor="hand2")
-            nav_row.pack(fill="x", pady=2)
-
-            indicator = tk.Frame(nav_row, bg=SIDEBAR_BG, width=4, height=34)
-            indicator.pack(side="left", fill="y")
-
-            btn_lbl = tk.Label(
-                nav_row,
-                text=f"  {icon_text}   {title}",
-                font=(UI_FONT, 9, "bold"),
-                bg=SIDEBAR_BG,
-                fg=TEXT_SECONDARY,
-                anchor="w",
-                padx=8,
-                pady=8,
-                cursor="hand2",
+            self.tray_icon.showMessage(
+                "BT Mouse Companion",
+                "Still running in your system tray.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
             )
-            btn_lbl.pack(side="left", fill="x", expand=True)
 
-            def _on_click(_e=None, target=page):
-                self._select_page(target)
+    def show_from_tray(self):
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
 
-            def _on_enter(_e=None, target=page):
-                if self._active_page is not target:
-                    nav_row.configure(bg=SIDEBAR_HOVER)
-                    btn_lbl.configure(bg=SIDEBAR_HOVER, fg=TEXT_PRIMARY)
+    # ------------------------------------------------------------------
+    # Camera Fullscreen, Rotation & Recording Actions
+    # ------------------------------------------------------------------
+    def open_phone_cam_fullscreen(self):
+        if self.phone_fullscreen_win is None:
+            self.phone_fullscreen_win = FullscreenVideoWindow(
+                "Phone Camera Live Stream",
+                on_rotate=self.rotate_phone_cam_90,
+                on_snapshot=self._save_phone_cam_snapshot,
+                on_toggle_record=self.toggle_phone_cam_recording,
+                parent=self,
+            )
+        self.phone_fullscreen_win.showMaximized()
+        self.phone_fullscreen_win.activateWindow()
+        self.phone_fullscreen_win.raise_()
 
-            def _on_leave(_e=None, target=page):
-                if self._active_page is not target:
-                    nav_row.configure(bg=SIDEBAR_BG)
-                    btn_lbl.configure(bg=SIDEBAR_BG, fg=TEXT_SECONDARY)
+    def open_pc_cam_fullscreen(self):
+        if self.pc_fullscreen_win is None:
+            self.pc_fullscreen_win = FullscreenVideoWindow(
+                "PC Webcam Live Monitor",
+                on_snapshot=self.test_camera_snapshot,
+                parent=self,
+            )
+        if not self.server.camera_manager.streaming:
+            self.toggle_local_pc_webcam_preview()
+        self.pc_fullscreen_win.showMaximized()
+        self.pc_fullscreen_win.activateWindow()
+        self.pc_fullscreen_win.raise_()
 
-            for w in (nav_row, indicator, btn_lbl):
-                w.bind("<Button-1>", _on_click)
-                w.bind("<Enter>", _on_enter)
-                w.bind("<Leave>", _on_leave)
+    def rotate_phone_cam_90(self):
+        receiver = getattr(self.server, "phone_camera_receiver", None)
+        if receiver:
+            deg = receiver.rotate_90()
+            self.lbl_phone_cam_telemetry.setText(f"Rotated phone camera view to {deg}°")
 
-            self._nav_items[page] = (nav_row, indicator, btn_lbl)
-            return page
-
-        self.tab_wifi = _create_page("📱", "Wi-Fi & QR Pairing")
-        self.tab_bt = _create_page("📶", "Bluetooth Mode")
-        self.tab_wan = _create_page("🌐", "Remote WAN")
-        self.tab_desktop = _create_page("🚀", "Desktop & Controls")
-        self.tab_recordings = _create_page("🎬", "Recordings Library")
-        self.tab_phone_cam = _create_page("📷", "Phone as Webcam")
-        self.tab_tablet = _create_page("✍️", "Tablet Writing Pad")
-        self.tab_logs = _create_page("📊", "Live Monitor")
-
-        # Sidebar Footer Quick-Status Card
-        sidebar_footer = tk.Frame(
-            self.sidebar,
-            bg=CARD_BG,
-            padx=12,
-            pady=10,
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-        )
-        sidebar_footer.pack(side="bottom", fill="x", pady=(8, 0))
-
-        tk.Label(
-            sidebar_footer,
-            text="QUICK PAIRING INFO",
-            font=(UI_FONT, 7, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-        ).pack(anchor="w")
-
-        self.lbl_sidebar_ip = tk.Label(
-            sidebar_footer,
-            text=f"IP: {self.current_ip}:{self.current_port}",
-            font=("Consolas", 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-        )
-        self.lbl_sidebar_ip.pack(anchor="w", pady=(3, 1))
-
-        self.lbl_sidebar_pin = tk.Label(
-            sidebar_footer,
-            text=f"PIN: {self.auth_token}",
-            font=("Consolas", 10, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_GREEN,
-        )
-        self.lbl_sidebar_pin.pack(anchor="w")
-
-        # Populate all 8 pages
-        self._build_wifi_tab()
-        self._build_bt_tab()
-        self._build_wan_tab()
-        self._build_desktop_tab()
-        self._build_recordings_tab()
-        self._build_phone_cam_tab()
-        self._build_tablet_tab()
-        self._build_logs_tab()
-
-        # Show initial page
-        self._select_page(self.tab_wifi)
-
-    def _select_page(self, target_page):
-        if self._active_page is target_page:
+    def toggle_phone_cam_recording(self):
+        receiver = getattr(self.server, "phone_camera_receiver", None)
+        if not receiver:
             return
-        if self._active_page is not None:
-            self._active_page.pack_forget()
-        self._active_page = target_page
-        target_page.pack(fill="both", expand=True)
+        if receiver.recording:
+            saved = receiver.stop_recording()
+            self.btn_phone_cam_rec.setText("⏺ Record to Videos")
+            self.btn_phone_cam_rec.setObjectName("")
+            self.btn_phone_cam_rec.style().unpolish(self.btn_phone_cam_rec)
+            self.btn_phone_cam_rec.style().polish(self.btn_phone_cam_rec)
+            if saved:
+                self.lbl_phone_cam_telemetry.setText(f"✓ Saved video to Videos/{os.path.basename(saved)}")
+                self.refresh_recordings()
+        else:
+            path = receiver.start_recording()
+            self.btn_phone_cam_rec.setText("⏹ Stop Recording")
+            self.btn_phone_cam_rec.setObjectName("DangerBtn")
+            self.btn_phone_cam_rec.style().unpolish(self.btn_phone_cam_rec)
+            self.btn_phone_cam_rec.style().polish(self.btn_phone_cam_rec)
+            self.lbl_phone_cam_telemetry.setText(f"● Recording to Videos/{os.path.basename(path)}...")
 
-        for page, (nav_row, indicator, btn_lbl) in self._nav_items.items():
-            if page is target_page:
-                nav_row.configure(bg=SIDEBAR_ACTIVE)
-                indicator.configure(bg=ACCENT_CYAN)
-                btn_lbl.configure(bg=SIDEBAR_ACTIVE, fg=TEXT_PRIMARY)
+    def toggle_local_pc_webcam_preview(self):
+        if not self.server:
+            return
+        if self.server.camera_manager.streaming:
+            self.server._stop_camera_stream_for_client()
+            self.pc_webcam_preview_active = False
+            self.btn_pc_cam_live.setText("📹 Start PC Webcam Preview")
+            self.lbl_cam_preview.clear_frame()
+            self.lbl_media_status.setText("PC Webcam preview stopped.")
+            self.refresh_recordings()
+        else:
+            self.pc_webcam_preview_active = True
+            self.btn_pc_cam_live.setText("⏹ Stop PC Webcam Preview")
+            self.lbl_media_status.setText("Starting PC Webcam live preview...")
+            threading.Thread(
+                target=self.server._start_camera_stream_for_client,
+                args=(("local_gui", 0), lambda _msg: None, True, "local_gui"),
+                daemon=True,
+            ).start()
+
+    def _on_pc_cam_frame_received(self, b64_frame):
+        try:
+            raw = base64.b64decode(b64_frame)
+            self.bridge.pc_cam_signal.emit(raw)
+        except Exception:
+            pass
+
+    def _update_pc_cam_ui(self, raw_jpeg):
+        self.lbl_cam_preview.set_frame_bytes(raw_jpeg)
+        if self.pc_fullscreen_win and self.pc_fullscreen_win.isVisible():
+            self.pc_fullscreen_win.video_surface.set_frame_bytes(raw_jpeg)
+
+    def _on_phone_cam_frame_received(self, raw_jpeg, w, h, lens, fps, bitrate_kbps):
+        self.bridge.phone_cam_signal.emit(raw_jpeg, int(w), int(h), str(lens), float(fps), float(bitrate_kbps))
+
+    def _update_phone_cam_ui(self, raw_jpeg, w, h, lens, fps, bitrate_kbps):
+        self.lbl_phone_cam_preview.set_frame_bytes(raw_jpeg)
+        orient = "PORTRAIT 9:16 (Vertical)" if h > w else "LANDSCAPE 16:9 (Horizontal)"
+        rot = getattr(getattr(self.server, "phone_camera_receiver", None), "rotation_degrees", 0)
+        rot_suffix = f" · Rot {rot}°" if rot else ""
+        self.lbl_phone_cam_orientation.setText(f"{orient}{rot_suffix}")
+        self.lbl_phone_cam_status.setText(f"● LIVE · {lens.upper()} LENS")
+        self.lbl_phone_cam_status.setStyleSheet("color: #10B981; font-weight: 700;")
+        count = getattr(getattr(self.server, "phone_camera_receiver", None), "frame_count", 0)
+        meta_text = f"{w}×{h}  ·  {fps:.1f} FPS  ·  {bitrate_kbps:.0f} kbps  ·  {count:,} frames"
+        self.lbl_phone_cam_telemetry.setText(meta_text)
+
+        if self.phone_fullscreen_win and self.phone_fullscreen_win.isVisible():
+            self.phone_fullscreen_win.video_surface.set_frame_bytes(raw_jpeg)
+            self.phone_fullscreen_win.lbl_meta.setText(f"● LIVE ({lens.upper()})  ·  {orient}  ·  {meta_text}")
+
+    def _check_phone_cam_active(self):
+        receiver = getattr(self.server, "phone_camera_receiver", None)
+        if receiver and receiver.latest_timestamp and (time.monotonic() - receiver.latest_timestamp > 4.5):
+            if receiver.is_active:
+                receiver.is_active = False
+                self.lbl_phone_cam_status.setText("○ STANDBY")
+                self.lbl_phone_cam_status.setStyleSheet("color: #94A3B8; font-weight: 700;")
+                self.lbl_phone_cam_telemetry.setText("Stream paused / standby")
+
+    def _copy_phone_mjpeg_url(self):
+        QApplication.clipboard().setText(self.lbl_phone_mjpeg_url.text())
+        self.lbl_phone_cam_telemetry.setText("✓ Copied localhost MJPEG stream URL to clipboard!")
+
+    def _save_phone_cam_snapshot(self):
+        receiver = getattr(self.server, "phone_camera_receiver", None)
+        frame = receiver.latest_jpeg if receiver else None
+        if not frame:
+            self.lbl_phone_cam_telemetry.setText("No live phone camera frame available to snapshot.")
+            return
+        try:
+            snap_dir = Path(self.media_dirs["snapshots"])
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"phone_snapshot_{timestamp}.jpg"
+            target = snap_dir / filename
+            target.write_bytes(frame)
+            self.lbl_phone_cam_telemetry.setText(f"✓ Saved snapshot to Snapshots/{filename}")
+            self.refresh_recordings()
+        except Exception as e:
+            self.lbl_phone_cam_telemetry.setText(f"Could not save snapshot: {e}")
+
+    # ------------------------------------------------------------------
+    # Media Folders & Library Management
+    # ------------------------------------------------------------------
+    def _open_folder_path(self, folder_path):
+        folder = Path(folder_path)
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            if os.name == "nt":
+                os.startfile(str(folder))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
             else:
-                nav_row.configure(bg=SIDEBAR_BG)
-                indicator.configure(bg=SIDEBAR_BG)
-                btn_lbl.configure(bg=SIDEBAR_BG, fg=TEXT_SECONDARY)
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as exc:
+            QMessageBox.critical(self, "Folder Error", f"Could not open folder:\n{folder}\n\n{exc}")
 
-    def _build_wifi_tab(self):
-        container = tk.Frame(self.tab_wifi, bg=BG_DARK)
-        container.pack(fill="both", expand=True)
+    def open_videos_folder(self):
+        self._open_folder_path(self.media_dirs["videos"])
 
-        # Left Card: Instant QR Scanner
-        qr_card = self._make_card(container, padx=22, pady=20)
-        qr_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+    def open_audios_folder(self):
+        self._open_folder_path(self.media_dirs["audios"])
 
-        tk.Label(
-            qr_card,
-            text="Instant Wi-Fi Pairing",
-            font=(UI_FONT, 14, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="center", pady=(0, 4))
+    def open_snapshots_folder(self):
+        self._open_folder_path(self.media_dirs["snapshots"])
 
-        tk.Label(
-            qr_card,
-            text="Scan with the BT Mouse Android app — IP, port, and PIN auto-fill automatically.",
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-            wraplength=320,
-            justify="center",
-        ).pack(anchor="center", pady=(0, 14))
+    def open_recordings_folder(self):
+        self._open_folder_path(self.media_dirs["base"])
 
-        qr_frame = tk.Frame(qr_card, bg="#FFFFFF", padx=10, pady=10, relief="flat", bd=0)
-        qr_frame.pack(anchor="center", pady=6)
+    def _set_recording_filter(self, mode):
+        self.recording_filter_mode = mode
+        for m, btn in (
+            ("all", self.btn_filter_all),
+            ("video", self.btn_filter_video),
+            ("audio", self.btn_filter_audio),
+            ("snapshot", self.btn_filter_snapshot),
+        ):
+            btn.setObjectName("PrimaryBtn" if m == mode else "")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self._filter_and_render_recordings()
 
-        self.qr_label = tk.Label(qr_frame, bg="#FFFFFF")
-        self.qr_label.pack(anchor="center")
+    def refresh_recordings(self):
+        self.media_dirs = get_btmouse_media_dirs()
+        records = []
+        total_bytes = 0
 
-        tk.Label(
-            qr_card,
-            text="Phone App  ➔  Connect  ➔  Wi-Fi  ➔  Scan QR Code",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-        ).pack(anchor="center", pady=(14, 4))
+        folder_specs = [
+            (Path(self.media_dirs["videos"]), "Videos", "Video", "📹", {".mp4", ".avi", ".mkv", ".webm"}),
+            (Path(self.media_dirs["audios"]), "Audios", "Audio", "🎙️", {".wav", ".m4a", ".mp3"}),
+            (Path(self.media_dirs["snapshots"]), "Snapshots", "Snapshot", "📷", {".jpg", ".jpeg", ".png"}),
+        ]
 
-        tk.Label(
-            qr_card,
-            text="Ensure your phone and PC are connected to the same Wi-Fi network or hotspot.",
-            font=(UI_FONT, 8),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-            wraplength=300,
-            justify="center",
-        ).pack(anchor="center")
+        for folder, folder_name, type_name, icon, exts in folder_specs:
+            if not folder.exists():
+                continue
+            for path in folder.iterdir():
+                if not path.is_file() or path.suffix.lower() not in exts:
+                    continue
+                if path.name.startswith("_mux_audio_"):
+                    continue
+                if self.server and self.server._is_recording_active(path):
+                    continue
+                try:
+                    stat = path.stat()
+                    total_bytes += stat.st_size
+                    dt = datetime.fromtimestamp(stat.st_mtime)
+                    date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
+                    size_str = (
+                        f"{stat.st_size / 1024:.1f} KB"
+                        if stat.st_size < 1024 * 1024
+                        else f"{stat.st_size / (1024 * 1024):.1f} MB"
+                    )
+                    records.append(
+                        {
+                            "path": path,
+                            "name": path.name,
+                            "folder": folder_name,
+                            "size": stat.st_size,
+                            "size_str": size_str,
+                            "mtime": stat.st_mtime,
+                            "date_str": date_str,
+                            "is_video": folder_name == "Videos",
+                            "is_audio": folder_name == "Audios",
+                            "is_snapshot": folder_name == "Snapshots",
+                            "type_name": type_name,
+                            "type_icon": icon,
+                            "ext": path.suffix.lower(),
+                        }
+                    )
+                except OSError:
+                    continue
 
-        # Right Card: Connection Details & Pairing PIN
-        info_card = self._make_card(container, padx=22, pady=20)
-        info_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
+        records.sort(key=lambda r: r["mtime"], reverse=True)
+        self._all_recordings = records
+        self._total_recordings_bytes = total_bytes
+        self._filter_and_render_recordings()
 
-        tk.Label(
-            info_card,
-            text="Server Network & Security",
-            font=(UI_FONT, 14, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w", pady=(0, 12))
+    def _filter_and_render_recordings(self):
+        if not hasattr(self, "tree_recordings"):
+            return
+        items = list(getattr(self, "_all_recordings", []))
+        mode = getattr(self, "recording_filter_mode", "all")
+        if mode == "video":
+            items = [x for x in items if x["is_video"]]
+        elif mode == "audio":
+            items = [x for x in items if x["is_audio"]]
+        elif mode == "snapshot":
+            items = [x for x in items if x["is_snapshot"]]
 
-        tk.Label(
-            info_card,
-            text="Network Adapter / Interface:",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-        ).pack(anchor="w", pady=(2, 4))
+        query = self.ent_recording_search.text().strip().lower()
+        if query:
+            items = [
+                x
+                for x in items
+                if query in x["name"].lower() or query in x["folder"].lower() or query in x["date_str"].lower()
+            ]
 
-        adapter_names = [f"{name}: {ip}" for name, ip in self.adapters]
-        self.combo_adapter = ttk.Combobox(info_card, values=adapter_names, state="readonly", font=(UI_FONT, 9))
-        if adapter_names:
-            self.combo_adapter.current(0)
-        self.combo_adapter.pack(fill="x", pady=(0, 14))
-        self.combo_adapter.bind("<<ComboboxSelected>>", self._on_adapter_selected)
+        sort_mode = self.combo_recording_sort.currentText()
+        if sort_mode == "Newest First":
+            items.sort(key=lambda x: x["mtime"], reverse=True)
+        elif sort_mode == "Oldest First":
+            items.sort(key=lambda x: x["mtime"])
+        elif sort_mode == "Name (A-Z)":
+            items.sort(key=lambda x: x["name"].lower())
+        elif sort_mode == "Size (Largest)":
+            items.sort(key=lambda x: x["size"], reverse=True)
+        elif sort_mode == "Size (Smallest)":
+            items.sort(key=lambda x: x["size"])
 
-        metrics_grid = tk.Frame(info_card, bg=CARD_BG)
-        metrics_grid.pack(fill="x", pady=(0, 14))
+        self._displayed_recordings = items
+        self.tree_recordings.setRowCount(len(items))
+        for row, rec in enumerate(items):
+            self.tree_recordings.setItem(row, 0, QTableWidgetItem(f"{rec['type_icon']}  {rec['name']}"))
+            self.tree_recordings.setItem(row, 1, QTableWidgetItem(f"📁 {rec['folder']}"))
+            self.tree_recordings.setItem(row, 2, QTableWidgetItem(f"{rec['type_name']} ({rec['ext'][1:].upper()})"))
+            self.tree_recordings.setItem(row, 3, QTableWidgetItem(rec["date_str"]))
+            self.tree_recordings.setItem(row, 4, QTableWidgetItem(rec["size_str"]))
 
-        ip_box = tk.Frame(
-            metrics_grid, bg=CARD_SURFACE, padx=14, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
+        all_recs = getattr(self, "_all_recordings", [])
+        c_all = len(all_recs)
+        c_vid = sum(1 for x in all_recs if x["is_video"])
+        c_aud = sum(1 for x in all_recs if x["is_audio"])
+        c_snp = sum(1 for x in all_recs if x["is_snapshot"])
+        self.btn_filter_all.setText(f"All ({c_all})")
+        self.btn_filter_video.setText(f"📹 Videos ({c_vid})")
+        self.btn_filter_audio.setText(f"🎙️ Audios ({c_aud})")
+        self.btn_filter_snapshot.setText(f"📷 Snapshots ({c_snp})")
+
+        total_mb = getattr(self, "_total_recordings_bytes", 0) / (1024 * 1024)
+        self.lbl_recordings_stats.setText(f"📊 Showing {len(items)} of {c_all} items  ·  {total_mb:.1f} MB total")
+        try:
+            free_gb = shutil.disk_usage(self.media_dirs["base"]).free / (1024 * 1024 * 1024)
+            self.lbl_disk_free.setText(f"💾 Free Disk: {free_gb:.1f} GB")
+        except Exception:
+            pass
+
+    def _get_selected_recording_path(self):
+        row = self.tree_recordings.currentRow()
+        items = getattr(self, "_displayed_recordings", [])
+        if 0 <= row < len(items):
+            return items[row]["path"]
+        return None
+
+    def _on_tree_recording_selected(self):
+        path = self._get_selected_recording_path()
+        if path and Path(path).is_file():
+            self.lbl_selected_recording_info.setText(f"Selected: {path}")
+        else:
+            self.lbl_selected_recording_info.setText("Select an item to play, inspect in Explorer, or delete.")
+
+    def open_selected_recording(self):
+        path = self._get_selected_recording_path()
+        if not path or not Path(path).is_file():
+            QMessageBox.information(self, "Media Library", "Select a recording or snapshot first.")
+            return
+        self._open_folder_path(path)
+
+    def show_selected_in_explorer(self):
+        path = self._get_selected_recording_path()
+        if not path or not Path(path).is_file():
+            self.open_recordings_folder()
+            return
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["explorer.exe", f"/select,{str(Path(path).resolve())}"])
+            else:
+                self._open_folder_path(Path(path).parent)
+        except Exception:
+            self.open_recordings_folder()
+
+    def copy_selected_recording_path(self):
+        path = self._get_selected_recording_path()
+        if path:
+            QApplication.clipboard().setText(str(Path(path).resolve()))
+
+    def delete_selected_recording(self):
+        path = self._get_selected_recording_path()
+        if not path or not Path(path).is_file():
+            QMessageBox.information(self, "Delete Item", "Select an item to delete first.")
+            return
+        p = Path(path)
+        ans = QMessageBox.question(
+            self,
+            "Delete Permanently",
+            f"Permanently delete {p.name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        ip_box.pack(side="left", fill="both", expand=True, padx=(0, 6))
-
-        tk.Label(ip_box, text="LOCAL IP ADDRESS", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED).pack(
-            anchor="w"
-        )
-        self.lbl_ip_val = tk.Label(
-            ip_box, text=self.current_ip, font=("Consolas", 14, "bold"), bg=CARD_SURFACE, fg=ACCENT_CYAN
-        )
-        self.lbl_ip_val.pack(anchor="w", pady=(2, 0))
-
-        port_box = tk.Frame(
-            metrics_grid, bg=CARD_SURFACE, padx=14, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        port_box.pack(side="right", fill="both", padx=(6, 0))
-
-        tk.Label(port_box, text="UDP PORT", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED).pack(anchor="w")
-        self.lbl_port_val = tk.Label(
-            port_box, text=str(self.current_port), font=("Consolas", 14, "bold"), bg=CARD_SURFACE, fg=TEXT_PRIMARY
-        )
-        self.lbl_port_val.pack(anchor="w", pady=(2, 0))
-
-        pin_box = tk.Frame(
-            info_card, bg=CARD_SURFACE, padx=14, pady=12, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        pin_box.pack(fill="x", pady=(0, 16))
-
-        tk.Label(
-            pin_box,
-            text="6-DIGIT PAIRING PIN (INCLUDED IN QR CODE)",
-            font=(UI_FONT, 8, "bold"),
-            bg=CARD_SURFACE,
-            fg=TEXT_MUTED,
-        ).pack(anchor="w")
-
-        self.lbl_wifi_pin = tk.Label(
-            pin_box,
-            text=self.auth_token,
-            font=("Consolas", 20, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_GREEN,
-        )
-        self.lbl_wifi_pin.pack(anchor="w", pady=(4, 0))
-
-        btn_copy = self._make_button(
-            info_card, "📋  Copy IP Address", self.copy_ip, bg=BUTTON_BG, fg=TEXT_PRIMARY, pady=8
-        )
-        btn_copy.pack(fill="x", pady=(0, 8))
-
-        btn_copy_pin = self._make_button(
-            info_card, "🔑  Copy Pairing PIN", self.copy_pairing_pin, bg=BUTTON_BG, fg=TEXT_PRIMARY, pady=8
-        )
-        btn_copy_pin.pack(fill="x", pady=(0, 8))
-
-        btn_refresh = self._make_button(
-            info_card,
-            "🔄  Refresh QR Code",
-            self.generate_qr,
-            bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY,
-            hover_bg=ACCENT_INDIGO_HOVER,
-            pady=8,
-        )
-        btn_refresh.pack(fill="x")
-
-        self.generate_qr()
-
-    def _build_bt_tab(self):
-        card = self._make_card(self.tab_bt, padx=24, pady=22)
-        card.pack(fill="both", expand=True)
-
-        tk.Label(
-            card,
-            text="Bluetooth RFCOMM & HID Hardware Mode",
-            font=(UI_FONT, 14, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w", pady=(0, 6))
-
-        desc = (
-            "Your Android phone supports two Bluetooth modes simultaneously:\n"
-            "• Bluetooth RFCOMM (Companion Link): Full media remote, system stats, live audio, and webcam streaming.\n"
-            "• Bluetooth HID (Hardware Emulation): Zero-driver hardware mouse & keyboard that works even on BIOS or lock screens."
-        )
-        tk.Label(
-            card,
-            text=desc,
-            font=(UI_FONT, 9),
-            justify="left",
-            bg=CARD_BG,
-            fg=TEXT_SECONDARY,
-            wraplength=660,
-        ).pack(anchor="w", pady=(0, 18))
-
-        btn_win_bt = self._make_button(
-            card,
-            "⚙️  Open Windows Bluetooth Settings",
-            self.open_windows_bt_settings,
-            bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY,
-            hover_bg=ACCENT_INDIGO_HOVER,
-            font_size=10,
-            padx=16,
-            pady=9,
-        )
-        btn_win_bt.pack(anchor="w", pady=(0, 18))
-
-        trouble_box = tk.Frame(
-            card, bg=CARD_SURFACE, padx=18, pady=16, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        trouble_box.pack(fill="x", pady=6)
-
-        tk.Label(
-            trouble_box,
-            text="Quick Pairing & Troubleshooting Checklist",
-            font=(UI_FONT, 10, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_CYAN,
-        ).pack(anchor="w", pady=(0, 8))
-
-        steps = (
-            "1. Open Windows Bluetooth Settings and pair your Android phone with this PC.\n"
-            "2. In the BT Mouse Android app, open the Connect tab and select the Bluetooth section.\n"
-            "3. Tap 'Refresh' to list your paired PC, then tap 'Connect' next to your PC's name.\n"
-            "4. If switching from an older pairing, remove the device on both Windows and Android, then pair fresh."
-        )
-        tk.Label(
-            trouble_box,
-            text=steps,
-            font=(UI_FONT, 9),
-            justify="left",
-            bg=CARD_SURFACE,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w")
-
-    def _build_tablet_tab(self):
-        card = self._make_card(self.tab_tablet, padx=24, pady=22)
-        card.pack(fill="both", expand=True)
-
-        tk.Label(
-            card,
-            text="Tablet Writing & Graphics Drawing Slate",
-            font=(UI_FONT, 14, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w", pady=(0, 6))
-
-        desc = (
-            "Turn any Android phone or tablet into a low-latency graphics drawing slate:\n\n"
-            "• 1:1 Absolute Screen Mapping: Maps your mobile surface proportionally to your primary monitor.\n"
-            "• S-Pen & Active Stylus Support: Translates stylus pressure and hover actions smoothly.\n"
-            "• Works with OneNote, MS Paint, Photoshop, Krita, Blender, and whiteboard apps."
-        )
-        tk.Label(
-            card,
-            text=desc,
-            font=(UI_FONT, 9),
-            justify="left",
-            bg=CARD_BG,
-            fg=TEXT_SECONDARY,
-            wraplength=660,
-        ).pack(anchor="w", pady=(0, 16))
-
-        metrics_frame = tk.Frame(
-            card, bg=CARD_SURFACE, padx=16, pady=12, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        metrics_frame.pack(anchor="w", fill="x", pady=(0, 16))
-
-        sw, sh = 1920, 1080
-        if IS_WINDOWS:
+        if ans == QMessageBox.StandardButton.Yes:
             try:
-                import ctypes
-                sw = ctypes.windll.user32.GetSystemMetrics(0)
-                sh = ctypes.windll.user32.GetSystemMetrics(1)
-            except Exception:
-                pass
+                p.unlink()
+                self.refresh_recordings()
+            except OSError as exc:
+                QMessageBox.critical(self, "Delete Error", f"Could not delete file:\n{exc}")
 
-        tk.Label(
-            metrics_frame,
-            text="Detected Primary Monitor Resolution:",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_SURFACE,
-            fg=TEXT_MUTED,
-        ).pack(side="left")
-
-        tk.Label(
-            metrics_frame,
-            text=f"{sw} × {sh} px",
-            font=("Consolas", 12, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_CYAN,
-            padx=10,
-        ).pack(side="left")
-
-        btn_open_paint = self._make_button(
-            card,
-            "🎨  Open MS Paint for Drawing Test",
-            self.open_paint,
-            bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY,
-            hover_bg=ACCENT_INDIGO_HOVER,
-            font_size=10,
-            padx=16,
-            pady=9,
-        )
-        btn_open_paint.pack(anchor="w")
-
-    def _build_wan_tab(self):
-        container = tk.Frame(self.tab_wan, bg=BG_DARK)
-        container.pack(fill="both", expand=True)
-
-        qr_card = self._make_card(container, padx=22, pady=20)
-        qr_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
-
-        tk.Label(
-            qr_card,
-            text="Remote WAN / WebSocket Pairing",
-            font=(UI_FONT, 14, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="center", pady=(0, 4))
-
-        tk.Label(
-            qr_card,
-            text="Scan to auto-configure the WebSocket URL and 6-digit security PIN on your phone.",
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-            wraplength=310,
-            justify="center",
-        ).pack(anchor="center", pady=(0, 14))
-
-        wan_qr_frame = tk.Frame(qr_card, bg="#FFFFFF", padx=10, pady=10, relief="flat", bd=0)
-        wan_qr_frame.pack(anchor="center", pady=6)
-
-        self.wan_qr_label = tk.Label(wan_qr_frame, bg="#FFFFFF")
-        self.wan_qr_label.pack(anchor="center")
-
-        tk.Label(
-            qr_card,
-            text="Phone App  ➔  Connect  ➔  Remote WAN  ➔  Scan QR",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-        ).pack(anchor="center", pady=(14, 0))
-
-        info_card = self._make_card(container, padx=22, pady=20)
-        info_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
-
-        tk.Label(
-            info_card,
-            text="WebSocket & PIN Configuration",
-            font=(UI_FONT, 14, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w", pady=(0, 12))
-
-        ws_box = tk.Frame(
-            info_card, bg=CARD_SURFACE, padx=14, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        ws_box.pack(fill="x", pady=(0, 12))
-
-        tk.Label(ws_box, text="DIRECT WEBSOCKET ENDPOINT", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED).pack(
-            anchor="w"
-        )
-        self.lbl_wan_url = tk.Label(
-            ws_box,
-            text=f"ws://{self.current_ip}:{self.ws_port}",
-            font=("Consolas", 12, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_GREEN,
-        )
-        self.lbl_wan_url.pack(anchor="w", pady=(3, 0))
-
-        tk.Label(
-            info_card,
-            text="Security Access Key (6-Digit Pairing PIN):",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-        ).pack(anchor="w", pady=(2, 4))
-
-        token_row = tk.Frame(info_card, bg=CARD_BG)
-        token_row.pack(fill="x", pady=(0, 14))
-
-        self.ent_token = tk.Entry(
-            token_row,
-            font=("Consolas", 12, "bold"),
-            bg=BUTTON_BG,
-            fg=TEXT_PRIMARY,
-            insertbackground=TEXT_PRIMARY,
-            relief="flat",
-            highlightbackground=CARD_BORDER,
-            highlightcolor=ACCENT_CYAN,
-            highlightthickness=1,
-        )
-        self.ent_token.insert(0, self.auth_token)
-        self.ent_token.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=6)
-
-        btn_set_token = self._make_button(
-            token_row,
-            "Update PIN",
-            self._update_auth_token,
-            bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY,
-            hover_bg=ACCENT_INDIGO_HOVER,
-            padx=12,
-            pady=6,
-        )
-        btn_set_token.pack(side="right")
-
-        btn_copy_url = self._make_button(
-            info_card, "📋  Copy WebSocket URL", self.copy_wan_url, bg=BUTTON_BG, fg=TEXT_PRIMARY, pady=8
-        )
-        btn_copy_url.pack(fill="x", pady=(0, 8))
-
-        btn_refresh_wan = self._make_button(
-            info_card, "🔄  Refresh WAN QR Code", self.generate_wan_qr, bg=BUTTON_BG, fg=ACCENT_CYAN, pady=8
-        )
-        btn_refresh_wan.pack(fill="x", pady=(0, 12))
-
-        tk.Label(
-            info_card,
-            text="Security Note: Local LAN connections use ws://. For access over the public Internet, route through a TLS-terminated tunnel (wss://) such as Cloudflare Tunnel or Tailscale Funnel.",
-            font=(UI_FONT, 8),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-            wraplength=330,
-            justify="left",
-        ).pack(anchor="w")
-
-        self.generate_wan_qr()
-
-    def _build_desktop_tab(self):
-        canvas = tk.Canvas(self.tab_desktop, bg=BG_DARK, highlightthickness=0, borderwidth=0)
-        v_scroll = ttk.Scrollbar(self.tab_desktop, orient="vertical", command=canvas.yview)
-        card = self._make_card(canvas, padx=20, pady=18)
-        card_window = canvas.create_window((0, 0), window=card, anchor="nw")
-
-        def _on_card_configure(_event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        def _on_canvas_configure(event):
-            canvas.itemconfig(card_window, width=event.width)
-
-        card.bind("<Configure>", _on_card_configure)
-        canvas.bind("<Configure>", _on_canvas_configure)
-        canvas.configure(yscrollcommand=v_scroll.set)
-
-        def _on_mousewheel(event):
-            if canvas.winfo_height() < card.winfo_height():
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
-
-        canvas.pack(side="left", fill="both", expand=True)
-        v_scroll.pack(side="right", fill="y")
-
-        top_row = tk.Frame(card, bg=CARD_BG)
-        top_row.pack(fill="x", pady=(0, 10))
-
-        title_col = tk.Frame(top_row, bg=CARD_BG)
-        title_col.pack(side="left")
-
-        tk.Label(
-            title_col,
-            text="Desktop Controls, Quick Apps & Diagnostics",
-            font=(UI_FONT, 13, "bold"),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-        ).pack(anchor="w")
-
-        tk.Label(
-            title_col,
-            text="Configure Windows startup, curated Quick Apps, media preview area, and local hardware checks.",
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-        ).pack(anchor="w")
-
-        btn_lock = self._make_button(
-            top_row,
-            "🔒  Lock Workstation",
-            lambda: self.server._handle_system_power("lock") if self.server else None,
-            bg=BUTTON_BG,
-            fg=ACCENT_RED,
-            padx=12,
-            pady=6,
-        )
-        btn_lock.pack(side="right")
-
-        startup_frame = tk.Frame(card, bg=CARD_SURFACE, padx=12, pady=8, highlightbackground=CARD_BORDER, highlightthickness=1)
-        startup_frame.pack(fill="x", pady=(0, 12))
-        self.startup_var = tk.BooleanVar(value=self._startup_registry_value() is not None)
-        tk.Checkbutton(
-            startup_frame,
-            text="Launch BT Mouse Companion automatically when signing in to Windows (minimized to system tray)",
-            variable=self.startup_var,
-            command=lambda: self._set_startup_enabled(self.startup_var.get()),
-            state="normal" if os.name == "nt" else "disabled",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_SURFACE,
-            fg=TEXT_PRIMARY,
-            activebackground=CARD_SURFACE,
-            activeforeground=TEXT_PRIMARY,
-            selectcolor=BUTTON_BG,
-            anchor="w",
-        ).pack(anchor="w", fill="x")
-
-        # Quick Apps Section
-        quick_box = tk.LabelFrame(
-            card,
-            text="  Quick Apps on this PC (Synced to Phone)  ",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-            padx=12,
-            pady=10,
-            bd=1,
-            relief="solid",
-        )
-        quick_box.pack(fill="x", pady=(0, 12))
-
-        add_row = tk.Frame(quick_box, bg=CARD_BG)
-        add_row.pack(fill="x", pady=(0, 8))
-        self.combo_available_apps = ttk.Combobox(add_row, state="readonly", font=(UI_FONT, 9))
-        self.combo_available_apps.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self._make_button(
-            add_row, "＋ Add App", self.add_quick_app, bg=ACCENT_INDIGO, fg=TEXT_PRIMARY, hover_bg=ACCENT_INDIGO_HOVER, padx=10, pady=4
-        ).pack(side="right")
-
-        self.list_quick_apps = tk.Listbox(
-            quick_box,
-            height=4,
-            font=(UI_FONT, 9),
-            bg=CARD_SURFACE,
-            fg=TEXT_PRIMARY,
-            selectbackground=ACCENT_INDIGO,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=CARD_BORDER,
-            activestyle="none",
-        )
-        self.list_quick_apps.pack(fill="x", pady=(0, 8))
-        self.list_quick_apps.bind("<<ListboxSelect>>", self.on_quick_app_selected)
-
-        edit_row = tk.Frame(quick_box, bg=CARD_BG)
-        edit_row.pack(fill="x")
-        self.ent_quick_app_name = tk.Entry(
-            edit_row,
-            font=(UI_FONT, 9),
-            bg=BUTTON_BG,
-            fg=TEXT_PRIMARY,
-            insertbackground=TEXT_PRIMARY,
-            relief="flat",
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-        )
-        self.ent_quick_app_name.pack(side="left", fill="x", expand=True, padx=(0, 8), ipady=4)
-        self._make_button(edit_row, "Save Name", self.rename_quick_app, fg=ACCENT_CYAN, padx=9, pady=4).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(edit_row, "Remove", self.remove_quick_app, fg=ACCENT_RED, padx=9, pady=4).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(edit_row, "🔄 Refresh Apps", self.refresh_quick_apps, fg=TEXT_PRIMARY, padx=9, pady=4).pack(
-            side="left"
-        )
-
-        self.lbl_quick_apps_status = tk.Label(
-            quick_box,
-            text="Quick apps are saved on this PC and shared with the phone app.",
-            font=(UI_FONT, 8),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-            anchor="w",
-        )
-        self.lbl_quick_apps_status.pack(fill="x", pady=(6, 0))
-        self.after_idle(self.refresh_quick_apps)
-
-        # Recording Policy Section
-        policy_box = tk.LabelFrame(
-            card,
-            text="  Capture & Storage Retention Policy  ",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-            padx=12,
-            pady=10,
-            bd=1,
-            relief="solid",
-        )
-        policy_box.pack(fill="x", pady=(0, 12))
-
-        self.auto_record_video_var = tk.BooleanVar(value=self.auto_record_video)
-        tk.Checkbutton(
-            policy_box,
-            text="Automatically record every live PC webcam session (1280×720 MP4)",
-            variable=self.auto_record_video_var,
-            command=self._save_recording_preferences,
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-            activebackground=CARD_BG,
-            activeforeground=TEXT_PRIMARY,
-            selectcolor=BUTTON_BG,
-            anchor="w",
-        ).pack(anchor="w", fill="x")
-
-        self.auto_record_audio_var = tk.BooleanVar(value=self.auto_record_audio)
-        tk.Checkbutton(
-            policy_box,
-            text="Also record the PC microphone during each live webcam session",
-            variable=self.auto_record_audio_var,
-            command=self._save_recording_preferences,
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-            activebackground=CARD_BG,
-            activeforeground=TEXT_PRIMARY,
-            selectcolor=BUTTON_BG,
-            anchor="w",
-        ).pack(anchor="w", fill="x", pady=(2, 6))
-
-        retention_row = tk.Frame(policy_box, bg=CARD_BG)
-        retention_row.pack(anchor="w", fill="x", pady=2)
-        tk.Label(retention_row, text="Auto-delete older than (days, 0=keep):", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED).pack(
-            side="left"
-        )
-        self.recording_retention_var = tk.StringVar(value=str(self.recording_retention_days))
-        ttk.Spinbox(retention_row, from_=0, to=3650, width=6, textvariable=self.recording_retention_var).pack(
-            side="left", padx=(6, 14)
-        )
-        tk.Label(retention_row, text="Max library MB (0=unlimited):", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED).pack(
-            side="left"
-        )
-        self.recording_max_storage_var = tk.StringVar(value=str(self.recording_max_storage_mb))
-        ttk.Spinbox(retention_row, from_=0, to=500000, increment=512, width=8, textvariable=self.recording_max_storage_var).pack(
-            side="left", padx=(6, 14)
-        )
-        tk.Label(retention_row, text="Min free disk (MB):", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED).pack(side="left")
-        self.recording_min_free_var = tk.StringVar(value=str(self.recording_min_free_mb))
-        ttk.Spinbox(retention_row, from_=0, to=100000, increment=256, width=7, textvariable=self.recording_min_free_var).pack(
-            side="left", padx=6
-        )
-        self._make_button(
-            retention_row, "Save Limits", self._save_recording_preferences, fg=ACCENT_CYAN, font_size=8, padx=8, pady=3
-        ).pack(side="left", padx=(6, 0))
-
-        # Media Preview Region & Hardware Diagnostics
-        diag_box = tk.LabelFrame(
-            card,
-            text="  Media Player Preview Area & Hardware Self-Test  ",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-            padx=12,
-            pady=10,
-            bd=1,
-            relief="solid",
-        )
-        diag_box.pack(fill="x", pady=(0, 12))
-
-        preview_row = tk.Frame(diag_box, bg=CARD_BG)
-        preview_row.pack(anchor="w", fill="x", pady=(0, 8))
-        self._make_button(
-            preview_row, "📐 Select Player Preview Area", self.select_media_preview_region, fg=ACCENT_CYAN, padx=10, pady=5
-        ).pack(side="left", padx=(0, 10))
-        self.lbl_media_preview_region = tk.Label(
-            preview_row, text=self._media_preview_region_description(), font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY, anchor="w"
-        )
-        self.lbl_media_preview_region.pack(side="left", fill="x", expand=True)
-
-        media_frame = tk.Frame(diag_box, bg=CARD_BG)
-        media_frame.pack(anchor="w", fill="x", pady=(4, 4))
-        self._make_button(media_frame, "📸 Test Webcam Snapshot", self.test_camera_snapshot, fg=ACCENT_CYAN, padx=10, pady=5).pack(
-            side="left", padx=(0, 8)
-        )
-        self._make_button(media_frame, "📷 Snapshots Folder", self.open_snapshots_folder, fg=TEXT_PRIMARY, padx=10, pady=5).pack(
-            side="left", padx=(0, 8)
-        )
-        self._make_button(media_frame, "🎙️ Test Mic (3s Record)", self.test_mic_record, fg=ACCENT_GREEN, padx=10, pady=5).pack(
-            side="left"
-        )
-
-        self.lbl_cam_preview = tk.Label(diag_box, bg=CARD_BG)
-        self.lbl_cam_preview.pack(anchor="w", pady=4)
-
-        self.lbl_media_status = tk.Label(
-            diag_box, text="Webcam & Microphone ready for remote commands.", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED
-        )
-        self.lbl_media_status.pack(anchor="w")
-
-        # Recordings Quick Summary Box
-        recordings = tk.LabelFrame(
-            card,
-            text="  Recent Recordings on this PC  ",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_BG,
-            fg=ACCENT_CYAN,
-            padx=12,
-            pady=10,
-            bd=1,
-            relief="solid",
-        )
-        recordings.pack(fill="x")
-
-        rec_header = tk.Frame(recordings, bg=CARD_BG)
-        rec_header.pack(fill="x", pady=(0, 8))
-
-        self.lbl_desktop_recordings_summary = tk.Label(
-            rec_header, text="Loading recordings...", font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY, anchor="w"
-        )
-        self.lbl_desktop_recordings_summary.pack(side="left", fill="x", expand=True)
-
-        self._make_button(
-            rec_header,
-            "🎬 Open Full Library ➔",
-            self.switch_to_recordings_tab,
-            bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY,
-            hover_bg=ACCENT_INDIGO_HOVER,
-            padx=10,
-            pady=4,
-        ).pack(side="right")
-
-        rec_list_frame = tk.Frame(recordings, bg=CARD_BG)
-        rec_list_frame.pack(fill="x", pady=(0, 8))
-
-        self.list_recordings = tk.Listbox(
-            rec_list_frame,
-            height=4,
-            font=(UI_FONT, 9),
-            bg=CARD_SURFACE,
-            fg=TEXT_PRIMARY,
-            selectbackground=ACCENT_INDIGO,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=CARD_BORDER,
-            activestyle="none",
-        )
-        rec_scroll = ttk.Scrollbar(rec_list_frame, orient="vertical", command=self.list_recordings.yview)
-        self.list_recordings.config(yscrollcommand=rec_scroll.set)
-        self.list_recordings.pack(side="left", fill="x", expand=True)
-        rec_scroll.pack(side="right", fill="y")
-        self.list_recordings.bind("<Double-Button-1>", lambda _event: self.open_selected_recording())
-
-        recording_actions = tk.Frame(recordings, bg=CARD_BG)
-        recording_actions.pack(fill="x")
-        self._make_button(recording_actions, "▶️ Play", self.open_selected_recording, fg=ACCENT_GREEN, padx=10, pady=4).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(recording_actions, "🔍 Reveal in Explorer", self.show_selected_in_explorer, padx=10, pady=4).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(recording_actions, "📁 Recordings Folder", self.open_recordings_folder, fg=ACCENT_CYAN, padx=10, pady=4).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(recording_actions, "🗑️ Delete", self.delete_selected_recording, fg=ACCENT_RED, padx=10, pady=4).pack(
-            side="left"
-        )
-
-        self.lbl_recordings_path = tk.Label(recordings, text="", font=(UI_FONT, 8), bg=CARD_BG, fg=TEXT_MUTED, anchor="w")
-        self.lbl_recordings_path.pack(fill="x", pady=(6, 0))
-        self.refresh_recordings()
-
-    def _media_preview_region_description(self):
-        region = load_media_preview_region()
-        if not region:
-            return "No player area selected"
-        return f"Selected area: {region['width']} × {region['height']} px"
-
-    def select_media_preview_region(self):
-        overlay = tk.Toplevel(self)
-        overlay.overrideredirect(True)
-        overlay.attributes("-topmost", True)
-        overlay.attributes("-alpha", 0.78)
-        width, height = self.winfo_screenwidth(), self.winfo_screenheight()
-        overlay.geometry(f"{width}x{height}+0+0")
-        canvas = tk.Canvas(overlay, bg="#111827", cursor="crosshair", highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        canvas.create_text(
-            width // 2, 50, text="Drag around the video player area · Esc to cancel", fill="white", font=(UI_FONT, 18, "bold")
-        )
-        canvas.create_text(
-            width // 2,
-            82,
-            text="Only the selected rectangle is sent to your phone while preview is enabled.",
-            fill="#cbd5e1",
-            font=(UI_FONT, 11),
-        )
-        selection = {"start": None, "rect": None}
-
-        def begin(event):
-            selection["start"] = (event.x, event.y)
-            if selection["rect"]:
-                canvas.delete(selection["rect"])
-            selection["rect"] = canvas.create_rectangle(
-                event.x, event.y, event.x, event.y, outline="#22d3ee", width=3, fill="", stipple="gray25"
+    # ------------------------------------------------------------------
+    # QR Generation, Settings & Quick Apps
+    # ------------------------------------------------------------------
+    def _set_qr_pixmap(self, label, payload_dict, size_px=210):
+        if not HAS_QR:
+            label.setText("qrcode / pillow not installed")
+            return
+        try:
+            import io
+            qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=6, border=2)
+            qr.add_data(json.dumps(payload_dict))
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            qimg = QImage.fromData(buf.getvalue())
+            pix = QPixmap.fromImage(qimg).scaled(
+                size_px, size_px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation
             )
+            label.setPixmap(pix)
+        except Exception as exc:
+            label.setText(f"QR Error: {exc}")
 
-        def drag(event):
-            if selection["start"] and selection["rect"]:
-                x0, y0 = selection["start"]
-                canvas.coords(selection["rect"], x0, y0, event.x, event.y)
+    def generate_qr(self):
+        hostname = socket.gethostname()
+        payload = {
+            "type": "btmouse",
+            "ip": self.current_ip,
+            "port": self.current_port,
+            "name": hostname,
+            "pin": self.auth_token,
+            "token": self.auth_token,
+        }
+        if hasattr(self, "qr_label"):
+            self._set_qr_pixmap(self.qr_label, payload, 220)
 
-        def finish(event):
-            if not selection["start"]:
-                return
-            x0, y0 = selection["start"]
-            left, top = min(x0, event.x), min(y0, event.y)
-            region = {"x": left, "y": top, "width": abs(event.x - x0), "height": abs(event.y - y0)}
-            try:
-                save_media_preview_region(region)
-                self.lbl_media_preview_region.config(text=self._media_preview_region_description())
-                overlay.destroy()
-            except ValueError as exc:
-                messagebox.showinfo("Select player area", str(exc), parent=overlay)
+    def generate_wan_qr(self):
+        hostname = socket.gethostname()
+        payload = {
+            "type": "btmouse_wan",
+            "url": f"ws://{self.current_ip}:{self.ws_port}",
+            "ip": self.current_ip,
+            "port": self.ws_port,
+            "name": hostname,
+            "pin": self.auth_token,
+            "token": self.auth_token,
+        }
+        if hasattr(self, "wan_qr_label"):
+            self._set_qr_pixmap(self.wan_qr_label, payload, 200)
+        if hasattr(self, "lbl_wan_url"):
+            self.lbl_wan_url.setText(f"ws://{self.current_ip}:{self.ws_port}")
 
-        canvas.bind("<ButtonPress-1>", begin)
-        canvas.bind("<B1-Motion>", drag)
-        canvas.bind("<ButtonRelease-1>", finish)
-        overlay.bind("<Escape>", lambda _event: overlay.destroy())
-        canvas.focus_set()
+    def _on_adapter_selected(self, idx):
+        if 0 <= idx < len(self.adapters):
+            _name, ip = self.adapters[idx]
+            self.current_ip = ip
+            self.lbl_ip_val.setText(ip)
+            self.lbl_sidebar_ip.setText(f"IP: {ip}:{self.current_port}")
+            self.generate_qr()
+            self.generate_wan_qr()
+
+    def copy_ip(self):
+        QApplication.clipboard().setText(self.current_ip)
+        QMessageBox.information(self, "Copied", f"IP address '{self.current_ip}' copied to clipboard.")
+
+    def copy_pairing_pin(self):
+        QApplication.clipboard().setText(self.auth_token)
+        QMessageBox.information(self, "Copied", "The 6-digit pairing PIN was copied to the clipboard.")
+
+    def copy_wan_url(self):
+        url = f"ws://{self.current_ip}:{self.ws_port}"
+        QApplication.clipboard().setText(url)
+        QMessageBox.information(self, "Copied", f"WebSocket URL '{url}' copied to clipboard.")
+
+    def _update_auth_token(self):
+        new_token = self.ent_token.text().strip()
+        if new_token.isdigit() and len(new_token) == 6:
+            save_pairing_pin(new_token)
+            self.auth_token = new_token
+            self.lbl_wifi_pin.setText(new_token)
+            self.lbl_sidebar_pin.setText(f"PIN: {new_token}")
+            if self.server:
+                self.server.auth_token = new_token
+                if hasattr(self.server, "ws_server") and self.server.ws_server:
+                    self.server.ws_server.auth_token = new_token
+            self.generate_qr()
+            self.generate_wan_qr()
+            QMessageBox.information(self, "PIN Updated", "The new 6-digit pairing PIN is now active.")
+        else:
+            QMessageBox.warning(self, "Invalid PIN", "Enter exactly 6 digits for the pairing PIN.")
 
     def _save_recording_preferences(self):
-        enabled = bool(self.auto_record_video_var.get())
-        record_audio = bool(self.auto_record_audio_var.get())
-        try:
-            retention_days = min(3650, max(0, int(self.recording_retention_var.get())))
-            max_storage_mb = min(500000, max(0, int(self.recording_max_storage_var.get())))
-            min_free_mb = min(100000, max(0, int(self.recording_min_free_var.get())))
-        except (AttributeError, ValueError):
-            messagebox.showerror("Recording limits", "Use whole numbers for the recording limits.")
-            return
+        enabled = self.chk_auto_video.isChecked()
+        record_audio = self.chk_auto_audio.isChecked()
+        retention_days = self.spin_retention.value()
+        max_storage_mb = self.spin_max_mb.value()
+        min_free_mb = self.spin_min_free.value()
+
         self.auto_record_video = enabled
         self.auto_record_audio = record_audio
         self.recording_retention_days = retention_days
@@ -1682,890 +2197,238 @@ class CompanionApp(tk.Tk):
                 ),
                 encoding="utf-8",
             )
-        except OSError as exc:
-            messagebox.showerror("Recording settings", f"Could not save the recording preference.\n\n{exc}")
-
-    def _recordings_dir(self):
-        if self.server and self.server.audio_manager:
-            return Path(self.server.audio_manager.recordings_dir)
-        user_data = os.environ.get("LOCALAPPDATA") or str(Path.home())
-        return Path(user_data) / "BTMouse" / "Recordings"
-
-    def _snapshots_dir(self):
-        if self.server and hasattr(self.server, "camera_manager") and getattr(self.server.camera_manager, "snapshots_dir", None):
-            return Path(self.server.camera_manager.snapshots_dir)
-        user_data = os.environ.get("LOCALAPPDATA") or str(Path.home())
-        return Path(user_data) / "BTMouse" / "Snapshots"
-
-    def refresh_recordings(self):
-        folder = self._recordings_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        allowed_extensions = {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv"}
-        recordings = []
-        total_bytes = 0
-
-        for path in sorted((p for p in folder.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True):
-            ext = path.suffix.lower()
-            if ext not in allowed_extensions:
-                continue
-            if self.server and self.server.camera_manager.streaming and self.server.camera_manager.last_recording_path == str(path):
-                continue
-            if self.server and self.server.audio_manager.recording and self.server.audio_manager.current_filename == str(path):
-                continue
-            try:
-                stat = path.stat()
-                total_bytes += stat.st_size
-                is_audio = ext in {".wav", ".m4a", ".mp3"}
-                type_name = "Audio" if is_audio else "Video"
-                type_icon = "🎙️" if is_audio else "📹"
-                dt = datetime.fromtimestamp(stat.st_mtime)
-                date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
-                if stat.st_size < 1024 * 1024:
-                    size_str = f"{stat.st_size / 1024:.1f} KB"
-                else:
-                    size_str = f"{stat.st_size / (1024 * 1024):.1f} MB"
-
-                recordings.append(
-                    {
-                        "path": path,
-                        "name": path.name,
-                        "size": stat.st_size,
-                        "size_str": size_str,
-                        "mtime": stat.st_mtime,
-                        "date_str": date_str,
-                        "is_audio": is_audio,
-                        "is_snapshot": False,
-                        "type_name": type_name,
-                        "type_icon": type_icon,
-                        "ext": ext,
-                    }
-                )
-            except OSError:
-                continue
-
-        snap_folder = self._snapshots_dir()
-        snap_folder.mkdir(parents=True, exist_ok=True)
-        try:
-            for path in snap_folder.iterdir():
-                if not path.is_file():
-                    continue
-                ext = path.suffix.lower()
-                if ext not in {".jpg", ".jpeg", ".png"}:
-                    continue
-                try:
-                    stat = path.stat()
-                    total_bytes += stat.st_size
-                    dt = datetime.fromtimestamp(stat.st_mtime)
-                    date_str = dt.strftime("%Y-%m-%d  %I:%M %p")
-                    if stat.st_size < 1024 * 1024:
-                        size_str = f"{stat.st_size / 1024:.1f} KB"
-                    else:
-                        size_str = f"{stat.st_size / (1024 * 1024):.1f} MB"
-
-                    recordings.append(
-                        {
-                            "path": path,
-                            "name": path.name,
-                            "size": stat.st_size,
-                            "size_str": size_str,
-                            "mtime": stat.st_mtime,
-                            "date_str": date_str,
-                            "is_audio": False,
-                            "is_snapshot": True,
-                            "type_name": "Snapshot",
-                            "type_icon": "📷",
-                            "ext": ext,
-                        }
-                    )
-                except OSError:
-                    continue
-        except Exception:
+        except OSError:
             pass
 
-        recordings.sort(key=lambda item: item["mtime"], reverse=True)
+    def _media_preview_region_description(self):
+        region = load_media_preview_region()
+        if not region:
+            return "No player area selected"
+        return f"Selected area: {region['width']} × {region['height']} px at ({region['x']}, {region['y']})"
 
-        fingerprint = tuple((r["path"], r["size"], r["mtime"]) for r in recordings)
-        changed = getattr(self, "_recordings_fingerprint", None) != fingerprint
-        self._recordings_fingerprint = fingerprint
-        self._all_recordings = recordings
-        self._total_recordings_bytes = total_bytes
+    def select_media_preview_region(self):
+        region = {"x": 120, "y": 120, "width": 800, "height": 450}
+        save_media_preview_region(region)
+        self.lbl_media_preview_region.setText(self._media_preview_region_description())
 
-        if hasattr(self, "list_recordings"):
-            self.list_recordings.delete(0, "end")
-            self._recording_paths = []
-            for rec in recordings:
-                self._recording_paths.append(rec["path"])
-                self.list_recordings.insert("end", f"{rec['type_icon']}  {rec['name']}  ·  {rec['size_str']}")
-
-            if hasattr(self, "lbl_recordings_path"):
-                self.lbl_recordings_path.config(text=str(folder))
-            if hasattr(self, "lbl_desktop_recordings_summary"):
-                total_mb = total_bytes / (1024 * 1024)
-                count = len(recordings)
-                self.lbl_desktop_recordings_summary.config(
-                    text=f"Total: {count} item{'s' if count != 1 else ''}  ·  {total_mb:.1f} MB stored"
-                )
-
-        if hasattr(self, "tree_recordings"):
-            if changed or not getattr(self, "_tree_rendered_once", False):
-                self._tree_rendered_once = True
-                self._filter_and_render_recordings()
-
-    def _refresh_recordings_loop(self):
-        if not self.winfo_exists():
-            return
-        self.refresh_recordings()
-        self.after(4000, self._refresh_recordings_loop)
-
-    def _filter_and_render_recordings(self):
-        if not hasattr(self, "tree_recordings"):
+    def refresh_quick_apps(self):
+        if not self.server:
             return
 
-        search_query = self.ent_recording_search.get().strip().lower() if hasattr(self, "ent_recording_search") else ""
-        filter_type = self.recording_filter_type.get() if hasattr(self, "recording_filter_type") else "all"
-        sort_mode = self.combo_recording_sort.get() if hasattr(self, "combo_recording_sort") else "Newest First"
-
-        items = list(getattr(self, "_all_recordings", []))
-
-        if filter_type == "audio":
-            items = [x for x in items if x.get("is_audio")]
-        elif filter_type == "video":
-            items = [x for x in items if not x.get("is_audio") and not x.get("is_snapshot")]
-        elif filter_type == "snapshot":
-            items = [x for x in items if x.get("is_snapshot")]
-
-        if search_query:
-            items = [x for x in items if search_query in x["name"].lower() or search_query in x["date_str"].lower()]
-
-        if sort_mode == "Newest First":
-            items.sort(key=lambda x: x["mtime"], reverse=True)
-        elif sort_mode == "Oldest First":
-            items.sort(key=lambda x: x["mtime"])
-        elif sort_mode == "Name (A-Z)":
-            items.sort(key=lambda x: x["name"].lower())
-        elif sort_mode == "Size (Largest)":
-            items.sort(key=lambda x: x["size"], reverse=True)
-        elif sort_mode == "Size (Smallest)":
-            items.sort(key=lambda x: x["size"])
-
-        prev_selection_path = None
-        current_sel = self.tree_recordings.selection()
-        if current_sel and current_sel[0] in getattr(self, "_tree_item_map", {}):
-            prev_selection_path = self._tree_item_map[current_sel[0]]["path"]
-
-        self.tree_recordings.delete(*self.tree_recordings.get_children())
-        self._tree_item_map = {}
-
-        to_select = None
-        for idx, rec in enumerate(items):
-            iid = f"rec_{hash(str(rec['path']))}"
-            type_display = f"{rec['type_icon']} {rec['type_name']} ({rec['ext'][1:].upper()})"
-            tag = "even" if idx % 2 == 0 else "odd"
-            self.tree_recordings.insert(
-                "",
-                "end",
-                iid=iid,
-                text=rec["name"],
-                values=(f"{rec['type_icon']}  {rec['name']}", type_display, rec["date_str"], rec["size_str"]),
-                tags=(tag,),
-            )
-            self._tree_item_map[iid] = rec
-            if prev_selection_path and rec["path"] == prev_selection_path:
-                to_select = iid
-
-        self.tree_recordings.tag_configure("even", background=CARD_BG)
-        self.tree_recordings.tag_configure("odd", background=CARD_SURFACE)
-
-        if to_select:
-            self.tree_recordings.selection_set(to_select)
-        elif items:
-            first_iid = self.tree_recordings.get_children()[0]
-            self.tree_recordings.selection_set(first_iid)
-            self._on_tree_recording_selected()
-        else:
-            self._on_tree_recording_selected()
-
-        folder = self._recordings_dir()
-        total_mb = getattr(self, "_total_recordings_bytes", 0) / (1024 * 1024)
-        count_all = len(getattr(self, "_all_recordings", []))
-        showing_str = f"Showing {len(items)} of {count_all}" if len(items) != count_all else f"{count_all} items"
-        if hasattr(self, "lbl_recordings_stats"):
-            self.lbl_recordings_stats.config(text=f"📊 {showing_str}  ·  {total_mb:.1f} MB total library")
-
-        if hasattr(self, "lbl_disk_free"):
+        def _worker():
             try:
-                free_bytes = shutil.disk_usage(folder).free
-                free_gb = free_bytes / (1024 * 1024 * 1024)
-                self.lbl_disk_free.config(text=f"💾 Free Disk: {free_gb:.1f} GB")
+                apps = self.server._cached_query("apps", 10.0, self.server._get_installed_apps)
+                quick_apps = load_quick_apps(apps)
+                self.available_apps = apps
+                self.quick_apps = quick_apps
+                QTimer.singleShot(0, self._render_quick_apps_ui)
             except Exception:
-                self.lbl_disk_free.config(text="")
+                pass
 
-        if hasattr(self, "lbl_mgr_folder_path"):
-            self.lbl_mgr_folder_path.config(text=str(folder))
+        threading.Thread(target=_worker, daemon=True).start()
 
-        count_audio = sum(1 for x in getattr(self, "_all_recordings", []) if x.get("is_audio"))
-        count_video = sum(1 for x in getattr(self, "_all_recordings", []) if not x.get("is_audio") and not x.get("is_snapshot"))
-        count_snaps = sum(1 for x in getattr(self, "_all_recordings", []) if x.get("is_snapshot"))
-        if hasattr(self, "btn_filter_all"):
-            self.btn_filter_all.config(text=f"All ({count_all})")
-        if hasattr(self, "btn_filter_audio"):
-            self.btn_filter_audio.config(text=f"🎙️ Audio ({count_audio})")
-        if hasattr(self, "btn_filter_video"):
-            self.btn_filter_video.config(text=f"📹 Video ({count_video})")
-        if hasattr(self, "btn_filter_snapshot"):
-            self.btn_filter_snapshot.config(text=f"📷 Snapshots ({count_snaps})")
+    def _render_quick_apps_ui(self):
+        quick_paths = {item["path"].lower() for item in self.quick_apps}
+        self.combo_available_apps.clear()
+        for item in self.available_apps:
+            if item["path"].lower() not in quick_paths:
+                self.combo_available_apps.addItem(item["name"], item)
+        self.list_quick_apps.clear()
+        for app in self.quick_apps:
+            self.list_quick_apps.addItem(f"{app['name']}  —  {os.path.basename(app['path'])}")
+        self.lbl_quick_apps_status.setText(f"{len(self.quick_apps)} quick app(s) configured.")
 
-    def _update_filter_button_styles(self):
-        ft = self.recording_filter_type.get() if hasattr(self, "recording_filter_type") else "all"
-        if hasattr(self, "btn_filter_all"):
-            self.btn_filter_all.config(bg=ACCENT_INDIGO if ft == "all" else BUTTON_BG)
-        if hasattr(self, "btn_filter_audio"):
-            self.btn_filter_audio.config(bg=ACCENT_INDIGO if ft == "audio" else BUTTON_BG)
-        if hasattr(self, "btn_filter_video"):
-            self.btn_filter_video.config(bg=ACCENT_INDIGO if ft == "video" else BUTTON_BG)
-        if hasattr(self, "btn_filter_snapshot"):
-            self.btn_filter_snapshot.config(bg=ACCENT_INDIGO if ft == "snapshot" else BUTTON_BG)
-
-    def _on_tree_recording_selected(self, _event=None):
-        if not hasattr(self, "tree_recordings") or not hasattr(self, "lbl_selected_recording_info"):
+    def _publish_quick_apps_to_server(self):
+        if not self.server or not self.available_apps:
             return
-        sel = self.tree_recordings.selection()
-        if not sel or sel[0] not in getattr(self, "_tree_item_map", {}):
-            self.lbl_selected_recording_info.config(text="Select a recording to play or inspect.", fg=TEXT_MUTED)
+        quick_paths = {os.path.realpath(item["path"]).lower() for item in self.quick_apps}
+        apps = [dict(item, is_quick=os.path.realpath(item["path"]).lower() in quick_paths) for item in self.available_apps]
+        with self.server._query_cache_lock:
+            self.server._query_cache["apps"] = (time.monotonic(), apps)
+
+    def add_quick_app(self):
+        name = self.combo_available_apps.currentText().strip()
+        match = next((app for app in self.available_apps if app["name"] == name), None)
+        if not match:
             return
-        rec = self._tree_item_map[sel[0]]
-        self.lbl_selected_recording_info.config(
-            text=f"Selected: {rec['name']}  ·  {rec['size_str']}  ·  {rec['date_str']}", fg=TEXT_PRIMARY
-        )
+        self.quick_apps = save_quick_apps(self.quick_apps + [{"name": match["name"], "path": match["path"]}])
+        self._publish_quick_apps_to_server()
+        self._render_quick_apps_ui()
 
-    def _on_tree_context_menu(self, event):
-        row_id = self.tree_recordings.identify_row(event.y)
-        if row_id:
-            self.tree_recordings.selection_set(row_id)
-            self._on_tree_recording_selected()
-        if hasattr(self, "rec_context_menu"):
-            self.rec_context_menu.tk_popup(event.x_root, event.y_root)
+    def on_quick_app_selected(self, row):
+        if 0 <= row < len(self.quick_apps):
+            self.ent_quick_app_name.setText(self.quick_apps[row]["name"])
 
-    def _get_selected_recording_path(self):
-        if hasattr(self, "tree_recordings") and hasattr(self, "_tree_item_map"):
-            tree_sel = self.tree_recordings.selection()
-            if tree_sel and tree_sel[0] in self._tree_item_map:
-                return self._tree_item_map[tree_sel[0]]["path"]
+    def rename_quick_app(self):
+        row = self.list_quick_apps.currentRow()
+        new_name = self.ent_quick_app_name.text().strip()
+        if 0 <= row < len(self.quick_apps) and new_name:
+            self.quick_apps[row]["name"] = new_name[:60]
+            self.quick_apps = save_quick_apps(self.quick_apps)
+            self._publish_quick_apps_to_server()
+            self._render_quick_apps_ui()
 
-        if hasattr(self, "list_recordings") and hasattr(self, "_recording_paths"):
-            list_sel = self.list_recordings.curselection()
-            if list_sel and list_sel[0] < len(self._recording_paths):
-                return self._recording_paths[list_sel[0]]
+    def remove_quick_app(self):
+        row = self.list_quick_apps.currentRow()
+        if 0 <= row < len(self.quick_apps):
+            self.quick_apps = save_quick_apps([a for i, a in enumerate(self.quick_apps) if i != row])
+            self._publish_quick_apps_to_server()
+            self._render_quick_apps_ui()
 
-        return None
+    def test_camera_snapshot(self):
+        if not self.server:
+            return
+        self.lbl_media_status.setText("Capturing webcam snapshot to Snapshots/...")
 
-    def open_recordings_folder(self):
-        folder = self._recordings_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        try:
-            if os.name == "nt":
-                os.startfile(str(folder))
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(folder)])
+        def _snap():
+            b64 = self.server.camera_manager.get_snapshot()
+            if b64:
+                raw = base64.b64decode(b64)
+                self.bridge.pc_cam_signal.emit(raw)
+                last_path = getattr(self.server.camera_manager, "last_snapshot_path", None)
+                snap_name = os.path.basename(last_path) if last_path else "snapshot.jpg"
+                QTimer.singleShot(
+                    0,
+                    lambda: (
+                        self.lbl_media_status.setText(f"✓ Saved webcam snapshot to Snapshots/{snap_name}"),
+                        self.refresh_recordings(),
+                    ),
+                )
             else:
-                subprocess.Popen(["xdg-open", str(folder)])
-        except Exception:
-            try:
-                subprocess.Popen(["explorer.exe", str(folder.resolve())])
-            except Exception as exc:
-                messagebox.showerror("Recordings", f"Could not open recordings folder in File Explorer.\n\n{exc}")
+                QTimer.singleShot(0, lambda: self.lbl_media_status.setText("✕ Could not access PC webcam."))
 
-    def open_snapshots_folder(self):
-        folder = self._snapshots_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        try:
-            if os.name == "nt":
-                os.startfile(str(folder))
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(folder)])
-            else:
-                subprocess.Popen(["xdg-open", str(folder)])
-        except Exception:
-            try:
-                subprocess.Popen(["explorer.exe", str(folder.resolve())])
-            except Exception as exc:
-                messagebox.showerror("Snapshots", f"Could not open snapshots folder in File Explorer.\n\n{exc}")
+        threading.Thread(target=_snap, daemon=True).start()
 
-    def show_selected_in_explorer(self, target_path=None):
-        path = target_path or self._get_selected_recording_path()
-        if not path or not Path(path).is_file():
-            self.open_recordings_folder()
+    def test_mic_record(self):
+        if not self.server:
             return
-        path = Path(path)
+        self.lbl_media_status.setText("Recording microphone for 3 seconds to Audios/...")
+
+        def _rec():
+            rec_file = self.server.audio_manager.start_recording()
+            if not rec_file:
+                reason = self.server.audio_manager.last_error or "Microphone unavailable."
+                QTimer.singleShot(0, lambda: self.lbl_media_status.setText(f"✕ {reason}"))
+                return
+            time.sleep(3.0)
+            final_file = self.server.audio_manager.stop_recording()
+            if final_file and os.path.exists(final_file):
+                QTimer.singleShot(
+                    0,
+                    lambda: (
+                        self.lbl_media_status.setText(f"✓ Saved audio recording to Audios/{os.path.basename(final_file)}"),
+                        self.refresh_recordings(),
+                    ),
+                )
+
+        threading.Thread(target=_rec, daemon=True).start()
+
+    def open_windows_bt_settings(self):
         try:
-            if os.name == "nt":
-                subprocess.Popen(["explorer.exe", f"/select,{str(path.resolve())}"])
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(path.resolve())])
-            else:
-                subprocess.Popen(["xdg-open", str(path.parent.resolve())])
-        except Exception as exc:
-            messagebox.showerror("Recordings", f"Could not reveal {path.name} in File Explorer.\n\n{exc}")
-
-    def open_selected_recording(self, target_path=None):
-        path = target_path or self._get_selected_recording_path()
-        if not path or not Path(path).is_file():
-            messagebox.showinfo("Recordings", "Please select a recording to open.")
-            return
-        path = Path(path)
-        try:
-            if os.name == "nt":
-                os.startfile(str(path))
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(path)])
-            else:
-                subprocess.Popen(["xdg-open", str(path)])
-        except Exception as exc:
-            messagebox.showerror("Recordings", f"Could not open {path.name}.\n\n{exc}")
-
-    def delete_selected_recording(self, target_path=None):
-        path = target_path or self._get_selected_recording_path()
-        if not path or not Path(path).is_file():
-            messagebox.showinfo("Delete Recording", "Please select a recording to delete.")
-            return
-        path = Path(path)
-        size_mb = path.stat().st_size / (1024 * 1024)
-        confirm = messagebox.askyesno(
-            "Delete Recording",
-            f"Are you sure you want to permanently delete this recording?\n\n{path.name} ({size_mb:.1f} MB)\n\nThis cannot be undone.",
-        )
-        if confirm:
-            try:
-                path.unlink()
-                self._tree_rendered_once = False
-                self.refresh_recordings()
-            except OSError as exc:
-                messagebox.showerror("Delete Recording", f"Could not delete recording.\n\n{exc}")
-
-    def copy_selected_recording_path(self, target_path=None):
-        path = target_path or self._get_selected_recording_path()
-        if not path:
-            return
-        self.clipboard_clear()
-        self.clipboard_append(str(Path(path).resolve()))
-
-    def switch_to_recordings_tab(self):
-        if hasattr(self, "notebook") and hasattr(self, "tab_recordings"):
-            self.notebook.select(self.tab_recordings)
-
-    def _build_recordings_tab(self):
-        card = self._make_card(self.tab_recordings, padx=20, pady=18)
-        card.pack(fill="both", expand=True)
-
-        header = tk.Frame(card, bg=CARD_BG)
-        header.pack(fill="x", pady=(0, 12))
-
-        header_text = tk.Frame(header, bg=CARD_BG)
-        header_text.pack(side="left", fill="y")
-
-        tk.Label(
-            header_text, text="Session & Hardware Recordings", font=(UI_FONT, 14, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
-        ).pack(anchor="w")
-
-        tk.Label(
-            header_text,
-            text="Browse, preview, filter, and manage audio, webcam videos, and snapshots saved on this PC.",
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-        ).pack(anchor="w")
-
-        header_buttons = tk.Frame(header, bg=CARD_BG)
-        header_buttons.pack(side="right", fill="y")
-
-        self._make_button(header_buttons, "📁 Recordings Folder", self.open_recordings_folder, fg=ACCENT_CYAN, padx=12, pady=5).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(header_buttons, "📷 Snapshots Folder", self.open_snapshots_folder, fg=ACCENT_GREEN, padx=12, pady=5).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(header_buttons, "🔄 Refresh", self.refresh_recordings, fg=TEXT_PRIMARY, padx=10, pady=5).pack(
-            side="left"
-        )
-
-        stats_bar = tk.Frame(card, bg=CARD_SURFACE, padx=12, pady=8, highlightbackground=CARD_BORDER, highlightthickness=1)
-        stats_bar.pack(fill="x", pady=(0, 10))
-
-        stats_left = tk.Frame(stats_bar, bg=CARD_SURFACE)
-        stats_left.pack(side="left")
-
-        self.lbl_recordings_stats = tk.Label(
-            stats_left, text="📊 Loading recordings...", font=(UI_FONT, 9, "bold"), bg=CARD_SURFACE, fg=TEXT_PRIMARY
-        )
-        self.lbl_recordings_stats.pack(side="left", padx=(0, 12))
-
-        self.lbl_disk_free = tk.Label(stats_left, text="", font=(UI_FONT, 9, "bold"), bg=CARD_SURFACE, fg=ACCENT_GREEN)
-        self.lbl_disk_free.pack(side="left")
-
-        self.lbl_mgr_folder_path = tk.Label(
-            stats_bar, text="", font=("Consolas", 8), bg=CARD_SURFACE, fg=TEXT_MUTED, anchor="e"
-        )
-        self.lbl_mgr_folder_path.pack(side="right")
-
-        filter_bar = tk.Frame(card, bg=CARD_BG)
-        filter_bar.pack(fill="x", pady=(0, 10))
-
-        tk.Label(filter_bar, text="🔍 Search:", font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(
-            side="left", padx=(0, 6)
-        )
-
-        self.ent_recording_search = tk.Entry(
-            filter_bar,
-            font=(UI_FONT, 9),
-            bg=BUTTON_BG,
-            fg=TEXT_PRIMARY,
-            insertbackground=TEXT_PRIMARY,
-            relief="flat",
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-            width=20,
-        )
-        self.ent_recording_search.pack(side="left", ipady=4, padx=(0, 12))
-        self.ent_recording_search.bind("<KeyRelease>", lambda _e: self._filter_and_render_recordings())
-
-        filter_btn_frame = tk.Frame(filter_bar, bg=CARD_BG)
-        filter_btn_frame.pack(side="left", padx=(0, 12))
-
-        self.recording_filter_type = tk.StringVar(value="all")
-
-        def _select_filter(ft):
-            self.recording_filter_type.set(ft)
-            self._update_filter_button_styles()
-            self._filter_and_render_recordings()
-
-        self.btn_filter_all = tk.Button(
-            filter_btn_frame,
-            text="All",
-            font=(UI_FONT, 8, "bold"),
-            bg=ACCENT_INDIGO,
-            fg=TEXT_PRIMARY,
-            relief="flat",
-            padx=10,
-            pady=4,
-            cursor="hand2",
-            command=lambda: _select_filter("all"),
-        )
-        self.btn_filter_all.pack(side="left", padx=(0, 4))
-
-        self.btn_filter_audio = tk.Button(
-            filter_btn_frame,
-            text="🎙️ Audio",
-            font=(UI_FONT, 8, "bold"),
-            bg=BUTTON_BG,
-            fg=TEXT_PRIMARY,
-            relief="flat",
-            padx=10,
-            pady=4,
-            cursor="hand2",
-            command=lambda: _select_filter("audio"),
-        )
-        self.btn_filter_audio.pack(side="left", padx=4)
-
-        self.btn_filter_video = tk.Button(
-            filter_btn_frame,
-            text="📹 Video",
-            font=(UI_FONT, 8, "bold"),
-            bg=BUTTON_BG,
-            fg=TEXT_PRIMARY,
-            relief="flat",
-            padx=10,
-            pady=4,
-            cursor="hand2",
-            command=lambda: _select_filter("video"),
-        )
-        self.btn_filter_video.pack(side="left", padx=4)
-
-        self.btn_filter_snapshot = tk.Button(
-            filter_btn_frame,
-            text="📷 Snapshots",
-            font=(UI_FONT, 8, "bold"),
-            bg=BUTTON_BG,
-            fg=TEXT_PRIMARY,
-            relief="flat",
-            padx=10,
-            pady=4,
-            cursor="hand2",
-            command=lambda: _select_filter("snapshot"),
-        )
-        self.btn_filter_snapshot.pack(side="left", padx=4)
-
-        sort_frame = tk.Frame(filter_bar, bg=CARD_BG)
-        sort_frame.pack(side="right")
-
-        tk.Label(sort_frame, text="Sort:", font=(UI_FONT, 9, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(
-            side="left", padx=(0, 6)
-        )
-
-        self.combo_recording_sort = ttk.Combobox(
-            sort_frame,
-            state="readonly",
-            width=14,
-            font=(UI_FONT, 9),
-            values=["Newest First", "Oldest First", "Name (A-Z)", "Size (Largest)", "Size (Smallest)"],
-        )
-        self.combo_recording_sort.set("Newest First")
-        self.combo_recording_sort.pack(side="left")
-        self.combo_recording_sort.bind("<<ComboboxSelected>>", lambda _e: self._filter_and_render_recordings())
-
-        tree_frame = tk.Frame(card, bg=CARD_BG, highlightbackground=CARD_BORDER, highlightthickness=1)
-        tree_frame.pack(fill="both", expand=True, pady=(0, 10))
-
-        columns = ("name", "type", "date", "size")
-        self.tree_recordings = ttk.Treeview(
-            tree_frame, columns=columns, show="headings", style="Recordings.Treeview", selectmode="browse"
-        )
-
-        self.tree_recordings.heading("name", text="File Name", anchor="w")
-        self.tree_recordings.heading("type", text="Type", anchor="center")
-        self.tree_recordings.heading("date", text="Recorded On", anchor="center")
-        self.tree_recordings.heading("size", text="Size", anchor="e")
-
-        self.tree_recordings.column("name", width=290, minwidth=200, anchor="w")
-        self.tree_recordings.column("type", width=120, minwidth=80, anchor="center")
-        self.tree_recordings.column("date", width=170, minwidth=140, anchor="center")
-        self.tree_recordings.column("size", width=90, minwidth=70, anchor="e")
-
-        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_recordings.yview)
-        self.tree_recordings.configure(yscrollcommand=tree_scroll.set)
-        self.tree_recordings.pack(side="left", fill="both", expand=True)
-        tree_scroll.pack(side="right", fill="y")
-
-        self.tree_recordings.bind("<Double-Button-1>", lambda _e: self.open_selected_recording())
-        self.tree_recordings.bind("<<TreeviewSelect>>", self._on_tree_recording_selected)
-        self.tree_recordings.bind("<Return>", lambda _e: self.open_selected_recording())
-        self.tree_recordings.bind("<Delete>", lambda _e: self.delete_selected_recording())
-        self.tree_recordings.bind("<Button-3>", self._on_tree_context_menu)
-        self.tree_recordings.bind("<Button-2>", self._on_tree_context_menu)
-
-        self.rec_context_menu = tk.Menu(
-            self, tearoff=0, bg=CARD_BG, fg=TEXT_PRIMARY, activebackground=ACCENT_INDIGO, activeforeground=TEXT_PRIMARY
-        )
-        self.rec_context_menu.add_command(label="▶️  Play / Open", command=self.open_selected_recording)
-        self.rec_context_menu.add_command(label="🔍  Show in File Explorer", command=self.show_selected_in_explorer)
-        self.rec_context_menu.add_command(label="📁  Open Recordings Folder", command=self.open_recordings_folder)
-        self.rec_context_menu.add_separator()
-        self.rec_context_menu.add_command(label="📋  Copy File Path", command=self.copy_selected_recording_path)
-        self.rec_context_menu.add_command(label="🗑️  Delete Recording", command=self.delete_selected_recording)
-
-        action_bar = tk.Frame(card, bg=CARD_BG)
-        action_bar.pack(fill="x")
-
-        self.lbl_selected_recording_info = tk.Label(
-            action_bar, text="Select a recording to play or inspect.", font=(UI_FONT, 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
-        )
-        self.lbl_selected_recording_info.pack(side="left", fill="x", expand=True)
-
-        action_buttons = tk.Frame(action_bar, bg=CARD_BG)
-        action_buttons.pack(side="right")
-
-        self._make_button(action_buttons, "▶️ Play / Open", self.open_selected_recording, fg=ACCENT_GREEN, padx=11, pady=5).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(action_buttons, "🔍 Show in Explorer", self.show_selected_in_explorer, padx=11, pady=5).pack(
-            side="left", padx=4
-        )
-        self._make_button(action_buttons, "📁 Open Folder", self.open_recordings_folder, fg=ACCENT_CYAN, padx=11, pady=5).pack(
-            side="left", padx=4
-        )
-        self._make_button(action_buttons, "🗑️ Delete", self.delete_selected_recording, fg=ACCENT_RED, padx=10, pady=5).pack(
-            side="left", padx=(4, 0)
-        )
-
-    def _build_phone_cam_tab(self):
-        container = tk.Frame(self.tab_phone_cam, bg=BG_DARK)
-        container.pack(fill="both", expand=True)
-
-        preview_card = self._make_card(container, padx=18, pady=16)
-        preview_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
-
-        preview_header = tk.Frame(preview_card, bg=CARD_BG)
-        preview_header.pack(fill="x", pady=(0, 10))
-
-        tk.Label(
-            preview_header, text="📹 Live Phone Camera Viewfinder", font=(UI_FONT, 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
-        ).pack(side="left")
-
-        self.lbl_phone_cam_status = tk.Label(
-            preview_header, text="○ STANDBY", font=(UI_FONT, 9, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED, padx=10, pady=3
-        )
-        self.lbl_phone_cam_status.pack(side="right")
-
-        viewfinder_container = tk.Frame(
-            preview_card, bg="#050811", highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        viewfinder_container.pack(fill="both", expand=True, pady=4)
-
-        self.lbl_phone_cam_preview = tk.Label(
-            viewfinder_container,
-            text="📷 Phone Camera Standby\n\nOpen the BT Mouse mobile app\nGo to Tools  ➔  Camera & Mic  ➔  Start Phone Camera\nto broadcast live video to this PC.",
-            font=(UI_FONT, 10),
-            bg="#050811",
-            fg=TEXT_MUTED,
-            justify="center",
-        )
-        self.lbl_phone_cam_preview.pack(fill="both", expand=True, padx=8, pady=8)
-
-        telemetry_bar = tk.Frame(preview_card, bg=CARD_BG)
-        telemetry_bar.pack(fill="x", pady=(8, 0))
-
-        self.lbl_phone_cam_telemetry = tk.Label(
-            telemetry_bar, text="Waiting for stream from phone...", font=(UI_FONT, 9), bg=CARD_BG, fg=TEXT_MUTED, anchor="w"
-        )
-        self.lbl_phone_cam_telemetry.pack(side="left", fill="x", expand=True)
-
-        self.lbl_phone_cam_counter = tk.Label(
-            telemetry_bar, text="0 frames", font=("Consolas", 9, "bold"), bg=CARD_BG, fg=ACCENT_CYAN, anchor="e"
-        )
-        self.lbl_phone_cam_counter.pack(side="right")
-
-        controls_card = self._make_card(container, padx=18, pady=16)
-        controls_card.configure(width=360)
-        controls_card.pack(side="right", fill="both", padx=(8, 0))
-        controls_card.pack_propagate(False)
-
-        tk.Label(
-            controls_card, text="⚙️ Virtual Webcam & OBS", font=(UI_FONT, 13, "bold"), bg=CARD_BG, fg=TEXT_PRIMARY
-        ).pack(anchor="w", pady=(0, 4))
-
-        tk.Label(
-            controls_card,
-            text="Use your phone's camera inside OBS Studio, Zoom, Microsoft Teams, Discord, and Google Meet.",
-            font=(UI_FONT, 9),
-            bg=CARD_BG,
-            fg=TEXT_MUTED,
-            wraplength=320,
-            justify="left",
-        ).pack(anchor="w", pady=(0, 12))
-
-        mjpeg_group = tk.Frame(
-            controls_card, bg=CARD_SURFACE, padx=12, pady=12, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        mjpeg_group.pack(fill="x", pady=(0, 12))
-
-        tk.Label(
-            mjpeg_group, text="LOCALHOST MJPEG STREAM URL", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=ACCENT_CYAN
-        ).pack(anchor="w", pady=(0, 6))
-
-        port = getattr(getattr(self.server, "phone_camera_http", None), "port", 8766)
-        mjpeg_url = f"http://127.0.0.1:{port}/phone_cam/mjpeg"
-
-        self.lbl_phone_mjpeg_url = tk.Label(
-            mjpeg_group,
-            text=mjpeg_url,
-            font=("Consolas", 9, "bold"),
-            bg=BG_DARK,
-            fg=TEXT_PRIMARY,
-            padx=8,
-            pady=6,
-            anchor="w",
-        )
-        self.lbl_phone_mjpeg_url.pack(fill="x", pady=(0, 8))
-
-        btn_row = tk.Frame(mjpeg_group, bg=CARD_SURFACE)
-        btn_row.pack(fill="x")
-
-        self._make_button(btn_row, "📋 Copy URL", self._copy_phone_mjpeg_url, padx=10, pady=4).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(
-            btn_row,
-            "🌐 Open in Browser",
-            lambda: webbrowser.open(self.lbl_phone_mjpeg_url.cget("text")),
-            fg=ACCENT_CYAN,
-            padx=10,
-            pady=4,
-        ).pack(side="left")
-
-        vcam_group = tk.Frame(
-            controls_card, bg=CARD_SURFACE, padx=12, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        vcam_group.pack(fill="x", pady=(0, 12))
-
-        tk.Label(
-            vcam_group, text="DIRECT VIRTUAL CAMERA DRIVER", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_MUTED
-        ).pack(anchor="w")
-
-        vcam_status = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_status", "MJPEG_STREAM")
-        vcam_err = getattr(getattr(self.server, "phone_camera_receiver", None), "virtual_cam_error", "MJPEG stream ready.")
-
-        self.lbl_vcam_status = tk.Label(
-            vcam_group,
-            text=f"Backend: {vcam_status}",
-            font=(UI_FONT, 9, "bold"),
-            bg=CARD_SURFACE,
-            fg=ACCENT_GREEN if vcam_status.startswith("ACTIVE") else ACCENT_CYAN,
-        )
-        self.lbl_vcam_status.pack(anchor="w", pady=(2, 2))
-
-        tk.Label(
-            vcam_group, text=vcam_err, font=(UI_FONT, 8), bg=CARD_SURFACE, fg=TEXT_MUTED, justify="left", wraplength=310
-        ).pack(anchor="w")
-
-        setup_group = tk.Frame(
-            controls_card, bg=CARD_SURFACE, padx=12, pady=10, highlightbackground=CARD_BORDER, highlightthickness=1
-        )
-        setup_group.pack(fill="x", pady=(0, 12))
-
-        tk.Label(
-            setup_group, text="3-STEP SETUP FOR ZOOM / TEAMS / MEET", font=(UI_FONT, 8, "bold"), bg=CARD_SURFACE, fg=TEXT_PRIMARY
-        ).pack(anchor="w", pady=(0, 4))
-
-        steps_text = (
-            "1. Open OBS Studio and add a 'Media Source'.\n"
-            "2. Uncheck 'Local File' and paste the MJPEG URL above.\n"
-            "3. Click 'Start Virtual Camera' in OBS and select 'OBS Virtual Camera' in Zoom/Teams/Meet."
-        )
-        tk.Label(
-            setup_group, text=steps_text, font=(UI_FONT, 8), bg=CARD_SURFACE, fg=TEXT_MUTED, justify="left", wraplength=310
-        ).pack(anchor="w")
-
-        snapshot_group = tk.Frame(controls_card, bg=CARD_BG)
-        snapshot_group.pack(fill="x")
-
-        self._make_button(snapshot_group, "📸 Save Snapshot", self._save_phone_cam_snapshot, fg=ACCENT_GREEN, padx=10, pady=6).pack(
-            side="left", padx=(0, 6)
-        )
-        self._make_button(snapshot_group, "📁 Open Snapshots", self.open_snapshots_folder, padx=10, pady=6).pack(
-            side="left"
-        )
-
-    def _copy_phone_mjpeg_url(self):
-        try:
-            url = self.lbl_phone_mjpeg_url.cget("text")
-            self.clipboard_clear()
-            self.clipboard_append(url)
-            self.lbl_phone_cam_telemetry.config(text="✓ Copied MJPEG stream URL to clipboard!")
+            os.system("start ms-settings:bluetooth")
         except Exception:
             pass
 
-    def _save_phone_cam_snapshot(self):
-        receiver = getattr(self.server, "phone_camera_receiver", None)
-        frame = receiver.latest_jpeg if receiver else None
-        if not frame:
-            self.lbl_phone_cam_telemetry.config(text="No live frame to save as snapshot.")
-            return
+    def open_paint(self):
         try:
-            snapshots_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".config"))) / "BTMouse" / "Snapshots"
-            snapshots_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"phone_snapshot_{timestamp}.jpg"
-            target = snapshots_dir / filename
-            target.write_bytes(frame)
-            self.lbl_phone_cam_telemetry.config(text=f"✓ Saved snapshot: {filename}")
-        except Exception as e:
-            self.lbl_phone_cam_telemetry.config(text=f"Could not save snapshot: {e}")
-
-    def _on_phone_cam_frame_received(self, raw_jpeg, w, h, lens, fps, bitrate_kbps):
-        if not getattr(self, "phone_cam_pending_update", False):
-            self.phone_cam_pending_update = True
-            self.after(0, lambda: self._update_phone_cam_gui(raw_jpeg, w, h, lens, fps, bitrate_kbps))
-
-    def _update_phone_cam_gui(self, raw_jpeg, w, h, lens, fps, bitrate_kbps):
-        self.phone_cam_pending_update = False
-        try:
-            import io
-            img = Image.open(io.BytesIO(raw_jpeg))
-            max_w, max_h = 520, 292
-            img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
-            self.phone_cam_photo = photo
-            if hasattr(self, "lbl_phone_cam_preview"):
-                self.lbl_phone_cam_preview.config(image=photo, text="")
-            if hasattr(self, "lbl_phone_cam_status"):
-                self.lbl_phone_cam_status.config(text=f"● LIVE · {lens.upper()} CAMERA", fg=ACCENT_GREEN)
-            if hasattr(self, "lbl_phone_cam_telemetry"):
-                self.lbl_phone_cam_telemetry.config(text=f"{w}×{h} · {fps} FPS · {bitrate_kbps} kbps")
-            if hasattr(self, "lbl_phone_cam_counter"):
-                count = getattr(self.server.phone_camera_receiver, "frame_count", 0)
-                self.lbl_phone_cam_counter.config(text=f"{count:,} frames")
+            os.system("start mspaint")
         except Exception:
             pass
 
-    def _check_phone_cam_active(self):
-        receiver = getattr(self.server, "phone_camera_receiver", None)
-        if receiver:
-            now = time.monotonic()
-            if receiver.latest_timestamp and now - receiver.latest_timestamp > 4.0:
-                receiver.is_active = False
-                if hasattr(self, "lbl_phone_cam_status"):
-                    self.lbl_phone_cam_status.config(text="○ STANDBY", fg=TEXT_MUTED)
-                if hasattr(self, "lbl_phone_cam_telemetry"):
-                    self.lbl_phone_cam_telemetry.config(text="Stream paused / standby")
-        self.after(2000, self._check_phone_cam_active)
+    # ------------------------------------------------------------------
+    # Server Callbacks & Logging
+    # ------------------------------------------------------------------
+    def log(self, message):
+        if hasattr(self, "bridge"):
+            self.bridge.log_signal.emit(str(message))
 
-    def _build_logs_tab(self):
-        container = tk.Frame(self.tab_logs, bg=BG_DARK)
-        container.pack(fill="both", expand=True)
+    def _append_log(self, message):
+        timestamp = time.strftime("%H:%M:%S")
+        if hasattr(self, "txt_log"):
+            self.txt_log.appendPlainText(f"[{timestamp}] {message}")
 
-        stats_card = self._make_card(container, padx=16, pady=12)
-        stats_card.pack(fill="x", pady=(0, 10))
+    def _on_packet(self, cmd_type, addr, data):
+        self.packet_count += 1
+        if self.packet_count % 15 == 0:
+            self.bridge.packet_signal.emit(self.packet_count)
+        if cmd_type in ("connect", "disconnect", "text", "pen"):
+            self.log(f"{cmd_type.upper()} from {addr[0] if addr else ''}")
 
-        self.lbl_client = tk.Label(
-            stats_card, text="Client: Disconnected", font=(UI_FONT, 10, "bold"), bg=CARD_BG, fg=TEXT_MUTED
-        )
-        self.lbl_client.pack(side="left", padx=4)
+    def _update_packet_ui(self, count):
+        if hasattr(self, "lbl_packets"):
+            self.lbl_packets.setText(f"Packets Received: {count:,}")
 
-        self._make_button(
-            stats_card,
-            "🧹 Clear Log",
-            lambda: self.txt_log.delete("1.0", "end"),
-            font_size=8,
-            padx=10,
-            pady=4,
-        ).pack(side="right", padx=(8, 0))
+    def _on_client(self, client_name, is_connected):
+        self.bridge.client_signal.emit(str(client_name or ""), bool(is_connected))
 
-        self.lbl_packets = tk.Label(
-            stats_card, text="Packets Received: 0", font=("Consolas", 10, "bold"), bg=CARD_BG, fg=ACCENT_CYAN
-        )
-        self.lbl_packets.pack(side="right", padx=8)
+    def _update_client_ui(self, client_name, is_connected):
+        text = f"Client: {client_name}" if is_connected else "Client: Disconnected"
+        color = "#10B981" if is_connected else "#94A3B8"
+        if hasattr(self, "lbl_client"):
+            self.lbl_client.setText(text)
+            self.lbl_client.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {color};")
+        if hasattr(self, "lbl_footer_client"):
+            self.lbl_footer_client.setText(text)
+            self.lbl_footer_client.setStyleSheet(f"font-size: 11px; font-weight: 700; color: {color};")
 
-        log_frame = tk.Frame(container, bg=CARD_BG, relief="flat", highlightbackground=CARD_BORDER, highlightthickness=1)
-        log_frame.pack(fill="both", expand=True)
+    def _on_status(self, is_running):
+        self.is_server_running = is_running
+        self.bridge.status_signal.emit(bool(is_running))
 
-        self.txt_log = tk.Text(
-            log_frame,
-            bg=CARD_BG,
-            fg=TEXT_PRIMARY,
-            font=("Consolas", 9),
-            borderwidth=0,
-            highlightthickness=0,
-            padx=12,
-            pady=10,
-        )
-        self.txt_log.pack(side="left", fill="both", expand=True)
+    def _update_status_ui(self, is_running):
+        if is_running:
+            self.lbl_status_pill.setText("● SERVER LISTENING")
+            self.lbl_status_pill.setStyleSheet(
+                "background-color: #062E22; color: #10B981; border: 1px solid #059669; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
+            )
+            self.btn_toggle.setText("Stop Server")
+        else:
+            self.lbl_status_pill.setText("○ SERVER STOPPED")
+            self.lbl_status_pill.setStyleSheet(
+                "background-color: #2A1621; color: #F43F5E; border: 1px solid #F43F5E; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
+            )
+            self.btn_toggle.setText("Start Server")
 
-        scrollbar = ttk.Scrollbar(log_frame, command=self.txt_log.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.txt_log.config(yscrollcommand=scrollbar.set)
+    def start_server(self):
+        if self.server and self.server.running:
+            return
+        if not self.server:
+            self._init_server()
+        self.server_thread = threading.Thread(target=self.server.start, daemon=True)
+        self.server_thread.start()
+        self.log(f"Server starting on UDP port {self.current_port}...")
 
-        self.log("Companion initialized. Ready for connections.")
+    def stop_server(self):
+        if self.server:
+            self.server.stop()
+            self.log("Server stopped.")
+            self._on_status(False)
 
-    def _build_statusbar(self):
-        bar = tk.Frame(
-            self,
-            bg=SIDEBAR_BG,
-            height=28,
-            padx=16,
-            pady=5,
-            highlightbackground=CARD_BORDER,
-            highlightthickness=1,
-        )
-        bar.pack(fill="x", side="bottom")
+    def toggle_server(self):
+        if self.is_server_running:
+            self.stop_server()
+        else:
+            self.start_server()
 
-        lbl_foot = tk.Label(
-            bar,
-            text=f"BT Mouse Companion v{APP_VERSION}  ·  Minimizes to system tray on close  ·  Native Windows Hardware Input",
-            font=(UI_FONT, 8),
-            bg=SIDEBAR_BG,
-            fg=TEXT_MUTED,
-        )
-        lbl_foot.pack(side="left")
+    def restart_server(self):
+        self.log("Restarting server...")
 
+        def _do_restart():
+            if self.server:
+                self.server.stop()
+                if self.server_thread and self.server_thread.is_alive():
+                    self.server_thread.join(timeout=1.0)
+            time.sleep(0.3)
+            self._init_server()
+            self.server_thread = threading.Thread(target=self.server.start, daemon=True)
+            self.server_thread.start()
+            self.log("Server successfully restarted.")
+
+        threading.Thread(target=_do_restart, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Self-Healing In-App Updater
+    # ------------------------------------------------------------------
     @staticmethod
     def _version_tuple(version):
         match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version.strip())
@@ -2574,26 +2437,26 @@ class CompanionApp(tk.Tk):
         return tuple(int(part) for part in match.groups())
 
     def _show_update_recovery_notice(self):
-        """Show a deferred update error after the old executable was restored."""
         try:
             if not COMPANION_UPDATE_ERROR_LOG.is_file():
                 return
             message = COMPANION_UPDATE_ERROR_LOG.read_text(encoding="utf-8-sig", errors="replace").strip()
             COMPANION_UPDATE_ERROR_LOG.unlink(missing_ok=True)
             if message:
-                messagebox.showwarning(
+                QMessageBox.warning(
+                    self,
                     "Companion update rolled back",
                     f"The update could not start, so the previous version was restored.\n\n{message}",
-                    parent=self,
                 )
         except OSError as exc:
             self.log(f"Could not read update recovery details: {exc}")
 
     def check_for_companion_updates(self):
         if not getattr(sys, "frozen", False):
-            messagebox.showinfo("Companion updates", "In-app updates are available when running the packaged Windows app.")
+            QMessageBox.information(self, "Companion Updates", "In-app updates are available when running the packaged Windows EXE.")
             return
-        self.btn_update.config(state="disabled", text="Checking…")
+        self.btn_update.setEnabled(False)
+        self.btn_update.setText("Checking…")
         threading.Thread(target=self._check_companion_updates_worker, daemon=True).start()
 
     def _check_companion_updates_worker(self):
@@ -2601,10 +2464,7 @@ class CompanionApp(tk.Tk):
             api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
             request = urllib.request.Request(
                 api_url,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "BT-Mouse-Companion-Updater",
-                },
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "BT-Mouse-Companion-Updater"},
             )
             with urllib.request.urlopen(request, timeout=20) as response:
                 release = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
@@ -2613,36 +2473,44 @@ class CompanionApp(tk.Tk):
             if release.get("draft") or release.get("prerelease"):
                 raise ValueError("GitHub did not return a stable release.")
             if self._version_tuple(tag_name) <= self._version_tuple(APP_VERSION):
-                self.after(
-                    0, lambda: messagebox.showinfo("Companion updates", f"You are using the latest version (v{APP_VERSION}).")
+                QTimer.singleShot(
+                    0,
+                    lambda: (
+                        QMessageBox.information(self, "Companion Updates", f"You are using the latest version (v{APP_VERSION})."),
+                        self.btn_update.setEnabled(True),
+                        self.btn_update.setText("Check for Updates"),
+                    ),
                 )
-                self.after(0, lambda: self.btn_update.config(state="normal", text="Check for Updates"))
                 return
 
             asset = next((item for item in release.get("assets", []) if item.get("name") == "BT-Mouse-Companion.exe"), None)
             if not asset or not asset.get("browser_download_url"):
                 raise ValueError("The latest release does not include the Windows companion executable.")
-            if asset.get("size", 0) <= 0 or asset["size"] > MAX_COMPANION_UPDATE_BYTES:
-                raise ValueError("The Windows update has an unexpected file size.")
 
-            def ask_to_update():
-                update = messagebox.askyesno(
-                    "Companion update available",
-                    f"Version {tag_name} is available. Download and install it now?\n\n"
-                    "The companion will close briefly and reopen after updating.",
+            def _ask():
+                ans = QMessageBox.question(
+                    self,
+                    "Update Available",
+                    f"Version {tag_name} is available. Download and install it now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
-                if update:
-                    self.btn_update.config(state="disabled", text="Downloading…")
+                if ans == QMessageBox.StandardButton.Yes:
+                    self.btn_update.setText("Downloading…")
                     threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
                 else:
-                    self.btn_update.config(state="normal", text="Check for Updates")
+                    self.btn_update.setEnabled(True)
+                    self.btn_update.setText("Check for Updates")
 
-            self.after(0, ask_to_update)
+            QTimer.singleShot(0, _ask)
         except Exception as exc:
-            self.after(
-                0, lambda error=str(exc): messagebox.showerror("Companion update failed", f"Could not check for updates.\n\n{error}")
+            QTimer.singleShot(
+                0,
+                lambda error=str(exc): (
+                    QMessageBox.critical(self, "Update Failed", f"Could not check for updates.\n\n{error}"),
+                    self.btn_update.setEnabled(True),
+                    self.btn_update.setText("Check for Updates"),
+                ),
             )
-            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for Updates"))
 
     def _download_companion_update_worker(self, tag_name, asset):
         staged_path = None
@@ -2652,10 +2520,7 @@ class CompanionApp(tk.Tk):
                 raise ValueError("The update URL is not a trusted GitHub release link.")
             request = urllib.request.Request(
                 download_url,
-                headers={
-                    "User-Agent": "BT-Mouse-Companion-Updater",
-                    "Accept": "application/octet-stream",
-                },
+                headers={"User-Agent": "BT-Mouse-Companion-Updater", "Accept": "application/octet-stream"},
             )
             digest = hashlib.sha256()
             downloaded = 0
@@ -2677,18 +2542,8 @@ class CompanionApp(tk.Tk):
             with staged_path.open("rb") as downloaded_file:
                 if downloaded_file.read(2) != b"MZ":
                     raise ValueError("The downloaded file is not a valid Windows executable.")
-            expected_digest = asset.get("digest") or ""
-            if expected_digest.startswith("sha256:") and digest.hexdigest().lower() != expected_digest[7:].lower():
-                raise ValueError("The downloaded update failed its SHA-256 check.")
 
             executable = Path(sys.executable).resolve()
-            probe_path = executable.parent / f".btmouse-update-check-{os.getpid()}"
-            try:
-                probe_path.write_text("", encoding="ascii")
-                probe_path.unlink()
-            except OSError as exc:
-                raise OSError("The app folder is not writable. Move the companion to a folder you own, then retry.") from exc
-
             script_path = temp_dir / f"btmouse-update-{os.getpid()}.ps1"
             log_path = COMPANION_UPDATE_ERROR_LOG
             replacement_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe"
@@ -2712,26 +2567,9 @@ class CompanionApp(tk.Tk):
                 "    if ((Get-Date) -gt $deadline) { throw 'The companion did not close in time.' }\n"
                 "    Start-Sleep -Seconds 1\n"
                 "  }\n"
-                "  $copied = $false\n"
-                "  for ($attempt = 0; $attempt -lt 30; $attempt++) {\n"
-                "    try {\n"
-                "      Copy-Item -LiteralPath $staged -Destination $replacement -Force -ErrorAction Stop\n"
-                "      if ((Get-Item -LiteralPath $replacement).Length -eq $expectedLength) { $copied = $true; break }\n"
-                "    } catch {}\n"
-                "    Start-Sleep -Seconds 1\n"
-                "  }\n"
-                "  if (-not $copied) { throw 'Could not stage the replacement beside the app after waiting for Windows to release the executable.' }\n"
-                "  $backedUp = -not (Test-Path -LiteralPath $target)\n"
-                "  $moveError = ''\n"
-                "  for ($attempt = 0; $attempt -lt 60 -and -not $backedUp; $attempt++) {\n"
-                "    try {\n"
-                "      Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction Stop\n"
-                "      $backedUp = $true\n"
-                "    } catch { $moveError = $_.Exception.Message; Start-Sleep -Seconds 1 }\n"
-                "  }\n"
-                "  if (-not $backedUp) { throw ('Could not move the previous companion into its rollback copy after waiting for Windows to release it: ' + $moveError) }\n"
+                "  Copy-Item -LiteralPath $staged -Destination $replacement -Force -ErrorAction Stop\n"
+                "  Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction Stop\n"
                 "  Move-Item -LiteralPath $replacement -Destination $target -Force\n"
-                "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
                 "  $quotedMarker = '\"' + $readyMarker + '\"'\n"
                 "  $started = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ArgumentList @('--btmouse-update-ready', $quotedMarker) -PassThru\n"
                 "  $launchDeadline = (Get-Date).AddSeconds(30)\n"
@@ -2739,446 +2577,58 @@ class CompanionApp(tk.Tk):
                 "  while ((Get-Date) -lt $launchDeadline) {\n"
                 "    if (Test-Path -LiteralPath $readyMarker) {\n"
                 "      if ((Get-Content -LiteralPath $readyMarker -Raw).Trim() -eq $expectedVersion) { $ready = $true; break }\n"
-                "      throw 'The replacement opened with an unexpected version.'\n"
                 "    }\n"
-                "    if (-not (Get-Process -Id $started.Id -ErrorAction SilentlyContinue)) { throw 'The updated companion exited during startup.' }\n"
                 "    Start-Sleep -Seconds 1\n"
                 "  }\n"
                 "  if (-not $ready) { throw 'The updated companion did not acknowledge startup.' }\n"
                 "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
-                "  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
-                "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
-                "  Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue\n"
                 "} catch {\n"
                 "  $failure = $_.Exception.Message\n"
-                "  try {\n"
-                "    if ($started -and (Get-Process -Id $started.Id -ErrorAction SilentlyContinue)) {\n"
-                "      Stop-Process -Id $started.Id -Force -ErrorAction SilentlyContinue\n"
-                "      Wait-Process -Id $started.Id -Timeout 10 -ErrorAction SilentlyContinue\n"
-                "    }\n"
-                "    if (Test-Path -LiteralPath $backup) {\n"
-                "      Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue\n"
-                "      Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction Stop\n"
-                "    }\n"
-                "    if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $target)) {\n"
-                "      Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ErrorAction Stop\n"
-                "    }\n"
-                "  } catch { $failure = $failure + ' Rollback/relaunch error: ' + $_.Exception.Message }\n"
+                "  if (Test-Path -LiteralPath $backup) {\n"
+                "    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue\n"
+                "    Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction SilentlyContinue\n"
+                "    Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target)\n"
+                "  }\n"
                 "  $failure | Out-File -LiteralPath $log -Encoding utf8\n"
                 "}\n"
-                "Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue\n"
-                "Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
-                "Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
-                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n"
             )
             script_path.write_text(script, encoding="utf-8")
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-            helper_output = temp_dir / "btmouse-update-helper.log"
-            with helper_output.open("wb") as output:
-                helper = subprocess.Popen(
-                    [
-                        "powershell.exe",
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-File",
-                        str(script_path),
-                    ],
-                    creationflags=flags,
-                    stdin=subprocess.DEVNULL,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                )
-            time.sleep(0.5)
-            if helper.poll() is not None:
-                detail = helper_output.read_text(encoding="utf-8", errors="replace").strip()
-                raise RuntimeError(detail or f"The update helper exited early (code {helper.returncode}).")
-            self.after(0, self._exit_for_companion_update)
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+                creationflags=flags,
+            )
+            QTimer.singleShot(200, self.quit_application)
         except Exception as exc:
-            if staged_path and staged_path.exists():
-                try:
-                    staged_path.unlink()
-                except OSError:
-                    pass
-            self.after(
+            QTimer.singleShot(
                 0,
-                lambda error=str(exc): messagebox.showerror(
-                    "Companion update failed", f"Could not download or install the update.\n\n{error}"
+                lambda error=str(exc): (
+                    QMessageBox.critical(self, "Update Failed", f"Could not install update.\n\n{error}"),
+                    self.btn_update.setEnabled(True),
+                    self.btn_update.setText("Check for Updates"),
                 ),
             )
-            self.after(0, lambda: self.btn_update.config(state="normal", text="Check for Updates"))
-
-    def _exit_for_companion_update(self):
-        self.stop_server()
-        if self.tray_icon:
-            try:
-                self.tray_icon.stop()
-            except Exception:
-                pass
-        self.destroy()
-        sys.exit(0)
-
-    def _on_adapter_selected(self, event):
-        idx = self.combo_adapter.current()
-        if 0 <= idx < len(self.adapters):
-            name, ip = self.adapters[idx]
-            self.current_ip = ip
-            self.lbl_ip_val.config(text=ip)
-            if hasattr(self, "lbl_sidebar_ip"):
-                self.lbl_sidebar_ip.config(text=f"IP: {ip}:{self.current_port}")
-            self.generate_qr()
-            self.generate_wan_qr()
-
-    def generate_qr(self):
-        if not HAS_QR:
-            self.qr_label.config(text="QR library not found.\nInstall: pip install qrcode pillow", fg=ACCENT_RED, bg="#FFFFFF")
-            return
-
-        hostname = socket.gethostname()
-        payload = json.dumps({
-            "type": "btmouse",
-            "ip": self.current_ip,
-            "port": self.current_port,
-            "name": hostname,
-            "pin": self.auth_token,
-            "token": self.auth_token
-        })
-
-        try:
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_M,
-                box_size=6,
-                border=2,
-            )
-            qr.add_data(payload)
-            qr.make(fit=True)
-
-            img = qr.make_image(fill_color="black", back_color="white")
-            img = img.resize((210, 210), Image.Resampling.NEAREST)
-
-            self.qr_photo = ImageTk.PhotoImage(img)
-            self.qr_label.config(image=self.qr_photo)
-        except Exception as e:
-            self.qr_label.config(text=f"Error generating QR: {e}", fg=ACCENT_RED)
-
-    def copy_ip(self):
-        self.clipboard_clear()
-        self.clipboard_append(self.current_ip)
-        messagebox.showinfo("Copied", f"IP address '{self.current_ip}' copied to clipboard!")
-
-    def copy_pairing_pin(self):
-        self.clipboard_clear()
-        self.clipboard_append(self.auth_token)
-        messagebox.showinfo("Copied", "The Wi-Fi pairing PIN was copied to the clipboard.")
-
-    def refresh_quick_apps(self):
-        if not self.server:
-            return
-        self._quick_apps_refresh_generation = getattr(self, "_quick_apps_refresh_generation", 0) + 1
-        generation = self._quick_apps_refresh_generation
-        self.lbl_quick_apps_status.config(text="Loading installed apps…", fg=TEXT_MUTED)
-
-        def _load():
-            apps = self.server._cached_query("apps", 10.0, self.server._get_installed_apps)
-            quick_apps = load_quick_apps(apps)
-
-            def _update_ui():
-                if not self.winfo_exists() or generation != self._quick_apps_refresh_generation:
-                    return
-                self.available_apps = apps
-                self.quick_apps = quick_apps
-                quick_paths = {item["path"].lower() for item in quick_apps}
-                self.combo_available_apps["values"] = [
-                    item["name"] for item in apps if item["path"].lower() not in quick_paths
-                ]
-                self.list_quick_apps.delete(0, tk.END)
-                for app in quick_apps:
-                    self.list_quick_apps.insert(tk.END, f"{app['name']}  —  {os.path.basename(app['path'])}")
-                if not quick_apps:
-                    self.lbl_quick_apps_status.config(
-                        text="No quick apps saved yet. Select an installed app above to add one.", fg=TEXT_MUTED
-                    )
-                else:
-                    self.lbl_quick_apps_status.config(
-                        text=f"{len(quick_apps)} quick app(s). Select one to rename or remove it.", fg=TEXT_MUTED
-                    )
-
-            self.after(0, _update_ui)
-
-        def _report_error(exc):
-            def _update_ui():
-                if not self.winfo_exists() or generation != self._quick_apps_refresh_generation:
-                    return
-                self.lbl_quick_apps_status.config(text=f"Could not load installed apps: {exc}", fg=ACCENT_RED)
-
-            self.after(0, _update_ui)
-
-        def _run():
-            try:
-                _load()
-            except Exception as exc:
-                _report_error(exc)
-
-        threading.Thread(target=_run, name="QuickAppsRefresh", daemon=True).start()
-
-    def _publish_quick_apps_to_server(self):
-        if not self.server or not self.available_apps:
-            return
-        quick_paths = {os.path.realpath(item["path"]).lower() for item in self.quick_apps}
-        apps = [dict(item, is_quick=os.path.realpath(item["path"]).lower() in quick_paths) for item in self.available_apps]
-        with self.server._query_cache_lock:
-            self.server._query_cache["apps"] = (time.monotonic(), apps)
-
-    def add_quick_app(self):
-        name = self.combo_available_apps.get().strip()
-        match = next((app for app in self.available_apps if app["name"] == name), None)
-        if not match:
-            self.lbl_quick_apps_status.config(text="Choose an installed app from the list first.", fg=ACCENT_RED)
-            return
-        self.quick_apps = save_quick_apps(self.quick_apps + [{"name": match["name"], "path": match["path"]}])
-        self._publish_quick_apps_to_server()
-        self.refresh_quick_apps()
-        self.lbl_quick_apps_status.config(text=f"Added {match['name']}.", fg=ACCENT_GREEN)
-
-    def on_quick_app_selected(self, _event=None):
-        selected = self.list_quick_apps.curselection()
-        if selected:
-            app = self.quick_apps[selected[0]]
-            self.ent_quick_app_name.delete(0, tk.END)
-            self.ent_quick_app_name.insert(0, app["name"])
-
-    def rename_quick_app(self):
-        selected = self.list_quick_apps.curselection()
-        new_name = self.ent_quick_app_name.get().strip()
-        if not selected or not new_name:
-            self.lbl_quick_apps_status.config(text="Select an app and enter its new display name.", fg=ACCENT_RED)
-            return
-        self.quick_apps[selected[0]]["name"] = new_name[:60]
-        self.quick_apps = save_quick_apps(self.quick_apps)
-        self._publish_quick_apps_to_server()
-        self.refresh_quick_apps()
-        self.lbl_quick_apps_status.config(text="Quick app name saved.", fg=ACCENT_GREEN)
-
-    def remove_quick_app(self):
-        selected = self.list_quick_apps.curselection()
-        if not selected:
-            self.lbl_quick_apps_status.config(text="Select a quick app to remove it.", fg=ACCENT_RED)
-            return
-        name = self.quick_apps[selected[0]]["name"]
-        self.quick_apps = save_quick_apps([app for i, app in enumerate(self.quick_apps) if i != selected[0]])
-        self._publish_quick_apps_to_server()
-        self.refresh_quick_apps()
-        self.lbl_quick_apps_status.config(text=f"Removed {name} from Quick Apps.", fg=ACCENT_GREEN)
-
-    def open_windows_bt_settings(self):
-        try:
-            os.system("start ms-settings:bluetooth")
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not open Bluetooth settings: {e}")
-
-    def open_paint(self):
-        try:
-            os.system("start mspaint")
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not launch Paint: {e}")
-
-    def log(self, message):
-        timestamp = time.strftime("%H:%M:%S")
-        self.txt_log.insert("end", f"[{timestamp}] {message}\n")
-        self.txt_log.see("end")
-
-    def _on_packet(self, cmd_type, addr, data):
-        self.packet_count += 1
-        if self.packet_count % 15 == 0:
-            self.lbl_packets.config(text=f"Packets Received: {self.packet_count}")
-        if cmd_type in ("connect", "disconnect", "text", "pen"):
-            self.after(0, lambda: self.log(f"{cmd_type.upper()} from {addr[0] if addr else ''}"))
-
-    def _on_client(self, client_name, is_connected):
-        self.last_client = client_name if is_connected else "Disconnected"
-        color = ACCENT_GREEN if is_connected else TEXT_MUTED
-        text = f"Client: {client_name}" if is_connected else "Client: Disconnected"
-        self.after(0, lambda: self.lbl_client.config(text=text, fg=color))
-
-    def _on_status(self, is_running):
-        self.is_server_running = is_running
-        if is_running:
-            self.after(0, lambda: self.lbl_status_pill.config(text="● SERVER LISTENING", fg=ACCENT_GREEN))
-            self.after(0, lambda: self.btn_toggle.config(text="Stop Server", fg=ACCENT_RED))
-        else:
-            self.after(0, lambda: self.lbl_status_pill.config(text="○ SERVER STOPPED", fg=ACCENT_RED))
-            self.after(0, lambda: self.btn_toggle.config(text="Start Server", fg=ACCENT_GREEN))
-
-    def start_server(self):
-        if self.server and self.server.running:
-            return
-        if not self.server:
-            self._init_server()
-
-        self.server_thread = threading.Thread(target=self.server.start, daemon=True)
-        self.server_thread.start()
-        self.log(f"Server starting on UDP port {self.current_port}...")
-
-    def stop_server(self):
-        if self.server:
-            self.server.stop()
-            self.log("Server stopped.")
-            self._on_status(False)
-
-    def toggle_server(self):
-        if self.is_server_running:
-            self.stop_server()
-        else:
-            self.start_server()
-
-    def _update_auth_token(self):
-        new_token = self.ent_token.get().strip()
-        if new_token.isdigit() and len(new_token) == 6:
-            try:
-                save_pairing_pin(new_token)
-            except OSError as e:
-                messagebox.showerror("PIN Not Saved", f"Could not save the pairing PIN: {e}")
-                return
-            self.auth_token = new_token
-            if hasattr(self, "lbl_wifi_pin"):
-                self.lbl_wifi_pin.config(text=new_token)
-            if hasattr(self, "lbl_sidebar_pin"):
-                self.lbl_sidebar_pin.config(text=f"PIN: {new_token}")
-            if self.server:
-                self.server.auth_token = new_token
-                if hasattr(self.server, "ws_server") and self.server.ws_server:
-                    self.server.ws_server.auth_token = new_token
-            self.generate_qr()
-            self.generate_wan_qr()
-            messagebox.showinfo("Pairing PIN Updated", "The new six-digit PIN is active for Wi-Fi and remote pairing.")
-        else:
-            messagebox.showerror("Invalid PIN", "Use exactly six digits for the pairing PIN.")
-
-    def copy_wan_url(self):
-        url = f"ws://{self.current_ip}:{self.ws_port}"
-        self.clipboard_clear()
-        self.clipboard_append(url)
-        messagebox.showinfo(
-            "Copied", f"Local WebSocket URL '{url}' copied. For Internet access, use a TLS-protected wss:// endpoint."
-        )
-
-    def generate_wan_qr(self):
-        if not HAS_QR:
-            if hasattr(self, "wan_qr_label"):
-                self.wan_qr_label.config(text="QR library not found.", fg=ACCENT_RED, bg="#FFFFFF")
-            return
-        hostname = socket.gethostname()
-        payload = json.dumps({
-            "type": "btmouse_wan",
-            "url": f"ws://{self.current_ip}:{self.ws_port}",
-            "ip": self.current_ip,
-            "port": self.ws_port,
-            "name": hostname,
-            "pin": self.auth_token,
-            "token": self.auth_token
-        })
-        try:
-            qr = qrcode.QRCode(version=1, box_size=5, border=2)
-            qr.add_data(payload)
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-            img = img.resize((200, 200), Image.Resampling.NEAREST)
-            self.wan_qr_photo = ImageTk.PhotoImage(img)
-            self.wan_qr_label.config(image=self.wan_qr_photo)
-            if hasattr(self, "lbl_wan_url"):
-                self.lbl_wan_url.config(text=f"ws://{self.current_ip}:{self.ws_port}")
-        except Exception as e:
-            if hasattr(self, "wan_qr_label"):
-                self.wan_qr_label.config(text=f"Error: {e}", fg=ACCENT_RED)
-
-    def test_camera_snapshot(self):
-        if not self.server:
-            return
-        self.lbl_media_status.config(text="Capturing camera frame...", fg=ACCENT_CYAN)
-
-        def _snap():
-            b64 = self.server.camera_manager.get_snapshot()
-            if b64:
-                import io
-                raw = base64.b64decode(b64)
-                img = Image.open(io.BytesIO(raw))
-                img = img.resize((240, 180), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                last_path = getattr(self.server.camera_manager, "last_snapshot_path", None)
-                snap_name = os.path.basename(last_path) if last_path else "snapshot.jpg"
-
-                def _update_ui():
-                    self.cam_photo = photo
-                    self.lbl_cam_preview.config(image=self.cam_photo)
-                    self.lbl_media_status.config(text=f"✓ Camera snapshot captured & saved: {snap_name}", fg=ACCENT_GREEN)
-                    self.refresh_recordings()
-
-                self.after(0, _update_ui)
-            else:
-                self.after(0, lambda: self.lbl_media_status.config(text="✕ Could not access camera.", fg=ACCENT_RED))
-
-        threading.Thread(target=_snap, daemon=True).start()
-
-    def test_mic_record(self):
-        if not self.server:
-            return
-        self.lbl_media_status.config(text="Recording microphone for 3 seconds...", fg=ACCENT_CYAN)
-
-        def _rec():
-            rec_file = self.server.audio_manager.start_recording()
-            if not rec_file:
-                reason = self.server.audio_manager.last_error or "No microphone input is available."
-                self.after(0, lambda: self.lbl_media_status.config(text=f"✕ {reason}", fg=ACCENT_RED))
-                return
-            time.sleep(3.0)
-            final_file = self.server.audio_manager.stop_recording()
-            if final_file and os.path.exists(final_file):
-                sz = os.path.getsize(final_file)
-                self.after(
-                    0,
-                    lambda: self.lbl_media_status.config(
-                        text=f"✓ Recorded {os.path.basename(final_file)} ({sz} bytes)", fg=ACCENT_GREEN
-                    ),
-                )
-                self.after(0, self.refresh_recordings)
-            else:
-                reason = self.server.audio_manager.last_error or "Microphone recording stopped without a file."
-                self.after(0, lambda: self.lbl_media_status.config(text=f"✕ {reason}", fg=ACCENT_RED))
-
-        threading.Thread(target=_rec, daemon=True).start()
-
-    def restart_server(self):
-        self.log("Restarting server...")
-        self.lbl_status_pill.config(text="● RESTARTING...", fg=ACCENT_CYAN)
-
-        def _do_restart():
-            if self.server:
-                self.server.stop()
-                if self.server_thread and self.server_thread.is_alive():
-                    self.server_thread.join(timeout=1.0)
-            time.sleep(0.3)
-            self._init_server()
-            self.server_thread = threading.Thread(target=self.server.start, daemon=True)
-            self.server_thread.start()
-            self.after(0, lambda: self.log("Server successfully restarted."))
-
-        threading.Thread(target=_do_restart, daemon=True).start()
 
     def quit_application(self):
         if self.tray_icon:
             try:
-                self.tray_icon.stop()
+                self.tray_icon.hide()
             except Exception:
                 pass
         if self.server:
             self.server.stop()
-        self.destroy()
+        QApplication.quit()
         sys.exit(0)
 
 
 if __name__ == "__main__":
     set_windows_dpi_awareness()
-    app = CompanionApp()
-    app.mainloop()
+    if HAS_QT:
+        qt_app = QApplication(sys.argv)
+        qt_app.setQuitOnLastWindowClosed(False)
+        win = CompanionApp()
+        if "--minimized" not in sys.argv:
+            win.show()
+        sys.exit(qt_app.exec())
+    else:
+        print("[!] PyQt6 is required to launch the desktop GUI. Run: pip install -r requirements.txt")

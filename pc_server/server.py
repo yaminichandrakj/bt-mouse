@@ -129,6 +129,415 @@ def prepare_recording_storage(directory, retention_days=0, max_storage_mb=0, min
     return True, ""
 
 
+def get_btmouse_media_dirs():
+    """Return and initialize the separated Videos, Audios, and Snapshots directories."""
+    user_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    base_dir = Path(user_data) / "BTMouse"
+    videos_dir = base_dir / "Videos"
+    audios_dir = base_dir / "Audios"
+    snapshots_dir = base_dir / "Snapshots"
+    legacy_dir = base_dir / "Recordings"
+    for d in (videos_dir, audios_dir, snapshots_dir):
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    # Migrate any completed files from legacy Recordings/ folder into Videos/, Audios/, Snapshots/
+    if legacy_dir.is_dir():
+        for item in legacy_dir.iterdir():
+            if not item.is_file() or item.name.endswith(".part") or item.name.startswith("_mux_"):
+                continue
+            ext = item.suffix.lower()
+            if ext in {".mp4", ".avi", ".mkv", ".webm"}:
+                dest = videos_dir / item.name
+            elif ext in {".wav", ".m4a", ".mp3"}:
+                dest = audios_dir / item.name
+            elif ext in {".jpg", ".jpeg", ".png"}:
+                dest = snapshots_dir / item.name
+            else:
+                continue
+            try:
+                if not dest.exists():
+                    shutil.move(str(item), str(dest))
+            except OSError:
+                pass
+    return {
+        "base": str(base_dir),
+        "videos": str(videos_dir),
+        "audios": str(audios_dir),
+        "snapshots": str(snapshots_dir),
+    }
+
+
+def _find_ffmpeg_executable():
+    """Locate ffmpeg via imageio_ffmpeg or system PATH for muxing audio + video."""
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.isfile(exe):
+            return exe
+    except Exception:
+        pass
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    return None
+
+
+def ensure_android_playable_mp4(video_path):
+    """Transcode/remux a recorded video into universal H.264 (yuv420p + faststart) so Android players never fail."""
+    if not video_path:
+        return video_path
+    v_path = Path(video_path)
+    if not v_path.is_file() or v_path.stat().st_size <= 512:
+        return video_path
+    ffmpeg_exe = _find_ffmpeg_executable()
+    if not ffmpeg_exe:
+        return str(v_path)
+    tmp_out = v_path.with_name(f"{v_path.stem}.h264_tmp.mp4")
+    tmp_out.unlink(missing_ok=True)
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-i", str(v_path),
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(tmp_out),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, creationflags=flags)
+        if res.returncode == 0 and tmp_out.is_file() and tmp_out.stat().st_size > 512:
+            os.replace(str(tmp_out), str(v_path))
+            return str(v_path)
+        tmp_out.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"[-] H.264 faststart optimization warning: {exc}")
+        try:
+            tmp_out.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return str(v_path)
+
+
+def mux_video_and_audio(video_path, audio_path):
+    """Mux a recorded MP4 video file and WAV audio file into a single H.264 +faststart MP4 in Videos/."""
+    if not video_path:
+        return video_path
+    if not audio_path or not Path(audio_path).is_file():
+        return ensure_android_playable_mp4(video_path)
+    v_path = Path(video_path)
+    a_path = Path(audio_path)
+    if not v_path.is_file():
+        return video_path
+    ffmpeg_exe = _find_ffmpeg_executable()
+    if not ffmpeg_exe:
+        try:
+            dirs = get_btmouse_media_dirs()
+            fallback_audio = Path(dirs["audios"]) / a_path.name.lstrip("_")
+            if a_path.name.startswith("_"):
+                shutil.move(str(a_path), str(fallback_audio))
+        except OSError:
+            pass
+        return str(v_path)
+
+    muxed_tmp = v_path.with_name(f"{v_path.stem}.muxed.mp4")
+    muxed_tmp.unlink(missing_ok=True)
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        cmd = [
+            ffmpeg_exe,
+            "-y",
+            "-i", str(v_path),
+            "-i", str(a_path),
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-shortest",
+            str(muxed_tmp),
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, creationflags=flags)
+        if res.returncode == 0 and muxed_tmp.is_file() and muxed_tmp.stat().st_size > 512:
+            os.replace(str(muxed_tmp), str(v_path))
+            try:
+                a_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            print(f"[+] Muxed combined H.264 video + audio into {v_path}")
+            return str(v_path)
+        else:
+            muxed_tmp.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"[-] Audio/video muxing warning: {exc}")
+        try:
+            muxed_tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return ensure_android_playable_mp4(str(v_path))
+
+
+_APP_ICON_MEM_CACHE = {}
+_APP_ICON_LOCK = threading.Lock()
+
+
+def infer_app_brand_key(name="", path_or_cmd=""):
+    """Identify known desktop apps, browsers, and OTT platforms by name or path for rich brand rendering."""
+    haystack = f"{name} {path_or_cmd}".lower()
+    mapping = (
+        ("youtube music", "youtube_music"),
+        ("youtube", "youtube"),
+        ("netflix", "netflix"),
+        ("prime video", "prime_video"),
+        ("amazon video", "prime_video"),
+        ("crunchyroll", "crunchyroll"),
+        ("hotstar", "hotstar"),
+        ("jiohotstar", "hotstar"),
+        ("disney+", "disney_plus"),
+        ("disneyplus", "disney_plus"),
+        ("twitch", "twitch"),
+        ("spotify", "spotify"),
+        ("apple music", "apple_music"),
+        ("itunes", "apple_music"),
+        ("soundcloud", "soundcloud"),
+        ("tidal", "tidal"),
+        ("vlc", "vlc"),
+        ("wmplayer", "wmp"),
+        ("windows media player", "wmp"),
+        ("chrome", "chrome"),
+        ("msedge", "edge"),
+        ("microsoft edge", "edge"),
+        ("brave", "brave"),
+        ("firefox", "firefox"),
+        ("opera", "opera"),
+        ("vivaldi", "vivaldi"),
+        ("steam", "steam"),
+        ("discord", "discord"),
+        ("visual studio code", "vscode"),
+        ("vscode", "vscode"),
+        ("code.exe", "vscode"),
+        ("obs studio", "obs"),
+        ("obs64", "obs"),
+        ("blender", "blender"),
+        ("onenote", "onenote"),
+        ("winword", "word"),
+        ("microsoft word", "word"),
+        ("excel", "excel"),
+        ("powerpnt", "powerpoint"),
+        ("powerpoint", "powerpoint"),
+        ("photoshop", "photoshop"),
+        ("terminal", "terminal"),
+        ("powershell", "terminal"),
+        ("cmd.exe", "terminal"),
+        ("calculator", "calculator"),
+        ("calc", "calculator"),
+        ("task manager", "taskmgr"),
+        ("taskmgr", "taskmgr"),
+        ("notepad", "notepad"),
+        ("explorer", "explorer"),
+    )
+    for needle, key in mapping:
+        if needle in haystack:
+            return key
+    return ""
+
+
+def _resolve_executable_or_shortcut(path_or_cmd):
+    """Resolve a shortcut, executable path, or command name (e.g. 'steam', 'chrome') to an existing file on Windows."""
+    raw = str(path_or_cmd or "").strip().strip('"')
+    if not raw:
+        return ""
+    expanded = os.path.expandvars(raw)
+    if os.path.isfile(expanded):
+        return os.path.realpath(expanded)
+    which_hit = shutil.which(expanded) or shutil.which(f"{expanded}.exe")
+    if which_hit and os.path.isfile(which_hit):
+        return os.path.realpath(which_hit)
+    if IS_WINDOWS:
+        try:
+            import winreg
+            exe_name = expanded if expanded.lower().endswith(".exe") else f"{expanded}.exe"
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(hive, rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}") as k:
+                        val, _ = winreg.QueryValueEx(k, "")
+                        val = str(val or "").strip().strip('"')
+                        if val and os.path.isfile(val):
+                            return os.path.realpath(val)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+        # Search Start Menu shortcuts by name match
+        needle = os.path.splitext(os.path.basename(expanded))[0].lower()
+        start_paths = [
+            os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
+            os.path.expandvars(r"%AppData%\Microsoft\Windows\Start Menu\Programs"),
+        ]
+        for sp in start_paths:
+            if not os.path.isdir(sp):
+                continue
+            for root, _, files in os.walk(sp):
+                for f in files:
+                    if f.lower().endswith(".lnk"):
+                        stem = os.path.splitext(f)[0].lower()
+                        if stem == needle or needle in stem:
+                            cand = os.path.join(root, f)
+                            if os.path.isfile(cand):
+                                return cand
+    return ""
+
+
+def extract_windows_app_icon_base64(path_or_cmd, size=44):
+    """Extract the native Windows icon for a .lnk shortcut, .exe, or command name as a compact Base64 PNG."""
+    raw_key = str(path_or_cmd or "").strip().lower()
+    if not raw_key:
+        return ""
+    with _APP_ICON_LOCK:
+        if raw_key in _APP_ICON_MEM_CACHE:
+            return _APP_ICON_MEM_CACHE[raw_key]
+
+    target = _resolve_executable_or_shortcut(path_or_cmd)
+    if not target or not os.path.isfile(target):
+        return ""
+
+    encoded = ""
+    if IS_WINDOWS:
+        # Strategy 1: Win32 Shell SHGetFileInfoW + GetIconInfo + GetDIBits -> PIL RGBA PNG
+        try:
+            import ctypes
+            from ctypes import wintypes
+            from io import BytesIO
+            from PIL import Image
+
+            SHGFI_ICON = 0x000000100
+            SHGFI_LARGEICON = 0x000000000
+
+            class SHFILEINFOW(ctypes.Structure):
+                _fields_ = [
+                    ("hIcon", wintypes.HICON),
+                    ("iIcon", ctypes.c_int),
+                    ("dwAttributes", wintypes.DWORD),
+                    ("szDisplayName", wintypes.WCHAR * 260),
+                    ("szTypeName", wintypes.WCHAR * 80),
+                ]
+
+            class ICONINFO(ctypes.Structure):
+                _fields_ = [
+                    ("fIcon", wintypes.BOOL),
+                    ("xHotspot", wintypes.DWORD),
+                    ("yHotspot", wintypes.DWORD),
+                    ("hbmMask", wintypes.HBITMAP),
+                    ("hbmColor", wintypes.HBITMAP),
+                ]
+
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ("biSize", wintypes.DWORD),
+                    ("biWidth", ctypes.c_long),
+                    ("biHeight", ctypes.c_long),
+                    ("biPlanes", wintypes.WORD),
+                    ("biBitCount", wintypes.WORD),
+                    ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD),
+                    ("biXPelsPerMeter", ctypes.c_long),
+                    ("biYPelsPerMeter", ctypes.c_long),
+                    ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD),
+                ]
+
+            class BITMAP(ctypes.Structure):
+                _fields_ = [
+                    ("bmType", ctypes.c_long),
+                    ("bmWidth", ctypes.c_long),
+                    ("bmHeight", ctypes.c_long),
+                    ("bmWidthBytes", ctypes.c_long),
+                    ("bmPlanes", wintypes.WORD),
+                    ("bmBitsPixel", wintypes.WORD),
+                    ("bmBits", ctypes.c_void_p),
+                ]
+
+            shfi = SHFILEINFOW()
+            res = ctypes.windll.shell32.SHGetFileInfoW(
+                ctypes.c_wchar_p(target),
+                0,
+                ctypes.byref(shfi),
+                ctypes.sizeof(shfi),
+                SHGFI_ICON | SHGFI_LARGEICON,
+            )
+            if res and shfi.hIcon:
+                hicon = shfi.hIcon
+                icon_info = ICONINFO()
+                if ctypes.windll.user32.GetIconInfo(hicon, ctypes.byref(icon_info)):
+                    hbm = icon_info.hbmColor or icon_info.hbmMask
+                    bmp = BITMAP()
+                    if hbm and ctypes.windll.gdi32.GetObjectW(hbm, ctypes.sizeof(bmp), ctypes.byref(bmp)):
+                        w, h = int(bmp.bmWidth), int(bmp.bmHeight)
+                        if w > 0 and h > 0:
+                            bmi = BITMAPINFOHEADER()
+                            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                            bmi.biWidth = w
+                            bmi.biHeight = -h  # top-down DIB
+                            bmi.biPlanes = 1
+                            bmi.biBitCount = 32
+                            bmi.biCompression = 0
+                            buf_len = w * h * 4
+                            buf = ctypes.create_string_buffer(buf_len)
+                            hdc = ctypes.windll.user32.GetDC(0)
+                            try:
+                                lines = ctypes.windll.gdi32.GetDIBits(
+                                    hdc, hbm, 0, h, buf, ctypes.byref(bmi), 0
+                                )
+                                if lines > 0:
+                                    img = Image.frombuffer("RGBA", (w, h), buf.raw, "raw", "BGRA", 0, 1)
+                                    img = img.resize((size, size), Image.Resampling.LANCZOS)
+                                    out = BytesIO()
+                                    img.save(out, format="PNG", optimize=True)
+                                    encoded = base64.b64encode(out.getvalue()).decode("ascii")
+                            finally:
+                                ctypes.windll.user32.ReleaseDC(0, hdc)
+                    if icon_info.hbmColor:
+                        ctypes.windll.gdi32.DeleteObject(icon_info.hbmColor)
+                    if icon_info.hbmMask:
+                        ctypes.windll.gdi32.DeleteObject(icon_info.hbmMask)
+                ctypes.windll.user32.DestroyIcon(hicon)
+        except Exception:
+            pass
+
+        # Strategy 2: QFileIconProvider fallback if Qt is initialized
+        if not encoded:
+            try:
+                from PyQt6.QtWidgets import QApplication, QFileIconProvider
+                from PyQt6.QtCore import QFileInfo, QBuffer, QIODevice
+                if QApplication.instance() is not None:
+                    provider = QFileIconProvider()
+                    qicon = provider.icon(QFileInfo(target))
+                    if not qicon.isNull():
+                        pix = qicon.pixmap(size, size)
+                        if not pix.isNull():
+                            qbuf = QBuffer()
+                            qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
+                            pix.save(qbuf, "PNG")
+                            encoded = base64.b64encode(bytes(qbuf.data())).decode("ascii")
+            except Exception:
+                pass
+
+    if encoded and len(encoded) <= 12000:
+        with _APP_ICON_LOCK:
+            _APP_ICON_MEM_CACHE[raw_key] = encoded
+            _APP_ICON_MEM_CACHE[os.path.normcase(target)] = encoded
+        return encoded
+    return ""
+
+
 def save_quick_apps(apps):
     """Persist curated Start Menu shortcuts; arbitrary commands are never accepted."""
     roots = [
@@ -532,22 +941,92 @@ class MediaController:
         return ""
 
     @staticmethod
-    def _identify_player(app_id="", title="", process_name=""):
-        identity = f"{app_id} {title} {process_name}".lower()
-        known = (
-            ("youtube music", "YouTube Music"), ("youtube", "YouTube"),
-            ("netflix", "Netflix"), ("prime video", "Prime Video"), ("amazon video", "Prime Video"),
-            ("disney+", "Disney+"), ("disneyplus", "Disney+"), ("spotify", "Spotify"),
-            ("apple music", "Apple Music"), ("tidal", "Tidal"), ("vlc", "VLC"),
-            ("groove", "Groove Music"), ("zunemusic", "Groove Music"),
-            ("windows media player", "Windows Media Player"), ("wmplayer", "Windows Media Player"),
-            ("brave", "Brave"), ("msedge", "Microsoft Edge"), ("edge", "Microsoft Edge"),
-            ("chrome", "Chrome"), ("firefox", "Firefox"), ("opera", "Opera"), ("vivaldi", "Vivaldi"),
+    def _identify_player_and_key(app_id="", title="", artist="", album="", process_name="", extra_titles=""):
+        identity = f"{title} {artist} {album} {extra_titles} {app_id} {process_name}".lower()
+        # Check OTT & streaming content platforms first (even when playing inside a browser!)
+        ott_sites = (
+            ("youtube music", "YouTube Music", "youtube_music"),
+            ("music.youtube", "YouTube Music", "youtube_music"),
+            ("youtube", "YouTube", "youtube"),
+            ("youtu.be", "YouTube", "youtube"),
+            ("crunchyroll", "Crunchyroll", "crunchyroll"),
+            ("netflix", "Netflix", "netflix"),
+            ("prime video", "Prime Video", "prime_video"),
+            ("amazon video", "Prime Video", "prime_video"),
+            ("primevideo", "Prime Video", "prime_video"),
+            ("jiohotstar", "JioHotstar", "hotstar"),
+            ("hotstar", "Disney+ Hotstar", "hotstar"),
+            ("disney+", "Disney+", "disney_plus"),
+            ("disneyplus", "Disney+", "disney_plus"),
+            ("twitch", "Twitch", "twitch"),
+            ("soundcloud", "SoundCloud", "soundcloud"),
+            ("spotify", "Spotify", "spotify"),
+            ("apple music", "Apple Music", "apple_music"),
+            ("music.apple", "Apple Music", "apple_music"),
+            ("tidal", "Tidal", "tidal"),
+            ("vlc", "VLC", "vlc"),
+            ("groove", "Groove Music", "wmp"),
+            ("zunemusic", "Media Player", "wmp"),
+            ("windows media player", "Windows Media Player", "wmp"),
+            ("wmplayer", "Windows Media Player", "wmp"),
         )
-        for needle, label in known:
+        for needle, label, key in ott_sites:
             if needle in identity:
-                return label
-        return "Media Player" if app_id or process_name else ""
+                return label, key
+
+        browsers = (
+            ("brave", "Brave", "brave"),
+            ("msedge", "Microsoft Edge", "edge"),
+            ("edge", "Microsoft Edge", "edge"),
+            ("chrome", "Chrome", "chrome"),
+            ("firefox", "Firefox", "firefox"),
+            ("opera", "Opera", "opera"),
+            ("vivaldi", "Vivaldi", "vivaldi"),
+        )
+        for needle, label, key in browsers:
+            if needle in identity:
+                return label, key
+
+        if app_id or process_name:
+            clean = os.path.splitext(os.path.basename(str(process_name or app_id)))[0]
+            return (clean.title() if clean else "Media Player"), infer_app_brand_key(clean, app_id)
+        return "", ""
+
+    @classmethod
+    def _identify_player(cls, app_id="", title="", process_name="", artist="", album="", extra_titles=""):
+        label, _ = cls._identify_player_and_key(
+            app_id=app_id, title=title, artist=artist, album=album,
+            process_name=process_name, extra_titles=extra_titles
+        )
+        return label
+
+    def _get_browser_window_titles(self):
+        """Return visible browser window titles so OTT sites like Netflix/Prime/Crunchyroll/YouTube are recognized."""
+        if not IS_WINDOWS:
+            return ""
+        try:
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            found = []
+            callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def _visit(hwnd, _lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = min(512, user32.GetWindowTextLengthW(hwnd))
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    val = buf.value.strip()
+                    low = val.lower()
+                    if any(b in low for b in ("youtube", "netflix", "prime video", "crunchyroll", "disney+", "hotstar", "twitch", "spotify", "soundcloud", "apple music", "chrome", "edge", "brave", "firefox", "opera")):
+                        found.append(val)
+                return len(found) < 8
+
+            user32.EnumWindows(callback_type(_visit), 0)
+            return " | ".join(found)
+        except Exception:
+            return ""
 
     def _detect_browser_audio_session(self):
         """Recognize active browser audio even when it does not publish an SMTC session."""
@@ -651,16 +1130,25 @@ class MediaController:
                         status_str = status_map.get(int(info.playback_status), "Unknown")
                         pos_sec = timeline.position.total_seconds() if timeline and timeline.position else 0.0
                         end_sec = timeline.end_time.total_seconds() if timeline and timeline.end_time else 0.0
+                        raw_app_id = getattr(session, "source_app_user_model_id", "") or ""
+                        extra_browser_titles = self._get_browser_window_titles()
+                        player_label, player_key = self._identify_player_and_key(
+                            app_id=raw_app_id,
+                            title=props.title if props else "",
+                            artist=props.artist if props else "",
+                            album=props.album_title if props else "",
+                            extra_titles=extra_browser_titles,
+                        )
+                        player_icon_b64 = extract_windows_app_icon_base64(raw_app_id or player_label)
                         state = {
                             "has_media": bool(props and (props.title or props.artist or status_str in ("Playing", "Paused"))),
                             "title": (props.title or "Unknown Track") if props else "",
                             "artist": (props.artist or "Unknown Artist") if props else "",
                             "album": (props.album_title or "") if props else "",
                             "status": status_str,
-                            "player": self._identify_player(
-                                getattr(session, "source_app_user_model_id", ""),
-                                props.title if props else "",
-                            ),
+                            "player": player_label,
+                            "player_key": player_key,
+                            "player_icon": player_icon_b64,
                             "position": round(pos_sec, 1),
                             "duration": round(end_sec, 1),
                             "volume": round(vol, 2),
@@ -694,13 +1182,20 @@ class MediaController:
             if browser_audio:
                 browser_name, process_id = browser_audio
                 window_title = self._get_process_window_title(process_id)
+                p_label, p_key = self._identify_player_and_key(
+                    title=window_title,
+                    process_name=browser_name,
+                    extra_titles=self._get_browser_window_titles(),
+                )
                 self.last_state.update({
                     "has_media": True,
                     "title": window_title or f"Playing in {browser_name}",
-                    "artist": "Browser audio",
+                    "artist": p_label or "Browser audio",
                     "album": "",
                     "status": "Playing",
-                    "player": self._identify_player(title=window_title, process_name=browser_name),
+                    "player": p_label,
+                    "player_key": p_key,
+                    "player_icon": extract_windows_app_icon_base64(browser_name),
                     "position": 0.0,
                     "duration": 0.0,
                     "artwork": "",
@@ -982,13 +1477,12 @@ class CameraManager:
         self.lock = threading.Lock()
         self.lifecycle_lock = threading.RLock()
         self.generation = 0
-        user_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        self.recordings_dir = os.path.join(user_data, "BTMouse", "Recordings")
-        os.makedirs(self.recordings_dir, exist_ok=True)
-        self.snapshots_dir = os.path.join(user_data, "BTMouse", "Snapshots")
-        os.makedirs(self.snapshots_dir, exist_ok=True)
+        dirs = get_btmouse_media_dirs()
+        self.videos_dir = dirs["videos"]
+        self.recordings_dir = self.videos_dir
+        self.snapshots_dir = dirs["snapshots"]
         self.last_snapshot_path = None
-        self.auto_record_enabled = False
+        self.auto_record_enabled = True
         self.last_recording_path = None
         self.last_recording_error = ""
         self.recording_active = False
@@ -1150,7 +1644,7 @@ class CameraManager:
                             if generation == self.generation:
                                 copy_frame = getattr(frame, "copy", None)
                                 self.latest_frame = copy_frame() if callable(copy_frame) else frame
-                        if record_enabled:
+                        if record_enabled and hasattr(cv2, "VideoWriter_fourcc") and hasattr(cv2, "VideoWriter"):
                             if writer is None and not recording_attempted:
                                 recording_attempted = True
                                 height, width = frame.shape[:2]
@@ -1216,6 +1710,8 @@ class CameraManager:
             finally:
                 if writer is not None:
                     writer.release()
+                    if recording_path and not getattr(self, "_external_mux_pending", False):
+                        ensure_android_playable_mp4(recording_path)
                     print(f"[+] Finished webcam recording: {recording_path}")
                 with self.lock:
                     if generation == self.generation:
@@ -1280,9 +1776,9 @@ class AudioManager:
     def __init__(self):
         self.recording = False
         self.record_thread = None
-        user_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        self.recordings_dir = os.path.join(user_data, "BTMouse", "Recordings")
-        os.makedirs(self.recordings_dir, exist_ok=True)
+        dirs = get_btmouse_media_dirs()
+        self.audios_dir = dirs["audios"]
+        self.recordings_dir = self.audios_dir
         self.current_filename = None
         self.last_error = None
         self.recording_policy = {"retention_days": 0, "max_storage_mb": 0, "min_free_mb": 512}
@@ -1294,7 +1790,7 @@ class AudioManager:
         except ImportError:
             pass
 
-    def start_recording(self):
+    def start_recording(self, target_path=None):
         if not self.has_audio:
             self.last_error = "Microphone support is unavailable. Install the companion audio dependencies."
             return None
@@ -1310,7 +1806,7 @@ class AudioManager:
             return None
         self.last_error = None
         ts = time.strftime("%Y%m%d_%H%M%S")
-        self.current_filename = os.path.join(self.recordings_dir, f"audio_{ts}.wav")
+        self.current_filename = target_path or os.path.join(self.recordings_dir, f"audio_{ts}.wav")
         ready = threading.Event()
         startup = {"error": None}
 
@@ -1454,7 +1950,9 @@ class LiveAudioManager:
                 pcm = data.tobytes()
                 if recorder:
                     recorder.writeframesraw(pcm)
-                respond({
+                with self.lock:
+                    active_respond = self.capture_respond or respond
+                active_respond({
                     "type": "live_audio_frame",
                     "direction": "pc_to_phone",
                     "rate": self.SAMPLE_RATE,
@@ -1522,13 +2020,19 @@ class LiveAudioManager:
         unique = f"{time.time_ns() % 1_000_000_000:09d}"
         return os.path.join(self.recordings_dir, f"{prefix}_{stamp}_{unique}.wav")
 
-    def touch_owner(self, owner):
+    def touch_owner(self, owner, respond=None, migrate=False):
         now = time.monotonic()
         with self.lock:
-            if self.capture_owner == owner:
+            if self.capture_running and (self.capture_owner == owner or migrate):
+                self.capture_owner = owner
                 self.capture_last_seen = now
-            if self.output_owner == owner:
+                if respond is not None:
+                    self.capture_respond = respond
+            if self.output_running and (self.output_owner == owner or migrate):
+                self.output_owner = owner
                 self.output_last_seen = now
+                if respond is not None:
+                    self.output_respond = respond
 
     def _start_lease_watcher(self):
         if self.lease_thread and self.lease_thread.is_alive():
@@ -1639,8 +2143,11 @@ class LiveAudioManager:
 
     def accept_phone_audio(self, owner, pcm):
         with self.lock:
-            if not self.output_running or self.output_owner != owner:
+            if not self.output_running:
                 return False
+            if self.output_owner != owner:
+                self.output_owner = owner
+            self.output_last_seen = time.monotonic()
             audio_queue = self.output_queue
             report_first_frame = not self.output_has_received_audio
             respond = self.output_respond
@@ -1940,6 +2447,9 @@ class PhoneCameraReceiver:
         self.width = 640
         self.height = 360
         self.lens = "back"
+        self.orientation = "landscape"
+        self.rotation_degrees = 0
+        self.mirror_horizontal = False
         self.frame_count = 0
         self.bytes_received = 0
         self.fps = 0.0
@@ -1950,6 +2460,12 @@ class PhoneCameraReceiver:
         self.virtual_cam = None
         self.virtual_cam_status = "MJPEG_STREAM"
         self.virtual_cam_error = "DirectShow/MediaFoundation stream active at /phone_cam/mjpeg"
+        dirs = get_btmouse_media_dirs()
+        self.videos_dir = dirs["videos"]
+        self.snapshots_dir = dirs["snapshots"]
+        self.recording = False
+        self._video_writer = None
+        self.current_recording_path = None
 
     def register_callback(self, callback):
         with self._lock:
@@ -1961,13 +2477,45 @@ class PhoneCameraReceiver:
             if callback in self.on_frame_callbacks:
                 self.on_frame_callbacks.remove(callback)
 
-    def start(self, lens="back", width=640, height=360):
+    def rotate_90(self):
+        with self._lock:
+            self.rotation_degrees = (self.rotation_degrees + 90) % 360
+            return self.rotation_degrees
+
+    def start_recording(self):
+        with self._lock:
+            if self.recording:
+                return self.current_recording_path
+            os.makedirs(self.videos_dir, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            self.current_recording_path = os.path.join(self.videos_dir, f"phone_cam_{ts}.mp4")
+            self.recording = True
+            self._video_writer = None
+            return self.current_recording_path
+
+    def stop_recording(self):
+        with self._lock:
+            self.recording = False
+            writer = self._video_writer
+            self._video_writer = None
+            path = self.current_recording_path
+        if writer is not None:
+            try:
+                writer.release()
+            except Exception:
+                pass
+        if path and os.path.isfile(path):
+            threading.Thread(target=ensure_android_playable_mp4, args=(path,), daemon=True).start()
+        return path
+
+    def start(self, lens="back", width=640, height=360, orientation=None):
         with self._lock:
             self._release_virtual_cam()
             self.is_active = True
             self.lens = lens
             self.width = width
             self.height = height
+            self.orientation = orientation or ("portrait" if height > width else "landscape")
             self.frame_count = 0
             self.bytes_received = 0
             self._fps_window.clear()
@@ -1975,24 +2523,58 @@ class PhoneCameraReceiver:
             self._init_virtual_cam(width, height)
 
     def stop(self):
+        self.stop_recording()
         with self._lock:
             self.is_active = False
             self.latest_jpeg = None
             self._release_virtual_cam()
 
-    def update_frame(self, raw_jpeg, width=None, height=None, lens=None):
+    def _transform_jpeg_if_needed(self, raw_jpeg):
+        rot = self.rotation_degrees % 360
+        mirror = self.mirror_horizontal
+        if rot == 0 and not mirror:
+            return raw_jpeg, self.width, self.height
+        try:
+            from PIL import Image, ImageOps
+            import io
+            img = Image.open(io.BytesIO(raw_jpeg))
+            if mirror:
+                img = ImageOps.mirror(img)
+            if rot == 90:
+                img = img.transpose(Image.Transpose.ROTATE_270)
+            elif rot == 180:
+                img = img.transpose(Image.Transpose.ROTATE_180)
+            elif rot == 270:
+                img = img.transpose(Image.Transpose.ROTATE_90)
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=82)
+            return out.getvalue(), img.width, img.height
+        except Exception:
+            return raw_jpeg, self.width, self.height
+
+    def update_frame(self, raw_jpeg, width=None, height=None, lens=None, orientation=None):
         if not raw_jpeg:
             return
         now = time.monotonic()
         with self._lock:
+            if width and width > 0:
+                self.width = width
+            if height and height > 0:
+                self.height = height
+            if lens:
+                self.lens = lens
+
+        processed_jpeg, eff_w, eff_h = self._transform_jpeg_if_needed(raw_jpeg)
+
+        with self._lock:
             self.is_active = True
-            self.latest_jpeg = raw_jpeg
+            self.latest_jpeg = processed_jpeg
             self.latest_timestamp = now
-            if width and width > 0: self.width = width
-            if height and height > 0: self.height = height
-            if lens: self.lens = lens
+            self.width = eff_w
+            self.height = eff_h
+            self.orientation = orientation or ("portrait" if eff_h > eff_w else "landscape")
             self.frame_count += 1
-            frame_len = len(raw_jpeg)
+            frame_len = len(processed_jpeg)
             self.bytes_received += frame_len
 
             self._fps_window.append(now)
@@ -2009,16 +2591,36 @@ class PhoneCameraReceiver:
 
             callbacks = list(self.on_frame_callbacks)
             vcam = self.virtual_cam
+            is_rec = self.recording
+            rec_path = self.current_recording_path
+
+        if is_rec and rec_path:
+            try:
+                import numpy as np
+                import cv2
+                nparr = np.frombuffer(processed_jpeg, np.uint8)
+                bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if bgr is not None:
+                    with self._lock:
+                        if self.recording:
+                            if self._video_writer is None:
+                                h_f, w_f = bgr.shape[:2]
+                                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                                self._video_writer = cv2.VideoWriter(rec_path, fourcc, max(10.0, self.fps or 20.0), (w_f, h_f))
+                            if self._video_writer is not None and self._video_writer.isOpened():
+                                self._video_writer.write(bgr)
+            except Exception:
+                pass
 
         for cb in callbacks:
             try:
-                cb(raw_jpeg, self.width, self.height, self.lens, self.fps, self.bitrate_kbps)
+                cb(processed_jpeg, self.width, self.height, self.lens, self.fps, self.bitrate_kbps)
             except Exception:
                 pass
 
         if vcam:
             try:
-                self._feed_virtual_cam(raw_jpeg)
+                self._feed_virtual_cam(processed_jpeg)
             except Exception:
                 pass
 
@@ -2232,8 +2834,9 @@ class Server:
         self._camera_stream_owner = None
         self._camera_stream_owner_lock = threading.Lock()
         self._media_operation_lock = threading.Lock()
-        self.auto_record_audio_with_video = False
+        self.auto_record_audio_with_video = True
         self._camera_auto_audio_recording = False
+        self.on_pc_cam_frame_callback = None
         self.media_controller = MediaController(fallback_media_func=self._execute_media)
 
         # Bluetooth RFCOMM Server for mobile companion
@@ -2322,19 +2925,30 @@ class Server:
             return ("wan", None)
         return ("wifi", tuple(addr))
 
-    def _refresh_camera_stream_lease(self, addr, data=None):
+    def _refresh_camera_stream_lease(self, addr, data=None, respond=None):
         key = self._camera_client_key(addr)
         client_session = data.get("client_session") if isinstance(data, dict) else None
+        is_path_switch = isinstance(data, dict) and data.get("type") == "path_switch"
         owner_lock = getattr(self, "_camera_stream_owner_lock", None)
         if owner_lock is not None:
             with owner_lock:
                 owner = getattr(self, "_camera_stream_owner", None)
-                if owner and (owner.get("key") == key or (client_session and owner.get("client_session") == client_session)):
+                if owner and (
+                    owner.get("key") == key
+                    or (client_session and owner.get("client_session") == client_session)
+                    or is_path_switch
+                ):
                     owner["last_seen"] = time.monotonic()
-                    if client_session and owner.get("key") != key:
-                        owner["key"] = key
-        if hasattr(self, "live_audio_manager"):
-            self.live_audio_manager.touch_owner(key)
+                    owner["key"] = key
+                    if respond is not None:
+                        owner["respond"] = respond
+                    if client_session and not owner.get("client_session"):
+                        owner["client_session"] = client_session
+        if hasattr(self, "live_audio_manager") and self.live_audio_manager:
+            try:
+                self.live_audio_manager.touch_owner(key, respond=respond, migrate=is_path_switch)
+            except TypeError:
+                self.live_audio_manager.touch_owner(key)
 
     def _cancel_recording_transfers_for_client(self, owner):
         with self._recording_download_lock:
@@ -2344,6 +2958,15 @@ class Server:
                     if cancel:
                         cancel.set()
 
+    def _finalize_muxed_webcam_recording(self, video_path, audio_path):
+        if video_path and audio_path:
+            threading.Thread(
+                target=mux_video_and_audio,
+                args=(video_path, audio_path),
+                name="MuxWebcamAudioVideo",
+                daemon=True,
+            ).start()
+
     def _stop_camera_stream_for_client(self, key=None):
         should_stop = False
         with self._camera_stream_owner_lock:
@@ -2352,28 +2975,33 @@ class Server:
                 self._camera_stream_owner = None
                 should_stop = True
         if should_stop:
+            video_path = getattr(self.camera_manager, "last_recording_path", None)
             self.camera_manager.stop_stream()
             if self._camera_auto_audio_recording:
-                self.audio_manager.stop_recording()
+                audio_path = self.audio_manager.stop_recording()
                 self._camera_auto_audio_recording = False
+                self._finalize_muxed_webcam_recording(video_path, audio_path)
 
     def _on_camera_stream_ended(self, session_id, owner_key, respond, reason):
         with self._camera_stream_owner_lock:
             owner = self._camera_stream_owner
-            if not owner or owner.get("session_id") != session_id or owner.get("key") != owner_key:
+            if not owner or owner.get("session_id") != session_id:
                 return
+            active_respond = owner.get("respond") or respond
             self._camera_stream_owner = None
-            stop_auto_audio = self._camera_auto_audio_recording
+            stop_auto_audio = getattr(self, "_camera_auto_audio_recording", False)
             self._camera_auto_audio_recording = False
+        video_path = getattr(getattr(self, "camera_manager", None), "last_recording_path", None)
         if stop_auto_audio:
-            self.audio_manager.stop_recording()
+            audio_path = self.audio_manager.stop_recording()
+            self._finalize_muxed_webcam_recording(video_path, audio_path)
         print(f"[-] Webcam stream ended: {reason}")
         try:
-            respond({"type": "camera_stream_status", "streaming": False, "message": reason})
+            active_respond({"type": "camera_stream_status", "streaming": False, "message": reason})
         except Exception:
             pass
 
-    def _start_camera_stream_for_client(self, addr, respond, is_websocket):
+    def _start_camera_stream_for_client(self, addr, respond, is_websocket, client_session=None):
         self._stop_camera_stream_for_client()
         owner_key = self._camera_client_key(addr)
         session_id = secrets.token_hex(8)
@@ -2381,33 +3009,48 @@ class Server:
             self._camera_stream_owner = {
                 "key": owner_key,
                 "session_id": session_id,
+                "client_session": client_session,
+                "respond": respond,
                 "last_seen": time.monotonic(),
             }
 
         recording_state = {"active": False, "error": ""}
 
         def _on_frame(encoded_frame):
+            with self._camera_stream_owner_lock:
+                cur_owner = self._camera_stream_owner
+                active_respond = (cur_owner.get("respond") if cur_owner and cur_owner.get("session_id") == session_id else None) or respond
             active = bool(self.camera_manager.recording_active)
             error = self.camera_manager.last_recording_error if not active else ""
             if active != recording_state["active"] or error != recording_state["error"]:
                 recording_state["active"] = active
                 recording_state["error"] = error
-                respond({"type": "camera_recording_status", "recording": active, "message": error})
-            respond({"type": "camera_frame_response", "frame": encoded_frame, "is_streaming": True})
+                active_respond({"type": "camera_recording_status", "recording": active, "message": error})
+            active_respond({"type": "camera_frame_response", "frame": encoded_frame, "is_streaming": True})
+            if getattr(self, "on_pc_cam_frame_callback", None):
+                try:
+                    self.on_pc_cam_frame_callback(encoded_frame)
+                except Exception:
+                    pass
 
-        max_bytes = 16 * 1024 if not is_websocket else None
+        max_bytes = 24 * 1024 if not is_websocket else None
         started = self.camera_manager.start_stream(
             _on_frame,
-            max_width=160 if max_bytes else 640,
-            quality=35 if max_bytes else 65,
+            max_width=320 if max_bytes else 640,
+            quality=50 if max_bytes else 68,
             max_frame_bytes=max_bytes,
-            fps=8 if max_bytes else 15,
+            fps=12 if max_bytes else 18,
             on_stream_end_callback=lambda reason: self._on_camera_stream_ended(
                 session_id, owner_key, respond, reason
             ),
         )
         if started and self.auto_record_audio_with_video and not self.audio_manager.recording:
-            audio_path = self.audio_manager.start_recording()
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            mux_audio_target = os.path.join(self.audio_manager.recordings_dir, f"_mux_audio_{ts}_{session_id[:6]}.wav")
+            try:
+                audio_path = self.audio_manager.start_recording(target_path=mux_audio_target)
+            except TypeError:
+                audio_path = self.audio_manager.start_recording()
             with self._camera_stream_owner_lock:
                 owner = self._camera_stream_owner
                 still_active = bool(owner and owner.get("session_id") == session_id)
@@ -2592,7 +3235,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.16"
+                    "version": "1.3.17"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2609,7 +3252,7 @@ class Server:
                 respond({"type": "auth_error", "message": "Pairing PIN required or invalid"})
             return
 
-        self._refresh_camera_stream_lease(addr, data)
+        self._refresh_camera_stream_lease(addr, data, respond)
 
         if cmd_type == "ping":
             client_time = data.get("client_time")
@@ -2842,6 +3485,15 @@ class Server:
         elif cmd_type in ("query_apps", "query_installed_apps", "list_apps"):
             self._respond_installed_apps_async(addr, responder)
 
+        elif cmd_type == "query_app_icons":
+            items = data.get("items", [])
+            if isinstance(items, list) and items:
+                threading.Thread(
+                    target=self._respond_app_icons_async,
+                    args=(items[:60], respond),
+                    daemon=True,
+                ).start()
+
         elif cmd_type == "update_quick_apps":
             requested_paths = data.get("paths", [])
             if not isinstance(requested_paths, list) or len(requested_paths) > 150:
@@ -2935,7 +3587,7 @@ class Server:
 
         elif cmd_type == "live_audio_stop":
             def _stop_live_audio():
-                self.live_audio_manager.stop_pc_to_phone(self._camera_client_key(addr))
+                self.live_audio_manager.stop_pc_to_phone()
                 respond({"type": "live_audio_status", "direction": "pc_to_phone", "active": False})
             threading.Thread(target=_stop_live_audio, name="StopLiveAudio", daemon=True).start()
 
@@ -2950,7 +3602,7 @@ class Server:
 
         elif cmd_type == "phone_audio_stop":
             def _stop_phone_audio():
-                self.live_audio_manager.stop_phone_to_pc(self._camera_client_key(addr))
+                self.live_audio_manager.stop_phone_to_pc()
                 respond({"type": "live_audio_status", "direction": "phone_to_pc", "active": False})
             threading.Thread(target=_stop_phone_audio, name="StopPhoneAudio", daemon=True).start()
 
@@ -3019,14 +3671,14 @@ class Server:
         elif cmd_type in ("camera_stream_start", "start_camera_stream"):
             threading.Thread(
                 target=self._start_camera_stream_for_client,
-                args=(addr, respond, responder is not None),
+                args=(addr, respond, responder is not None, data.get("client_session")),
                 name="StartCameraStream",
                 daemon=True,
             ).start()
 
         elif cmd_type in ("camera_stream_stop", "stop_camera_stream"):
             def _stop_camera():
-                self._stop_camera_stream_for_client(self._camera_client_key(addr))
+                self._stop_camera_stream_for_client()
                 respond({"type": "camera_recording_status", "recording": False})
                 respond({"type": "camera_stream_status", "streaming": False, "recording": False})
             threading.Thread(target=_stop_camera, name="StopCameraStream", daemon=True).start()
@@ -3125,20 +3777,33 @@ class Server:
             pass
         return False
 
+    def _candidate_media_folders(self):
+        folders = []
+        seen = set()
+        candidates = [
+            getattr(getattr(self, "camera_manager", None), "videos_dir", None),
+            getattr(getattr(self, "camera_manager", None), "recordings_dir", None),
+            getattr(getattr(self, "audio_manager", None), "audios_dir", None),
+            getattr(getattr(self, "audio_manager", None), "recordings_dir", None),
+            getattr(getattr(self, "camera_manager", None), "snapshots_dir", None),
+        ]
+        for raw in candidates:
+            if not raw:
+                continue
+            try:
+                resolved = Path(raw).resolve()
+                key = os.path.normcase(str(resolved))
+                if key not in seen:
+                    seen.add(key)
+                    folders.append(resolved)
+            except Exception:
+                continue
+        return folders
+
     def _get_recordings_list(self):
         allowed_extensions = {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv", ".jpg", ".jpeg", ".png"}
         files = []
-        folders = []
-        if hasattr(self, "audio_manager") and getattr(self.audio_manager, "recordings_dir", None):
-            try:
-                folders.append(Path(self.audio_manager.recordings_dir).resolve())
-            except Exception:
-                pass
-        if hasattr(self, "camera_manager") and getattr(self.camera_manager, "snapshots_dir", None):
-            try:
-                folders.append(Path(self.camera_manager.snapshots_dir).resolve())
-            except Exception:
-                pass
+        folders = self._candidate_media_folders()
         try:
             for folder in folders:
                 if not folder.exists():
@@ -3146,18 +3811,24 @@ class Server:
                 for path in folder.iterdir():
                     if not path.is_file() or path.suffix.lower() not in allowed_extensions:
                         continue
+                    if path.name.startswith("_mux_audio_"):
+                        continue
                     if self._is_recording_active(path):
                         continue
                     try:
                         stat = path.stat()
-                        is_img = path.suffix.lower() in {".jpg", ".jpeg", ".png"}
-                        media_type = "snapshot" if is_img else ("audio" if path.suffix.lower() in {".wav", ".m4a", ".mp3"} else "video")
+                        ext = path.suffix.lower()
+                        is_img = ext in {".jpg", ".jpeg", ".png"}
+                        is_aud = ext in {".wav", ".m4a", ".mp3"}
+                        media_type = "snapshot" if is_img else ("audio" if is_aud else "video")
+                        folder_label = "Snapshots" if is_img else ("Audios" if is_aud else "Videos")
                         files.append({
                             "id": path.name,
                             "name": path.name,
                             "size": stat.st_size,
                             "modified": int(stat.st_mtime * 1000),
                             "media_type": media_type,
+                            "folder": folder_label,
                         })
                     except OSError:
                         continue
@@ -3186,17 +3857,7 @@ class Server:
             return None
         if Path(recording_id).suffix.lower() not in {".wav", ".avi", ".mp4", ".m4a", ".mp3", ".webm", ".mkv", ".jpg", ".jpeg", ".png"}:
             return None
-        folders = []
-        if hasattr(self, "audio_manager") and getattr(self.audio_manager, "recordings_dir", None):
-            try:
-                folders.append(Path(self.audio_manager.recordings_dir).resolve())
-            except Exception:
-                pass
-        if hasattr(self, "camera_manager") and getattr(self.camera_manager, "snapshots_dir", None):
-            try:
-                folders.append(Path(self.camera_manager.snapshots_dir).resolve())
-            except Exception:
-                pass
+        folders = self._candidate_media_folders()
         for folder in folders:
             candidate = (folder / recording_id).resolve()
             try:
@@ -3221,6 +3882,11 @@ class Server:
             except Exception as exc:
                 respond({"type": f"{prefix}_error", "message": f"Could not prepare this video for phone playback: {str(exc)[:140]}"})
                 return
+        elif path.suffix.lower() == ".mp4":
+            try:
+                path = Path(self._ensure_mp4_ready_for_phone(path))
+            except Exception:
+                pass
         try:
             size = path.stat().st_size
         except OSError:
@@ -3230,7 +3896,13 @@ class Server:
             respond({"type": f"{prefix}_error", "message": "Recording size is outside the 1 GiB transfer limit"})
             return
         transport = str(addr[0]).lower() if addr else "unknown"
-        chunk_size = 900 if transport not in ("bluetooth", "websocket") else (8192 if transport == "bluetooth" else 49152)
+        if transport == "websocket":
+            chunk_size = 49152
+        elif transport == "bluetooth":
+            chunk_size = 8192
+        else:
+            # Use 16 KB chunks over Wi-Fi UDP for fast video transfers while preserving 900B for small test fixtures
+            chunk_size = 16384 if size > 4096 else 900
         transfer_id = secrets.token_hex(12)
         with self._recording_download_lock:
             if len(self._active_recording_downloads) >= 3:
@@ -3246,6 +3918,19 @@ class Server:
             args=(path, size, chunk_size, transfer_id, transport, respond, stream_mode, cancel),
             daemon=True,
         ).start()
+
+    def _ensure_mp4_ready_for_phone(self, source_path):
+        """Ensure an MP4 file uses H.264 +faststart before transferring to Android."""
+        source_path = Path(source_path)
+        marker = source_path.with_name(f".{source_path.name}.h264_ok")
+        if marker.is_file() and marker.stat().st_mtime >= source_path.stat().st_mtime:
+            return source_path
+        ensure_android_playable_mp4(str(source_path))
+        try:
+            marker.write_text("ok", encoding="utf-8")
+        except OSError:
+            pass
+        return source_path
 
     def _convert_avi_for_phone(self, source_path):
         """Convert older MJPEG AVI webcam files to a phone-friendly MP4 once."""
@@ -3600,6 +4285,34 @@ class Server:
             except Exception as exc:
                 print(f"[-] Could not deliver {cache_key} refresh: {exc}")
 
+    def _respond_app_icons_async(self, items, respond):
+        """Extract and return Windows laptop icons in UDP-safe batches for Quick Apps, Custom Apps, and Browse PC Apps."""
+        batch = {}
+        batch_bytes = 0
+        for raw_item in items:
+            key = str(raw_item or "").strip()
+            if not key or len(key) > 512:
+                continue
+            icon_b64 = extract_windows_app_icon_base64(key)
+            brand = infer_app_brand_key(key, key)
+            entry = {"icon": icon_b64, "brand_key": brand}
+            if not icon_b64 and not brand:
+                continue
+            batch[key] = entry
+            batch_bytes += len(icon_b64) + len(key) + 32
+            if len(batch) >= 8 or batch_bytes >= 24000:
+                try:
+                    respond({"type": "app_icons_response", "icons": dict(batch)})
+                except Exception:
+                    pass
+                batch.clear()
+                batch_bytes = 0
+        if batch:
+            try:
+                respond({"type": "app_icons_response", "icons": dict(batch)})
+            except Exception:
+                pass
+
     def _respond_installed_apps_async(self, addr, responder=None):
         """Return cached apps immediately and complete slow Start Menu scans off the command path."""
         client_key = self._camera_client_key(addr)
@@ -3722,6 +4435,11 @@ class Server:
             app["is_quick"] = rp in quick_paths
             if rp in quick_name_by_path:
                 app["name"] = quick_name_by_path[rp]
+            app["brand_key"] = infer_app_brand_key(app.get("name", ""), app.get("path", ""))
+            if app["is_quick"]:
+                icon_b64 = extract_windows_app_icon_base64(app["path"])
+                if icon_b64:
+                    app["icon"] = icon_b64
         return apps
 
     def _get_running_processes(self):

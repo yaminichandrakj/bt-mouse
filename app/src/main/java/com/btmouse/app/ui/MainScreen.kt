@@ -22,12 +22,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,13 +54,13 @@ import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.sensors.AirMouseManager
+import com.btmouse.app.ui.screens.CamerasAndAudioScreen
 import com.btmouse.app.ui.screens.ConnectionScreen
 import com.btmouse.app.ui.screens.KeyboardScreen
 import com.btmouse.app.ui.screens.MediaRemoteScreen
 import com.btmouse.app.ui.screens.SettingsScreen
 import com.btmouse.app.ui.screens.TouchpadScreen
 import com.btmouse.app.ui.screens.UtilitiesScreen
-import com.btmouse.app.ui.screens.WritingPadScreen
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -74,11 +74,11 @@ import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 
 sealed class NavigationTab(val title: String, val subtitle: String, val icon: ImageVector) {
-    object Touchpad : NavigationTab("Mouse", "Precision Trackpad & Air Mouse", Icons.Default.Mouse)
-    object Keyboard : NavigationTab("Keys", "Keyboard, Shortcuts & Numpad", Icons.Default.Keyboard)
-    object WritingPad : NavigationTab("Pen", "Graphics Slate & Handwriting", Icons.Default.Draw)
-    object Media : NavigationTab("Media", "SMTC Player & Master Volume", Icons.Default.PlayCircle)
-    object Utilities : NavigationTab("Tools", "Quick Apps, Camera, Audio & Tasks", Icons.Default.Build)
+    object ControlPad : NavigationTab("Control", "Trackpad, Pen Slate & Quick Actions", Icons.Default.Mouse)
+    object Keyboard : NavigationTab("Keyboard", "Full Keys, Shortcuts & Numpad", Icons.Default.Keyboard)
+    object Cameras : NavigationTab("Cameras", "Phone Webcam, PC Webcam & Live Audio", Icons.Default.Videocam)
+    object Media : NavigationTab("Media", "SMTC Player, Preview & Master Volume", Icons.Default.PlayCircle)
+    object LibraryAndPc : NavigationTab("Library", "Videos/Audios/Snaps, Apps & Tasks", Icons.Default.FolderSpecial)
     object Connect : NavigationTab("Connect", "Wi-Fi QR, Bluetooth & Remote WAN", Icons.Default.Wifi)
 }
 
@@ -89,11 +89,11 @@ fun MainScreen(
     settings: SettingsRepository
 ) {
     val tabs = listOf(
-        NavigationTab.Touchpad,
+        NavigationTab.ControlPad,
         NavigationTab.Keyboard,
-        NavigationTab.WritingPad,
+        NavigationTab.Cameras,
         NavigationTab.Media,
-        NavigationTab.Utilities,
+        NavigationTab.LibraryAndPc,
         NavigationTab.Connect
     )
 
@@ -102,7 +102,7 @@ fun MainScreen(
     val isConnected by coordinator.isConnected.collectAsState()
     val reconnectStatus by coordinator.reconnectStatus.collectAsState()
     val activeTransportLabel by coordinator.activeTransportLabel.collectAsState()
-    val currentTab = tabs.getOrElse(selectedTabIndex) { NavigationTab.Touchpad }
+    val currentTab = tabs.getOrElse(selectedTabIndex) { NavigationTab.ControlPad }
 
     Scaffold(
         topBar = {
@@ -156,7 +156,6 @@ fun MainScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Interactive Fluent Transport Pill (tapping jumps to Connect tab)
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
@@ -316,7 +315,7 @@ fun MainScreen(
                     -1 -> SettingsScreen(settings, airMouseManager, onClose = { showSettings = false })
                     0 -> TouchpadScreen(coordinator, airMouseManager, settings)
                     1 -> KeyboardScreen(coordinator, settings)
-                    2 -> WritingPadScreen(coordinator, settings)
+                    2 -> CamerasAndAudioScreen(coordinator)
                     3 -> MediaRemoteScreen(coordinator, settings)
                     4 -> UtilitiesScreen(coordinator, settings)
                     5 -> ConnectionScreen(coordinator, settings)
