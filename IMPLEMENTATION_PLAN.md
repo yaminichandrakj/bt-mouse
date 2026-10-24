@@ -109,12 +109,13 @@ Phases are ordered from integration and verification toward larger platform work
 ### Phase 4 - Startup, reconnect, and automatic repair (high effort)
 
 - Verify Windows sign-in startup uses the correct companion executable, starts minimized as configured, and does not start camera/audio.
+- Keep a user-started active PC-camera or live-audio session connected when the phone app is backgrounded, using a user-visible Android foreground service and notification where platform rules allow. Provide explicit stop/disconnect controls; do not auto-start capture or promise operation after force-stop.
 - Add an Android connection supervisor for user-approved saved devices/endpoints with backoff, cancel/disable controls, stale-state cleanup, and sleep/wake recovery.
 - Keep endpoints and credentials protected and separate. Do not silently pair with unknown PCs or bypass user approval.
 - Add Android startup/boot behavior only where platform rules permit it; never auto-start recording or streaming.
 - Prevent retry loops, duplicate sockets/commands, held buttons, excess battery use, and orphaned media sessions.
 
-**Acceptance:** sleep, Wi-Fi interruption, or companion restart either reconnects to a user-approved endpoint or presents a clear recoverable state.
+**Acceptance:** sleep, Wi-Fi interruption, companion restart, or app backgrounding either preserves/reconnects an explicitly user-started session within Android's rules or presents a clear recoverable state. Force-stop remains a hard stop.
 
 ### Phase 5 - Concurrent transports and measured failover (very high effort)
 
