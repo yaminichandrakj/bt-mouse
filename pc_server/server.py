@@ -281,6 +281,17 @@ try:
     HAS_PYNPUT = True
 except ImportError:
     HAS_PYNPUT = False
+    MouseController = None
+    KeyboardController = None
+
+    class _DummyButton:
+        left = "left"
+        right = "right"
+        middle = "middle"
+
+    Button = _DummyButton
+    Key = None
+    KeyCode = None
     print("\n[!] 'pynput' library not found. Installing via pip is recommended:")
     print("    pip install -r requirements.txt\n")
 
