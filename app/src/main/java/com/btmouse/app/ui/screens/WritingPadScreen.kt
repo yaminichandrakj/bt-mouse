@@ -59,6 +59,7 @@ import com.btmouse.app.data.HidConstants
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.InkStroke
 import com.btmouse.app.ui.components.WritingPadSurface
+import com.btmouse.app.ui.components.ChipIcon
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -201,7 +202,8 @@ fun WritingPadScreen(
             FilterChip(
                 selected = !isEraser,
                 onClick = { isEraser = false },
-                label = { Text("✍️ Pen", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Pen", fontSize = 11.sp, softWrap = false) },
+                leadingIcon = { ChipIcon(Icons.Filled.Draw) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -213,7 +215,8 @@ fun WritingPadScreen(
             FilterChip(
                 selected = isEraser,
                 onClick = { isEraser = true },
-                label = { Text("🖱 Right Button", fontSize = 11.sp, softWrap = false) },
+                label = { Text("Right button", fontSize = 11.sp, softWrap = false) },
+                leadingIcon = { ChipIcon(Icons.Filled.Mouse) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = AccentRose.copy(alpha = 0.35f),
                     selectedLabelColor = AccentRose,
@@ -316,7 +319,7 @@ fun WritingPadScreen(
 
         // Bottom Help Card
         Text(
-            text = "💡 This pad previews ink on your phone and sends mouse input to the PC. Absolute positioning is Windows mouse emulation; pressure-sensitive digitizer input is not supported. Right Button sends a right-click while drawing.",
+            text = "This pad previews ink on your phone and sends mouse input to the PC. Absolute positioning is Windows mouse emulation; pressure-sensitive digitizer input is not supported. Right Button sends a right-click while drawing.",
             color = TextMuted,
             fontSize = 11.sp,
             lineHeight = 15.sp

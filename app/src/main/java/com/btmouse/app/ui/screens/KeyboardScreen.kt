@@ -38,6 +38,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraFront
+import androidx.compose.material.icons.filled.CameraRear
+import androidx.compose.material.icons.filled.BatteryStd
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.Dialpad
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.Bolt
@@ -126,6 +134,8 @@ import com.btmouse.app.connection.ProcessInfo
 import com.btmouse.app.data.HidConstants
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.KeyButton
+import com.btmouse.app.ui.components.ChipIcon
+import com.btmouse.app.ui.components.IconLabel
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -228,7 +238,8 @@ fun KeyboardScreen(
             FilterChip(
                 selected = activeSubTab == "keys",
                 onClick = { activeSubTab = "keys" },
-                label = { Text("⌨️ Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                leadingIcon = { ChipIcon(Icons.Filled.Keyboard) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -239,7 +250,8 @@ fun KeyboardScreen(
             FilterChip(
                 selected = activeSubTab == "numpad",
                 onClick = { activeSubTab = "numpad" },
-                label = { Text("🔢 Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                label = { Text("Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                leadingIcon = { ChipIcon(Icons.Filled.Dialpad) },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                     selectedLabelColor = AccentCyan,
@@ -252,7 +264,8 @@ fun KeyboardScreen(
                 FilterChip(
                     selected = isLiveTypingEnabled,
                     onClick = { isLiveTypingEnabled = !isLiveTypingEnabled },
-                    label = { Text(if (isLiveTypingEnabled) "⚡ Live" else "📝 Batch", fontSize = 11.sp) },
+                    label = { Text(if (isLiveTypingEnabled) "Live" else "Batch", fontSize = 11.sp) },
+                    leadingIcon = { ChipIcon(if (isLiveTypingEnabled) Icons.Filled.Bolt else Icons.Filled.EditNote) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
                         selectedLabelColor = if (isLiveTypingEnabled) AccentCyan else TextPrimary,
@@ -735,7 +748,13 @@ fun QuickAppsSection(
                                                 },
                                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
                                             ) {
-                                                Text(if (app.isQuick) "PC ✓" else "PC +", color = if (app.isQuick) AccentEmerald else AccentCyan, fontSize = 10.sp)
+                                                IconLabel(
+                                                    if (app.isQuick) Icons.Filled.Check else Icons.Filled.Add,
+                                                    "PC",
+                                                    color = if (app.isQuick) AccentEmerald else AccentCyan,
+                                                    fontSize = 10.sp,
+                                                    iconSize = 12.dp
+                                                )
                                             }
                                             IconButton(
                                                 onClick = {
@@ -926,7 +945,7 @@ fun QuickAppsSection(
 
         // Custom Pinned Apps Section
         if (customApps.isNotEmpty()) {
-            Text("📌 Pinned Quick Apps", color = AccentEmerald, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            IconLabel(Icons.Filled.PushPin, "Pinned quick apps", color = AccentEmerald, fontWeight = FontWeight.Bold, fontSize = 13.sp, iconSize = 16.dp)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 customApps.chunked(2).forEach { rowApps ->
                     Row(
@@ -1165,7 +1184,13 @@ fun TasksAndHardwareSection(
                                 fontSize = 20.sp
                             )
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text(if (plugged) "⚡ Charging / Plugged" else "🔋 On Battery", color = TextMuted, fontSize = 10.sp)
+                            IconLabel(
+                                if (plugged) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryStd,
+                                if (plugged) "Charging" else "On battery",
+                                color = TextMuted,
+                                fontSize = 10.sp,
+                                iconSize = 12.dp
+                            )
                         }
                     }
 
@@ -1719,11 +1744,13 @@ fun CameraAndRecorderSection(
                                     .background(DarkBackground.copy(alpha = 0.8f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text(
-                                    "⛶ Tap for Fullscreen (${currentImageBitmap.width}×${currentImageBitmap.height})",
+                                IconLabel(
+                                    Icons.Filled.Fullscreen,
+                                    "Tap for fullscreen · ${currentImageBitmap.width}×${currentImageBitmap.height}",
                                     color = AccentCyan,
                                     fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    iconSize = 12.dp
                                 )
                             }
                         }
@@ -1809,7 +1836,7 @@ fun CameraAndRecorderSection(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Phone Snapshots · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text("📁 Snapshots/", color = AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        IconLabel(Icons.Filled.Folder, "Snapshots/", color = AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, iconSize = 14.dp)
                     }
                     if (snapshotEntries.isEmpty()) {
                         Text("Snapshots captured from the PC are saved to your phone's Snapshots/ folder and PC Snapshots/ folder.", color = TextSecondary, fontSize = 11.sp)
@@ -2153,7 +2180,8 @@ fun PhoneCameraWebcamCard(
                     onClick = {
                         if (currentLens != "back") coordinator.switchPhoneCameraLens()
                     },
-                    label = { Text("📷 Rear Lens", fontSize = 10.sp) },
+                    label = { Text("Rear lens", fontSize = 10.sp) },
+                    leadingIcon = { ChipIcon(Icons.Filled.CameraRear) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -2166,7 +2194,8 @@ fun PhoneCameraWebcamCard(
                     onClick = {
                         if (currentLens != "front") coordinator.switchPhoneCameraLens()
                     },
-                    label = { Text("🤳 Front Lens", fontSize = 10.sp) },
+                    label = { Text("Front lens", fontSize = 10.sp) },
+                    leadingIcon = { ChipIcon(Icons.Filled.CameraFront) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,

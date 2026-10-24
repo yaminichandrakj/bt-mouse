@@ -236,22 +236,6 @@ QPushButton#PrimaryBtn {
 QPushButton#PrimaryBtn:hover {
     background-color: #4F46E5;
 }
-QPushButton#CyanBtn {
-    background-color: #0284C7;
-    border: 1px solid #38BDF8;
-    color: #FFFFFF;
-}
-QPushButton#CyanBtn:hover {
-    background-color: #0369A1;
-}
-QPushButton#SuccessBtn {
-    background-color: #059669;
-    border: 1px solid #10B981;
-    color: #FFFFFF;
-}
-QPushButton#SuccessBtn:hover {
-    background-color: #047857;
-}
 QPushButton#DangerBtn {
     background-color: #2A1621;
     border: 1px solid #F43F5E;
@@ -355,6 +339,85 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
 """
+
+
+# Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10) code points.
+FLUENT_GLYPHS = {
+    "add": 0xE710,
+    "apps": 0xECAA,
+    "bluetooth": 0xE702,
+    "camera": 0xE722,
+    "clear": 0xE894,
+    "close": 0xE711,
+    "copy": 0xE8C8,
+    "crop": 0xE7A8,
+    "delete": 0xE74D,
+    "folder": 0xE8B7,
+    "fullscreen": 0xE740,
+    "globe": 0xE774,
+    "key": 0xE8D7,
+    "library": 0xE8F1,
+    "lock": 0xE72E,
+    "mic": 0xE720,
+    "monitor": 0xE7F4,
+    "open": 0xE8A7,
+    "paint": 0xE790,
+    "pen": 0xE70F,
+    "photo": 0xE91B,
+    "play": 0xE768,
+    "pulse": 0xE9D9,
+    "record": 0xE7C8,
+    "refresh": 0xE72C,
+    "rotate": 0xE7AD,
+    "search": 0xE721,
+    "settings": 0xE713,
+    "stop": 0xE71A,
+    "video": 0xE714,
+    "wifi": 0xE701,
+}
+ICON_COLOR = "#CBD5E1"
+ICON_COLOR_MUTED = "#94A3B8"
+ICON_COLOR_ACCENT = "#38BDF8"
+_icon_family = None
+_icon_cache = {}
+
+
+def fluent_icon(name, color=ICON_COLOR):
+    """Render a Windows icon-font glyph as a QIcon; returns an empty icon if the font is missing."""
+    global _icon_family
+    key = (name, color)
+    if key in _icon_cache:
+        return _icon_cache[key]
+    if _icon_family is None:
+        from PySide6.QtGui import QFontDatabase
+
+        families = set(QFontDatabase.families())
+        _icon_family = next((f for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in families), "")
+    icon = QIcon()
+    glyph = FLUENT_GLYPHS.get(name)
+    if _icon_family and glyph:
+        size = 64
+        pix = QPixmap(size, size)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        font = QFont(_icon_family)
+        font.setPixelSize(int(size * 0.78))
+        painter.setFont(font)
+        painter.setPen(QColor(color))
+        painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, chr(glyph))
+        painter.end()
+        icon = QIcon(pix)
+    _icon_cache[key] = icon
+    return icon
+
+
+def make_button(text, icon=None):
+    btn = QPushButton(text)
+    if icon:
+        btn.setIcon(fluent_icon(icon, "#E2E8F0"))
+        btn.setIconSize(QSize(16, 16))
+    return btn
 
 
 if HAS_QT:
@@ -522,7 +585,7 @@ if HAS_QT:
             top_row = QHBoxLayout(top_bar)
             top_row.setContentsMargins(14, 8, 14, 8)
 
-            self.lbl_title = QLabel(f"📹  {title}")
+            self.lbl_title = QLabel(title)
             self.lbl_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #F8FAFC;")
             top_row.addWidget(self.lbl_title)
 
@@ -532,27 +595,26 @@ if HAS_QT:
             top_row.addStretch()
 
             if on_rotate:
-                btn_rot = QPushButton("↻ Rotate 90°")
+                btn_rot = make_button("Rotate 90°", "rotate")
                 btn_rot.clicked.connect(on_rotate)
                 top_row.addWidget(btn_rot)
 
             if on_snapshot:
-                btn_snap = QPushButton("📸 Save Snapshot")
-                btn_snap.setObjectName("SuccessBtn")
+                btn_snap = make_button("Snapshot", "camera")
                 btn_snap.clicked.connect(on_snapshot)
                 top_row.addWidget(btn_snap)
 
             if on_toggle_record:
-                self.btn_rec = QPushButton("⏺ Record Video")
+                self.btn_rec = make_button("Record", "record")
                 self.btn_rec.setObjectName("PrimaryBtn")
                 self.btn_rec.clicked.connect(on_toggle_record)
                 top_row.addWidget(self.btn_rec)
 
-            btn_fs = QPushButton("⛶ Toggle Fullscreen")
+            btn_fs = make_button("Fullscreen", "fullscreen")
             btn_fs.clicked.connect(self._toggle_fullscreen_state)
             top_row.addWidget(btn_fs)
 
-            btn_close = QPushButton("✕ Close (Esc)")
+            btn_close = make_button("Close", "close")
             btn_close.setObjectName("DangerBtn")
             btn_close.clicked.connect(self.close)
             top_row.addWidget(btn_close)
@@ -815,8 +877,15 @@ class CompanionApp(QMainWindow):
 
         title_row = QHBoxLayout()
         title_row.setSpacing(10)
-        lbl_title = QLabel("🖱️  BT Mouse & Keyboard")
-        lbl_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #F8FAFC;")
+        logo_path = get_asset_path("icon.png")
+        if os.path.exists(logo_path):
+            lbl_logo = QLabel()
+            lbl_logo.setPixmap(
+                QPixmap(logo_path).scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            )
+            title_row.addWidget(lbl_logo)
+        lbl_title = QLabel("BT Mouse")
+        lbl_title.setStyleSheet("font-size: 17px; font-weight: 600; color: #F8FAFC;")
         title_row.addWidget(lbl_title)
 
         lbl_ver = QLabel(f"v{APP_VERSION}")
@@ -827,29 +896,29 @@ class CompanionApp(QMainWindow):
         title_row.addStretch()
         title_col.addLayout(title_row)
 
-        lbl_sub = QLabel("Windows 11 Desktop Companion  ·  Seamless Wi-Fi, Bluetooth & Remote WAN Failover")
+        lbl_sub = QLabel("Desktop companion  ·  Wi-Fi, Bluetooth and remote access")
         lbl_sub.setStyleSheet("color: #94A3B8; font-size: 12px;")
         title_col.addWidget(lbl_sub)
         h_layout.addLayout(title_col)
 
         h_layout.addStretch()
 
-        self.lbl_status_pill = QLabel("● SERVER LISTENING")
+        self.lbl_status_pill = QLabel("●  Server running")
         self.lbl_status_pill.setStyleSheet(
             "background-color: #062E22; color: #10B981; border: 1px solid #059669; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
         )
         h_layout.addWidget(self.lbl_status_pill, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.btn_toggle = QPushButton("Stop Server")
+        self.btn_toggle = make_button("Stop server", "stop")
         self.btn_toggle.setObjectName("DangerBtn")
         self.btn_toggle.clicked.connect(self.toggle_server)
         h_layout.addWidget(self.btn_toggle)
 
-        self.btn_restart = QPushButton("Restart")
+        self.btn_restart = make_button("Restart", "refresh")
         self.btn_restart.clicked.connect(self.restart_server)
         h_layout.addWidget(self.btn_restart)
 
-        self.btn_update = QPushButton("Check for Updates")
+        self.btn_update = make_button("Check for updates", "refresh")
         self.btn_update.setObjectName("PrimaryBtn")
         self.btn_update.clicked.connect(self.check_for_companion_updates)
         h_layout.addWidget(self.btn_update)
@@ -879,20 +948,23 @@ class CompanionApp(QMainWindow):
         self.nav_buttons = []
 
         pages = [
-            ("📱  Wi-Fi && QR Pairing", self._create_wifi_page),
-            ("📷  Phone as Webcam", self._create_phone_cam_page),
-            ("🎬  Media Library", self._create_recordings_page),
-            ("🚀  Webcam && Quick Apps", self._create_desktop_page),
-            ("📶  Bluetooth", self._create_bt_page),
-            ("🌐  Remote Access (WAN)", self._create_wan_page),
-            ("✍️  Tablet Drawing Slate", self._create_tablet_page),
-            ("📊  Live Monitor", self._create_logs_page),
+            ("Wi-Fi && QR pairing", "wifi", self._create_wifi_page),
+            ("Phone as webcam", "camera", self._create_phone_cam_page),
+            ("Media library", "library", self._create_recordings_page),
+            ("Webcam && quick apps", "apps", self._create_desktop_page),
+            ("Bluetooth", "bluetooth", self._create_bt_page),
+            ("Remote access", "globe", self._create_wan_page),
+            ("Drawing slate", "pen", self._create_tablet_page),
+            ("Activity", "pulse", self._create_logs_page),
         ]
 
-        for idx, (label, builder) in enumerate(pages):
+        self.nav_icons = []
+        for idx, (label, icon_name, builder) in enumerate(pages):
             btn = QPushButton(label)
             btn.setObjectName("NavBtn")
+            btn.setIconSize(QSize(18, 18))
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.nav_icons.append(icon_name)
             btn.clicked.connect(lambda _checked=False, i=idx: self._switch_page(i))
             sb_layout.addWidget(btn)
             self.nav_buttons.append(btn)
@@ -951,6 +1023,7 @@ class CompanionApp(QMainWindow):
         self.stack.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setProperty("active", "true" if i == index else "false")
+            btn.setIcon(fluent_icon(self.nav_icons[i], ICON_COLOR_ACCENT if i == index else ICON_COLOR_MUTED))
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -993,8 +1066,8 @@ class CompanionApp(QMainWindow):
         qr_layout.setContentsMargins(24, 24, 24, 24)
         qr_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        lbl_t = QLabel("Instant Wi-Fi QR Pairing")
-        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t = QLabel("Pair with a QR code")
+        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_layout.addWidget(lbl_t)
 
@@ -1012,7 +1085,7 @@ class CompanionApp(QMainWindow):
         qr_layout.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignCenter)
         qr_layout.addSpacing(12)
 
-        lbl_hint = QLabel("Phone App  ➔  PC Hub / Connect  ➔  Scan QR Code")
+        lbl_hint = QLabel("In the phone app: Connect  ›  Scan QR code")
         lbl_hint.setStyleSheet("color: #38BDF8; font-weight: 700; font-size: 13px;")
         lbl_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_layout.addWidget(lbl_hint)
@@ -1026,8 +1099,8 @@ class CompanionApp(QMainWindow):
         info_layout.setContentsMargins(24, 24, 24, 24)
         info_layout.setSpacing(12)
 
-        lbl_it = QLabel("Server Network & Security")
-        lbl_it.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_it = QLabel("Connection details")
+        lbl_it.setStyleSheet("font-size: 17px; font-weight: 600;")
         info_layout.addWidget(lbl_it)
 
         lbl_ad = QLabel("Network Adapter / Interface:")
@@ -1080,15 +1153,15 @@ class CompanionApp(QMainWindow):
 
         info_layout.addStretch()
 
-        btn_copy_ip = QPushButton("📋  Copy IP Address")
+        btn_copy_ip = make_button("Copy IP address", "copy")
         btn_copy_ip.clicked.connect(self.copy_ip)
         info_layout.addWidget(btn_copy_ip)
 
-        btn_copy_pin = QPushButton("🔑  Copy Pairing PIN")
+        btn_copy_pin = make_button("Copy pairing PIN", "key")
         btn_copy_pin.clicked.connect(self.copy_pairing_pin)
         info_layout.addWidget(btn_copy_pin)
 
-        btn_ref = QPushButton("🔄  Refresh QR Code")
+        btn_ref = make_button("Refresh QR code", "refresh")
         btn_ref.setObjectName("PrimaryBtn")
         btn_ref.clicked.connect(self.generate_qr)
         info_layout.addWidget(btn_ref)
@@ -1114,8 +1187,8 @@ class CompanionApp(QMainWindow):
         p_layout.setSpacing(10)
 
         header_row = QHBoxLayout()
-        lbl_t = QLabel("📹  Phone Camera Live Stream")
-        lbl_t.setStyleSheet("font-size: 16px; font-weight: 700;")
+        lbl_t = QLabel("Phone camera")
+        lbl_t.setStyleSheet("font-size: 15px; font-weight: 600;")
         header_row.addWidget(lbl_t)
 
         self.lbl_phone_cam_orientation = QLabel("ORIENTATION: AUTO")
@@ -1131,8 +1204,8 @@ class CompanionApp(QMainWindow):
         p_layout.addLayout(header_row)
 
         self.lbl_phone_cam_preview = AspectRatioVideoWidget(
-            "📷 Phone Camera Standby\n\nOpen the BT Mouse mobile app ➔ Cameras & Mic ➔ Phone Cam ➔ Start Broadcast.\n"
-            "Double-click video or click '⛶ Fullscreen' below to expand.",
+            "Phone camera on standby\n\nIn the phone app, open Cameras  ›  Phone cam  ›  Start broadcast.\n"
+            "Double-click the video to go fullscreen.",
             self,
         )
         self.lbl_phone_cam_preview.double_clicked.connect(self.open_phone_cam_fullscreen)
@@ -1145,20 +1218,19 @@ class CompanionApp(QMainWindow):
         vf_bar = QHBoxLayout()
         vf_bar.addStretch()
 
-        btn_rot = QPushButton("↻ Rotate 90°")
+        btn_rot = make_button("Rotate 90°", "rotate")
         btn_rot.clicked.connect(self.rotate_phone_cam_90)
         vf_bar.addWidget(btn_rot)
 
-        self.btn_phone_cam_rec = QPushButton("⏺ Record to Videos")
+        self.btn_phone_cam_rec = make_button("Record", "record")
         self.btn_phone_cam_rec.clicked.connect(self.toggle_phone_cam_recording)
         vf_bar.addWidget(self.btn_phone_cam_rec)
 
-        btn_snap = QPushButton("📸 Snapshot")
-        btn_snap.setObjectName("SuccessBtn")
+        btn_snap = make_button("Snapshot", "camera")
         btn_snap.clicked.connect(self._save_phone_cam_snapshot)
         vf_bar.addWidget(btn_snap)
 
-        btn_fs = QPushButton("⛶ Fullscreen")
+        btn_fs = make_button("Fullscreen", "fullscreen")
         btn_fs.setObjectName("PrimaryBtn")
         btn_fs.clicked.connect(self.open_phone_cam_fullscreen)
         vf_bar.addWidget(btn_fs)
@@ -1175,8 +1247,8 @@ class CompanionApp(QMainWindow):
         c_layout.setContentsMargins(18, 16, 18, 16)
         c_layout.setSpacing(12)
 
-        lbl_ct = QLabel("⚙️ Virtual Camera & OBS")
-        lbl_ct.setStyleSheet("font-size: 16px; font-weight: 700;")
+        lbl_ct = QLabel("Virtual camera & OBS")
+        lbl_ct.setStyleSheet("font-size: 15px; font-weight: 600;")
         c_layout.addWidget(lbl_ct)
 
         lbl_cd = QLabel("Route your phone camera into OBS Studio, Zoom, Teams, Discord, or Google Meet.")
@@ -1198,11 +1270,11 @@ class CompanionApp(QMainWindow):
         m_l.addWidget(self.lbl_phone_mjpeg_url)
 
         m_btns = QHBoxLayout()
-        btn_cp = QPushButton("📋 Copy URL")
+        btn_cp = make_button("Copy URL", "copy")
         btn_cp.clicked.connect(self._copy_phone_mjpeg_url)
         m_btns.addWidget(btn_cp)
 
-        btn_br = QPushButton("🌐 Open in Browser")
+        btn_br = make_button("Open in browser", "open")
         btn_br.clicked.connect(lambda: webbrowser.open(self.lbl_phone_mjpeg_url.text()))
         m_btns.addWidget(btn_br)
         m_l.addLayout(m_btns)
@@ -1224,11 +1296,11 @@ class CompanionApp(QMainWindow):
 
         c_layout.addStretch()
 
-        btn_open_vids = QPushButton("📁  Open Saved Videos Folder")
+        btn_open_vids = make_button("Open Videos folder", "folder")
         btn_open_vids.clicked.connect(self.open_videos_folder)
         c_layout.addWidget(btn_open_vids)
 
-        btn_open_snaps = QPushButton("📷  Open Saved Snapshots Folder")
+        btn_open_snaps = make_button("Open Snapshots folder", "folder")
         btn_open_snaps.clicked.connect(self.open_snapshots_folder)
         c_layout.addWidget(btn_open_snaps)
 
@@ -1253,8 +1325,8 @@ class CompanionApp(QMainWindow):
         # Header
         top_row = QHBoxLayout()
         t_col = QVBoxLayout()
-        lbl_t = QLabel("Media & Recordings Library")
-        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t = QLabel("Media library")
+        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
         t_col.addWidget(lbl_t)
         lbl_s = QLabel("Automatically organized into dedicated Videos, Audios, and Snapshots folders on this PC.")
         lbl_s.setStyleSheet("color: #94A3B8; font-size: 12px;")
@@ -1262,19 +1334,19 @@ class CompanionApp(QMainWindow):
         t_col.addWidget(lbl_s)
         top_row.addLayout(t_col, 1)
 
-        btn_vf = QPushButton("📹 Videos Folder")
+        btn_vf = make_button("Videos", "folder")
         btn_vf.clicked.connect(self.open_videos_folder)
         top_row.addWidget(btn_vf)
 
-        btn_af = QPushButton("🎙️ Audios Folder")
+        btn_af = make_button("Audios", "folder")
         btn_af.clicked.connect(self.open_audios_folder)
         top_row.addWidget(btn_af)
 
-        btn_sf = QPushButton("📷 Snapshots Folder")
+        btn_sf = make_button("Snapshots", "folder")
         btn_sf.clicked.connect(self.open_snapshots_folder)
         top_row.addWidget(btn_sf)
 
-        btn_ref = QPushButton("🔄 Refresh")
+        btn_ref = make_button("Refresh", "refresh")
         btn_ref.setObjectName("PrimaryBtn")
         btn_ref.clicked.connect(self.refresh_recordings)
         top_row.addWidget(btn_ref)
@@ -1285,7 +1357,7 @@ class CompanionApp(QMainWindow):
         stats_bar.setObjectName("SubCard")
         s_row = QHBoxLayout(stats_bar)
         s_row.setContentsMargins(14, 8, 14, 8)
-        self.lbl_recordings_stats = QLabel("📊 Loading library...")
+        self.lbl_recordings_stats = QLabel("Loading library…")
         self.lbl_recordings_stats.setStyleSheet("font-weight: 700;")
         s_row.addWidget(self.lbl_recordings_stats)
 
@@ -1302,15 +1374,15 @@ class CompanionApp(QMainWindow):
         # Filter & Search Bar
         filter_row = QHBoxLayout()
         self.ent_recording_search = QLineEdit()
-        self.ent_recording_search.setPlaceholderText("🔍 Search by filename, folder, or date...")
+        self.ent_recording_search.setPlaceholderText("Search by name, folder or date")
         self.ent_recording_search.textChanged.connect(self._filter_and_render_recordings)
         filter_row.addWidget(self.ent_recording_search, 1)
 
         self.recording_filter_mode = "all"
         self.btn_filter_all = QPushButton("All")
-        self.btn_filter_video = QPushButton("📹 Videos")
-        self.btn_filter_audio = QPushButton("🎙️ Audios")
-        self.btn_filter_snapshot = QPushButton("📷 Snapshots")
+        self.btn_filter_video = make_button("Videos", "video")
+        self.btn_filter_audio = make_button("Audios", "mic")
+        self.btn_filter_snapshot = make_button("Snapshots", "photo")
 
         for mode, b in (
             ("all", self.btn_filter_all),
@@ -1350,20 +1422,19 @@ class CompanionApp(QMainWindow):
         self.lbl_selected_recording_info.setStyleSheet("color: #94A3B8;")
         act_row.addWidget(self.lbl_selected_recording_info, 1)
 
-        btn_play = QPushButton("▶️ Play / Open")
-        btn_play.setObjectName("SuccessBtn")
+        btn_play = make_button("Open", "play")
         btn_play.clicked.connect(self.open_selected_recording)
         act_row.addWidget(btn_play)
 
-        btn_rev = QPushButton("🔍 Show in Explorer")
+        btn_rev = make_button("Show in Explorer", "folder")
         btn_rev.clicked.connect(self.show_selected_in_explorer)
         act_row.addWidget(btn_rev)
 
-        btn_cp_path = QPushButton("📋 Copy Path")
+        btn_cp_path = make_button("Copy path", "copy")
         btn_cp_path.clicked.connect(self.copy_selected_recording_path)
         act_row.addWidget(btn_cp_path)
 
-        btn_del = QPushButton("🗑️ Delete")
+        btn_del = make_button("Delete", "delete")
         btn_del.setObjectName("DangerBtn")
         btn_del.clicked.connect(self.delete_selected_recording)
         act_row.addWidget(btn_del)
@@ -1392,28 +1463,26 @@ class CompanionApp(QMainWindow):
         cam_l.setContentsMargins(20, 16, 20, 16)
         cam_l.setSpacing(10)
 
-        lbl_ct = QLabel("💻  PC Webcam Live Monitor & Combined Audio+Video Recording")
-        lbl_ct.setStyleSheet("font-size: 16px; font-weight: 700;")
+        lbl_ct = QLabel("PC webcam")
+        lbl_ct.setStyleSheet("font-size: 15px; font-weight: 600;")
         lbl_ct.setWordWrap(True)
         cam_l.addWidget(lbl_ct)
 
         cam_hdr = QHBoxLayout()
 
-        self.btn_pc_cam_live = QPushButton("📹 Start PC Webcam Preview")
-        self.btn_pc_cam_live.setObjectName("CyanBtn")
+        self.btn_pc_cam_live = make_button("Start preview", "video")
         self.btn_pc_cam_live.clicked.connect(self.toggle_local_pc_webcam_preview)
         cam_hdr.addWidget(self.btn_pc_cam_live)
 
-        btn_pc_snap = QPushButton("📸 Capture Snapshot")
-        btn_pc_snap.setObjectName("SuccessBtn")
+        btn_pc_snap = make_button("Snapshot", "camera")
         btn_pc_snap.clicked.connect(self.test_camera_snapshot)
         cam_hdr.addWidget(btn_pc_snap)
 
-        btn_pc_mic = QPushButton("🎙️ Test Mic (3s to Audios/)")
+        btn_pc_mic = make_button("Test microphone", "mic")
         btn_pc_mic.clicked.connect(self.test_mic_record)
         cam_hdr.addWidget(btn_pc_mic)
 
-        btn_pc_fs = QPushButton("⛶ Fullscreen")
+        btn_pc_fs = make_button("Fullscreen", "fullscreen")
         btn_pc_fs.setObjectName("PrimaryBtn")
         btn_pc_fs.clicked.connect(self.open_pc_cam_fullscreen)
         cam_hdr.addWidget(btn_pc_fs)
@@ -1421,8 +1490,8 @@ class CompanionApp(QMainWindow):
         cam_l.addLayout(cam_hdr)
 
         self.lbl_cam_preview = AspectRatioVideoWidget(
-            "PC Webcam Standby — Click '📹 Start PC Webcam Preview', '📸 Capture Snapshot', or start Live Stream from your phone.\n"
-            "Double-click or press '⛶ Fullscreen' to expand.",
+            "PC webcam on standby. Start a preview here or a live stream from your phone.\n"
+            "Double-click the video to go fullscreen.",
             self,
         )
         self.lbl_cam_preview.setMinimumHeight(240)
@@ -1444,12 +1513,12 @@ class CompanionApp(QMainWindow):
         pol_l.setSpacing(10)
 
         pol_hdr = QHBoxLayout()
-        lbl_pt = QLabel("⚙️  Startup, Power & Combined Recording Settings")
-        lbl_pt.setStyleSheet("font-size: 16px; font-weight: 700;")
+        lbl_pt = QLabel("Startup & recording")
+        lbl_pt.setStyleSheet("font-size: 15px; font-weight: 600;")
         pol_hdr.addWidget(lbl_pt)
         pol_hdr.addStretch()
 
-        btn_lock = QPushButton("🔒 Lock Workstation (Win+L)")
+        btn_lock = make_button("Lock PC", "lock")
         btn_lock.setObjectName("DangerBtn")
         btn_lock.clicked.connect(lambda: self.server._handle_system_power("lock") if self.server else None)
         pol_hdr.addWidget(btn_lock)
@@ -1505,7 +1574,7 @@ class CompanionApp(QMainWindow):
         pol_l.addLayout(lim_grid)
 
         prev_row = QHBoxLayout()
-        btn_sel_reg = QPushButton("📐 Select Media Player Preview Area")
+        btn_sel_reg = make_button("Select player area", "crop")
         btn_sel_reg.clicked.connect(self.select_media_preview_region)
         prev_row.addWidget(btn_sel_reg)
         self.lbl_media_preview_region = QLabel(self._media_preview_region_description())
@@ -1523,14 +1592,14 @@ class CompanionApp(QMainWindow):
         qa_l.setContentsMargins(20, 16, 20, 16)
         qa_l.setSpacing(10)
 
-        lbl_qat = QLabel("🚀  Curated PC Quick Apps (One-Tap Launch from Phone)")
-        lbl_qat.setStyleSheet("font-size: 16px; font-weight: 700;")
+        lbl_qat = QLabel("Quick apps")
+        lbl_qat.setStyleSheet("font-size: 15px; font-weight: 600;")
         qa_l.addWidget(lbl_qat)
 
         add_row = QHBoxLayout()
         self.combo_available_apps = QComboBox()
         add_row.addWidget(self.combo_available_apps, 1)
-        btn_add_qa = QPushButton("＋ Add Selected App")
+        btn_add_qa = make_button("Add app", "add")
         btn_add_qa.setObjectName("PrimaryBtn")
         btn_add_qa.clicked.connect(self.add_quick_app)
         add_row.addWidget(btn_add_qa)
@@ -1546,7 +1615,7 @@ class CompanionApp(QMainWindow):
         self.ent_quick_app_name.setPlaceholderText("Rename selected quick app...")
         edit_row.addWidget(self.ent_quick_app_name, 1)
 
-        btn_ren = QPushButton("Save Name")
+        btn_ren = QPushButton("Rename")
         btn_ren.clicked.connect(self.rename_quick_app)
         edit_row.addWidget(btn_ren)
 
@@ -1555,7 +1624,7 @@ class CompanionApp(QMainWindow):
         btn_rem.clicked.connect(self.remove_quick_app)
         edit_row.addWidget(btn_rem)
 
-        btn_ref_qa = QPushButton("🔄 Refresh Installed Apps")
+        btn_ref_qa = make_button("Refresh list", "refresh")
         btn_ref_qa.clicked.connect(self.refresh_quick_apps)
         edit_row.addWidget(btn_ref_qa)
         qa_l.addLayout(edit_row)
@@ -1583,8 +1652,8 @@ class CompanionApp(QMainWindow):
         c_l.setContentsMargins(24, 24, 24, 24)
         c_l.setSpacing(14)
 
-        lbl_t = QLabel("📶  Bluetooth RFCOMM & HID Hardware Emulation")
-        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t = QLabel("Bluetooth")
+        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
         c_l.addWidget(lbl_t)
 
         lbl_d = QLabel(
@@ -1596,7 +1665,7 @@ class CompanionApp(QMainWindow):
         lbl_d.setStyleSheet("color: #CBD5E1; line-height: 1.4;")
         c_l.addWidget(lbl_d)
 
-        btn_bt = QPushButton("⚙️  Open Windows Bluetooth Settings")
+        btn_bt = make_button("Open Bluetooth settings", "settings")
         btn_bt.setObjectName("PrimaryBtn")
         btn_bt.setFixedWidth(280)
         btn_bt.clicked.connect(self.open_windows_bt_settings)
@@ -1610,7 +1679,7 @@ class CompanionApp(QMainWindow):
         s_l.addWidget(lbl_sh)
         lbl_st = QLabel(
             "1. Pair your Android phone and PC in Windows Bluetooth Settings.\n"
-            "2. Open the BT Mouse app ➔ PC Hub / Connect ➔ Bluetooth ➔ Tap 'Connect' next to your PC.\n"
+            "2. In the BT Mouse app, open Connect  ›  Bluetooth and tap Connect next to your PC.\n"
             "3. Enable 'Automatic Measured Failover' in Settings to seamlessly switch between Wi-Fi and Bluetooth without dropping video or audio streams."
         )
         lbl_st.setWordWrap(True)
@@ -1636,8 +1705,8 @@ class CompanionApp(QMainWindow):
         qr_l.setContentsMargins(24, 24, 24, 24)
         qr_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        lbl_t = QLabel("Remote WAN WebSocket QR")
-        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t = QLabel("Remote pairing")
+        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_l.addWidget(lbl_t)
 
@@ -1661,8 +1730,8 @@ class CompanionApp(QMainWindow):
         in_l.setContentsMargins(24, 24, 24, 24)
         in_l.setSpacing(12)
 
-        lbl_it = QLabel("WebSocket & PIN Settings")
-        lbl_it.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_it = QLabel("WebSocket & PIN")
+        lbl_it.setStyleSheet("font-size: 17px; font-weight: 600;")
         in_l.addWidget(lbl_it)
 
         url_box = QFrame()
@@ -1672,7 +1741,7 @@ class CompanionApp(QMainWindow):
         lbl_uh.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
         u_l.addWidget(lbl_uh)
         self.lbl_wan_url = QLabel(f"ws://{self.current_ip}:{self.ws_port}")
-        self.lbl_wan_url.setStyleSheet("font-family: Consolas, monospace; font-size: 16px; font-weight: 700; color: #10B981;")
+        self.lbl_wan_url.setStyleSheet("font-family: Consolas, monospace; font-size: 15px; font-weight: 600; color: #10B981;")
         u_l.addWidget(self.lbl_wan_url)
         in_l.addWidget(url_box)
 
@@ -1681,7 +1750,7 @@ class CompanionApp(QMainWindow):
         self.ent_token = QLineEdit(self.auth_token)
         self.ent_token.setMaxLength(6)
         pin_row.addWidget(self.ent_token, 1)
-        btn_upd = QPushButton("Save New PIN")
+        btn_upd = QPushButton("Save PIN")
         btn_upd.setObjectName("PrimaryBtn")
         btn_upd.clicked.connect(self._update_auth_token)
         pin_row.addWidget(btn_upd)
@@ -1689,11 +1758,11 @@ class CompanionApp(QMainWindow):
 
         in_l.addStretch()
 
-        btn_cp_url = QPushButton("📋  Copy WebSocket URL")
+        btn_cp_url = make_button("Copy WebSocket URL", "copy")
         btn_cp_url.clicked.connect(self.copy_wan_url)
         in_l.addWidget(btn_cp_url)
 
-        btn_ref_wan = QPushButton("🔄  Refresh WAN QR Code")
+        btn_ref_wan = make_button("Refresh QR code", "refresh")
         btn_ref_wan.clicked.connect(self.generate_wan_qr)
         in_l.addWidget(btn_ref_wan)
 
@@ -1715,8 +1784,8 @@ class CompanionApp(QMainWindow):
         c_l.setContentsMargins(24, 24, 24, 24)
         c_l.setSpacing(14)
 
-        lbl_t = QLabel("✍️  Tablet Writing & Graphics Drawing Slate")
-        lbl_t.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lbl_t = QLabel("Tablet drawing slate")
+        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
         c_l.addWidget(lbl_t)
 
         lbl_d = QLabel(
@@ -1727,7 +1796,7 @@ class CompanionApp(QMainWindow):
         lbl_d.setWordWrap(True)
         c_l.addWidget(lbl_d)
 
-        btn_paint = QPushButton("🎨  Open MS Paint for Drawing Test")
+        btn_paint = make_button("Open Paint to test", "paint")
         btn_paint.setObjectName("PrimaryBtn")
         btn_paint.setFixedWidth(260)
         btn_paint.clicked.connect(self.open_paint)
@@ -1760,7 +1829,7 @@ class CompanionApp(QMainWindow):
         self.lbl_packets.setStyleSheet("font-family: Consolas, monospace; font-size: 14px; font-weight: 700; color: #38BDF8;")
         t_row.addWidget(self.lbl_packets)
 
-        btn_clr = QPushButton("🧹 Clear Log")
+        btn_clr = make_button("Clear log", "clear")
         btn_clr.clicked.connect(lambda: self.txt_log.clear())
         t_row.addWidget(btn_clr)
 
@@ -1884,20 +1953,22 @@ class CompanionApp(QMainWindow):
             return
         if receiver.recording:
             saved = receiver.stop_recording()
-            self.btn_phone_cam_rec.setText("⏺ Record to Videos")
+            self.btn_phone_cam_rec.setText("Record")
+            self.btn_phone_cam_rec.setIcon(fluent_icon("record", "#E2E8F0"))
             self.btn_phone_cam_rec.setObjectName("")
             self.btn_phone_cam_rec.style().unpolish(self.btn_phone_cam_rec)
             self.btn_phone_cam_rec.style().polish(self.btn_phone_cam_rec)
             if saved:
-                self.lbl_phone_cam_telemetry.setText(f"✓ Saved video to Videos/{os.path.basename(saved)}")
+                self.lbl_phone_cam_telemetry.setText(f"Saved video to Videos/{os.path.basename(saved)}")
                 self.refresh_recordings()
         else:
             path = receiver.start_recording()
-            self.btn_phone_cam_rec.setText("⏹ Stop Recording")
+            self.btn_phone_cam_rec.setText("Stop recording")
+            self.btn_phone_cam_rec.setIcon(fluent_icon("stop", "#E2E8F0"))
             self.btn_phone_cam_rec.setObjectName("DangerBtn")
             self.btn_phone_cam_rec.style().unpolish(self.btn_phone_cam_rec)
             self.btn_phone_cam_rec.style().polish(self.btn_phone_cam_rec)
-            self.lbl_phone_cam_telemetry.setText(f"● Recording to Videos/{os.path.basename(path)}...")
+            self.lbl_phone_cam_telemetry.setText(f"Recording to Videos/{os.path.basename(path)}...")
 
     def toggle_local_pc_webcam_preview(self):
         if not self.server:
@@ -1905,13 +1976,15 @@ class CompanionApp(QMainWindow):
         if self.server.camera_manager.streaming:
             self.server._stop_camera_stream_for_client()
             self.pc_webcam_preview_active = False
-            self.btn_pc_cam_live.setText("📹 Start PC Webcam Preview")
+            self.btn_pc_cam_live.setText("Start preview")
+            self.btn_pc_cam_live.setIcon(fluent_icon("video", "#E2E8F0"))
             self.lbl_cam_preview.clear_frame()
             self.lbl_media_status.setText("PC Webcam preview stopped.")
             self.refresh_recordings()
         else:
             self.pc_webcam_preview_active = True
-            self.btn_pc_cam_live.setText("⏹ Stop PC Webcam Preview")
+            self.btn_pc_cam_live.setText("Stop preview")
+            self.btn_pc_cam_live.setIcon(fluent_icon("stop", "#E2E8F0"))
             self.lbl_media_status.setText("Starting PC Webcam live preview...")
             threading.Thread(
                 target=self.server._start_camera_stream_for_client,
@@ -1961,7 +2034,7 @@ class CompanionApp(QMainWindow):
 
     def _copy_phone_mjpeg_url(self):
         QApplication.clipboard().setText(self.lbl_phone_mjpeg_url.text())
-        self.lbl_phone_cam_telemetry.setText("✓ Copied localhost MJPEG stream URL to clipboard!")
+        self.lbl_phone_cam_telemetry.setText("Copied the MJPEG stream URL.")
 
     def _save_phone_cam_snapshot(self):
         receiver = getattr(self.server, "phone_camera_receiver", None)
@@ -1976,7 +2049,7 @@ class CompanionApp(QMainWindow):
             filename = f"phone_snapshot_{timestamp}.jpg"
             target = snap_dir / filename
             target.write_bytes(frame)
-            self.lbl_phone_cam_telemetry.setText(f"✓ Saved snapshot to Snapshots/{filename}")
+            self.lbl_phone_cam_telemetry.setText(f"Saved snapshot to Snapshots/{filename}")
             self.refresh_recordings()
         except Exception as e:
             self.lbl_phone_cam_telemetry.setText(f"Could not save snapshot: {e}")
@@ -2028,9 +2101,9 @@ class CompanionApp(QMainWindow):
         total_bytes = 0
 
         folder_specs = [
-            (Path(self.media_dirs["videos"]), "Videos", "Video", "📹", {".mp4", ".avi", ".mkv", ".webm"}),
-            (Path(self.media_dirs["audios"]), "Audios", "Audio", "🎙️", {".wav", ".m4a", ".mp3"}),
-            (Path(self.media_dirs["snapshots"]), "Snapshots", "Snapshot", "📷", {".jpg", ".jpeg", ".png"}),
+            (Path(self.media_dirs["videos"]), "Videos", "Video", "video", {".mp4", ".avi", ".mkv", ".webm"}),
+            (Path(self.media_dirs["audios"]), "Audios", "Audio", "mic", {".wav", ".m4a", ".mp3"}),
+            (Path(self.media_dirs["snapshots"]), "Snapshots", "Snapshot", "photo", {".jpg", ".jpeg", ".png"}),
         ]
 
         for folder, folder_name, type_name, icon, exts in folder_specs:
@@ -2113,8 +2186,8 @@ class CompanionApp(QMainWindow):
         self._displayed_recordings = items
         self.tree_recordings.setRowCount(len(items))
         for row, rec in enumerate(items):
-            self.tree_recordings.setItem(row, 0, QTableWidgetItem(f"{rec['type_icon']}  {rec['name']}"))
-            self.tree_recordings.setItem(row, 1, QTableWidgetItem(f"📁 {rec['folder']}"))
+            self.tree_recordings.setItem(row, 0, QTableWidgetItem(fluent_icon(rec["type_icon"], ICON_COLOR_ACCENT), rec["name"]))
+            self.tree_recordings.setItem(row, 1, QTableWidgetItem(rec["folder"]))
             self.tree_recordings.setItem(row, 2, QTableWidgetItem(f"{rec['type_name']} ({rec['ext'][1:].upper()})"))
             self.tree_recordings.setItem(row, 3, QTableWidgetItem(rec["date_str"]))
             self.tree_recordings.setItem(row, 4, QTableWidgetItem(rec["size_str"]))
@@ -2125,15 +2198,15 @@ class CompanionApp(QMainWindow):
         c_aud = sum(1 for x in all_recs if x["is_audio"])
         c_snp = sum(1 for x in all_recs if x["is_snapshot"])
         self.btn_filter_all.setText(f"All ({c_all})")
-        self.btn_filter_video.setText(f"📹 Videos ({c_vid})")
-        self.btn_filter_audio.setText(f"🎙️ Audios ({c_aud})")
-        self.btn_filter_snapshot.setText(f"📷 Snapshots ({c_snp})")
+        self.btn_filter_video.setText(f"Videos ({c_vid})")
+        self.btn_filter_audio.setText(f"Audios ({c_aud})")
+        self.btn_filter_snapshot.setText(f"Snapshots ({c_snp})")
 
         total_mb = getattr(self, "_total_recordings_bytes", 0) / (1024 * 1024)
-        self.lbl_recordings_stats.setText(f"📊 Showing {len(items)} of {c_all} items  ·  {total_mb:.1f} MB total")
+        self.lbl_recordings_stats.setText(f"Showing {len(items)} of {c_all} items  ·  {total_mb:.1f} MB")
         try:
             free_gb = shutil.disk_usage(self.media_dirs["base"]).free / (1024 * 1024 * 1024)
-            self.lbl_disk_free.setText(f"💾 Free Disk: {free_gb:.1f} GB")
+            self.lbl_disk_free.setText(f"{free_gb:.1f} GB free")
         except Exception:
             pass
 
@@ -2418,12 +2491,12 @@ class CompanionApp(QMainWindow):
                 snap_name = os.path.basename(last_path) if last_path else "snapshot.jpg"
                 self._run_on_ui(
                     lambda: (
-                        self.lbl_media_status.setText(f"✓ Saved webcam snapshot to Snapshots/{snap_name}"),
+                        self.lbl_media_status.setText(f"Saved webcam snapshot to Snapshots/{snap_name}"),
                         self.refresh_recordings(),
                     ),
                 )
             else:
-                self._run_on_ui(lambda: self.lbl_media_status.setText("✕ Could not access PC webcam."))
+                self._run_on_ui(lambda: self.lbl_media_status.setText("Could not access the PC webcam."))
 
         threading.Thread(target=_snap, daemon=True).start()
 
@@ -2436,14 +2509,14 @@ class CompanionApp(QMainWindow):
             rec_file = self.server.audio_manager.start_recording()
             if not rec_file:
                 reason = self.server.audio_manager.last_error or "Microphone unavailable."
-                self._run_on_ui(lambda: self.lbl_media_status.setText(f"✕ {reason}"))
+                self._run_on_ui(lambda: self.lbl_media_status.setText(f"{reason}"))
                 return
             time.sleep(3.0)
             final_file = self.server.audio_manager.stop_recording()
             if final_file and os.path.exists(final_file):
                 self._run_on_ui(
                     lambda: (
-                        self.lbl_media_status.setText(f"✓ Saved audio recording to Audios/{os.path.basename(final_file)}"),
+                        self.lbl_media_status.setText(f"Saved audio recording to Audios/{os.path.basename(final_file)}"),
                         self.refresh_recordings(),
                     ),
                 )
@@ -2507,17 +2580,19 @@ class CompanionApp(QMainWindow):
 
     def _update_status_ui(self, is_running):
         if is_running:
-            self.lbl_status_pill.setText("● SERVER LISTENING")
+            self.lbl_status_pill.setText("●  Server running")
             self.lbl_status_pill.setStyleSheet(
                 "background-color: #062E22; color: #10B981; border: 1px solid #059669; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
             )
-            self.btn_toggle.setText("Stop Server")
+            self.btn_toggle.setText("Stop server")
+            self.btn_toggle.setIcon(fluent_icon("stop", "#E2E8F0"))
         else:
-            self.lbl_status_pill.setText("○ SERVER STOPPED")
+            self.lbl_status_pill.setText("●  Server stopped")
             self.lbl_status_pill.setStyleSheet(
                 "background-color: #2A1621; color: #F43F5E; border: 1px solid #F43F5E; border-radius: 14px; padding: 6px 14px; font-weight: 700; font-size: 12px;"
             )
-            self.btn_toggle.setText("Start Server")
+            self.btn_toggle.setText("Start server")
+            self.btn_toggle.setIcon(fluent_icon("play", "#E2E8F0"))
 
     def start_server(self):
         if self.server and self.server.running:
@@ -2607,7 +2682,7 @@ class CompanionApp(QMainWindow):
                     lambda: (
                         QMessageBox.information(self, "Companion Updates", f"You are using the latest version (v{APP_VERSION})."),
                         self.btn_update.setEnabled(True),
-                        self.btn_update.setText("Check for Updates"),
+                        self.btn_update.setText("Check for updates"),
                     ),
                 )
                 return
@@ -2628,7 +2703,7 @@ class CompanionApp(QMainWindow):
                     threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
                 else:
                     self.btn_update.setEnabled(True)
-                    self.btn_update.setText("Check for Updates")
+                    self.btn_update.setText("Check for updates")
 
             self._run_on_ui(_ask)
         except Exception as exc:
@@ -2636,7 +2711,7 @@ class CompanionApp(QMainWindow):
                 lambda error=str(exc): (
                     QMessageBox.critical(self, "Update Failed", f"Could not check for updates.\n\n{error}"),
                     self.btn_update.setEnabled(True),
-                    self.btn_update.setText("Check for Updates"),
+                    self.btn_update.setText("Check for updates"),
                 ),
             )
 
@@ -2732,7 +2807,7 @@ class CompanionApp(QMainWindow):
                 lambda error=str(exc): (
                     QMessageBox.critical(self, "Update Failed", f"Could not install update.\n\n{error}"),
                     self.btn_update.setEnabled(True),
-                    self.btn_update.setText("Check for Updates"),
+                    self.btn_update.setText("Check for updates"),
                 ),
             )
 

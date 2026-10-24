@@ -20,11 +20,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PermMedia
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -33,6 +51,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -48,6 +67,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -56,6 +76,8 @@ import androidx.core.content.FileProvider
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.connection.RecordingEntry
 import com.btmouse.app.data.SettingsRepository
+import com.btmouse.app.ui.components.ChipIcon
+import com.btmouse.app.ui.components.IconLabel
 import com.btmouse.app.ui.theme.AccentAmber
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
@@ -92,15 +114,16 @@ fun CamerasAndAudioScreen(coordinator: ConnectionCoordinator) {
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             listOf(
-                "phone_cam" to "📱 Phone Webcam",
-                "pc_cam" to "💻 PC Webcam",
-                "audio" to "🎙️ Live Audio & Mic",
-                "all" to "🎛️ All Studio"
-            ).forEach { (key, label) ->
+                Triple("phone_cam", "Phone webcam", Icons.Filled.PhoneAndroid),
+                Triple("pc_cam", "PC webcam", Icons.Filled.Computer),
+                Triple("audio", "Live audio", Icons.Filled.Mic),
+                Triple("all", "All", Icons.Filled.Tune)
+            ).forEach { (key, label, icon) ->
                 val selected = activeTab == key
                 FilterChip(
                     selected = selected,
                     onClick = { activeTab = key },
+                    leadingIcon = { ChipIcon(icon) },
                     label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.38f),
@@ -131,15 +154,16 @@ fun UtilitiesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposi
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             listOf(
-                "recordings" to "📂 Media Library (Videos/Audios/Snaps)",
-                "apps" to "🚀 Quick Apps",
-                "tasks" to "📊 Tasks & Stats",
-                "power" to "⚡ Power & Lock"
-            ).forEach { (key, label) ->
+                Triple("recordings", "Media library", Icons.Filled.VideoLibrary),
+                Triple("apps", "Quick apps", Icons.Filled.Apps),
+                Triple("tasks", "Tasks & stats", Icons.Filled.Insights),
+                Triple("power", "Power & lock", Icons.Filled.PowerSettingsNew)
+            ).forEach { (key, label, icon) ->
                 val selected = activeSection == key
                 FilterChip(
                     selected = selected,
                     onClick = { activeSection = key },
+                    leadingIcon = { ChipIcon(icon) },
                     label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
@@ -188,7 +212,7 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Live Two-Way Audio Relay", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text("📁 Audios/", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                IconLabel(Icons.Filled.Folder, "Audios/", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, iconSize = 12.dp)
             }
             Text(
                 "Stream the PC microphone to this phone or speak from your phone through the PC speakers. Survives Wi-Fi / Bluetooth failover automatically.",
@@ -358,14 +382,14 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("▶ Now Playing on Phone", color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        IconLabel(Icons.Filled.PlayArrow, "Now playing on phone", color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold, iconSize = 18.dp)
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(
                                 onClick = { isFullscreenPlayer = true },
                                 shape = RoundedCornerShape(8.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                             ) {
-                                Text("⛶ Fullscreen", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                IconLabel(Icons.Filled.Fullscreen, "Fullscreen", fontWeight = FontWeight.Bold, iconSize = 16.dp)
                             }
                             Button(
                                 onClick = {
@@ -376,7 +400,7 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                                 shape = RoundedCornerShape(8.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
                             ) {
-                                Text("✕ Close", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                IconLabel(Icons.Filled.Close, "Close", fontWeight = FontWeight.Bold, iconSize = 16.dp)
                             }
                         }
                     }
@@ -451,14 +475,15 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             listOf(
-                "all" to "All (${recordings.size})",
-                "video" to "📹 Videos ($videoCount)",
-                "audio" to "🎙️ Audios ($audioCount)",
-                "snapshot" to "📷 Snapshots ($snapCount)"
-            ).forEach { (key, label) ->
+                Triple("all", "All (${recordings.size})", Icons.Filled.PermMedia),
+                Triple("video", "Videos ($videoCount)", Icons.Filled.Videocam),
+                Triple("audio", "Audios ($audioCount)", Icons.Filled.Mic),
+                Triple("snapshot", "Snapshots ($snapCount)", Icons.Filled.PhotoCamera)
+            ).forEach { (key, label, icon) ->
                 FilterChip(
                     selected = selectedCategory == key,
                     onClick = { selectedCategory = key },
+                    leadingIcon = { ChipIcon(icon) },
                     label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
@@ -552,9 +577,9 @@ private fun RecordingRow(
     }
 
     val icon = when (recording.mediaType) {
-        "audio" -> "🎙️"
-        "snapshot" -> "📷"
-        else -> "📹"
+        "audio" -> Icons.Filled.Mic
+        "snapshot" -> Icons.Filled.PhotoCamera
+        else -> Icons.Filled.Videocam
     }
     val sizeText = if (recording.size < 1024 * 1024) {
         "${recording.size / 1024} KB"
@@ -573,11 +598,15 @@ private fun RecordingRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Icon(icon, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    "$icon  ${recording.name}",
+                    recording.name,
                     color = TextPrimary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -587,7 +616,7 @@ private fun RecordingRow(
                         .background(DarkSurfaceVariant)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
-                    Text("📁 ${recording.folder}/", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    IconLabel(Icons.Filled.Folder, "${recording.folder}/", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, iconSize = 12.dp)
                 }
             }
 
@@ -605,7 +634,7 @@ private fun RecordingRow(
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                         ) {
-                            Text("▶ Play Here", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            IconLabel(Icons.Filled.PlayArrow, "Play here", fontWeight = FontWeight.Bold, iconSize = 16.dp)
                         }
                     }
                     Button(
@@ -631,14 +660,14 @@ private fun RecordingRow(
                             enabled = connected,
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
-                        ) { Text("▶ Play on Phone", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                        ) { IconLabel(Icons.Filled.PlayArrow, "Play on phone", fontWeight = FontWeight.Bold, iconSize = 16.dp) }
                     }
                     Button(
                         onClick = { coordinator.downloadRecording(recording.id) },
                         enabled = connected,
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
-                    ) { Text("⬇ Save to ${recording.folder}/", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
+                    ) { IconLabel(Icons.Filled.Download, "Save to ${recording.folder}/", fontWeight = FontWeight.SemiBold, iconSize = 16.dp) }
                     Button(
                         onClick = { showDeleteConfirm = true },
                         enabled = connected,
