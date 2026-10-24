@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
 **Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.13
-**Owner:** Codex | **Release:** [v1.3.13 pending publish](release-notes/v1.3.13.md) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12)
+**Owner:** Codex | **Release:** [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
 
 ## Product objective
 
