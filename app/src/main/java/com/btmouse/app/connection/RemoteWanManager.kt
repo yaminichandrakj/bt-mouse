@@ -63,8 +63,14 @@ class RemoteWanManager(
     private val _latestCameraFrame = MutableStateFlow<ByteArray?>(null)
     override val latestCameraFrame: StateFlow<ByteArray?> = _latestCameraFrame.asStateFlow()
 
+    private val snapshotGallery = SnapshotGallery(context)
+    override val cameraSnapshots: StateFlow<List<SnapshotEntry>> get() = snapshotGallery.refresh()
+
     private val _isCameraStreaming = MutableStateFlow(false)
     override val isCameraStreaming: StateFlow<Boolean> = _isCameraStreaming.asStateFlow()
+
+    private val _isCameraRecording = MutableStateFlow(false)
+    override val isCameraRecording: StateFlow<Boolean> = _isCameraRecording.asStateFlow()
 
     private val _isAudioRecording = MutableStateFlow(false)
     override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
@@ -76,6 +82,10 @@ class RemoteWanManager(
     override val isPcLiveAudioActive: StateFlow<Boolean> = _isPcLiveAudioActive.asStateFlow()
     private val _isPhoneLiveAudioActive = MutableStateFlow(false)
     override val isPhoneLiveAudioActive: StateFlow<Boolean> = _isPhoneLiveAudioActive.asStateFlow()
+    private val _isPcLiveAudioRecording = MutableStateFlow(false)
+    override val isPcLiveAudioRecording: StateFlow<Boolean> = _isPcLiveAudioRecording.asStateFlow()
+    private val _isPhoneLiveAudioRecording = MutableStateFlow(false)
+    override val isPhoneLiveAudioRecording: StateFlow<Boolean> = _isPhoneLiveAudioRecording.asStateFlow()
     override val recordings: StateFlow<List<RecordingEntry>> = recordingTransfer.recordings
     override val recordingTransferStatus: StateFlow<String> = recordingTransfer.status
     override val recordingStreamUrl: StateFlow<String?> = recordingTransfer.streamUrl
@@ -167,11 +177,14 @@ class RemoteWanManager(
         recordingTransfer.cancel()
         _mediaStatus.value = MediaStatus()
         _isCameraStreaming.value = false
+        _isCameraRecording.value = false
         _isAudioRecording.value = false
         liveAudioPlayer.stop()
         _isPcLiveAudioActive.value = false
+        _isPcLiveAudioRecording.value = false
         liveAudioRecorder.stop()
         _isPhoneLiveAudioActive.value = false
+        _isPhoneLiveAudioRecording.value = false
         _systemStats.value = null
         _runningProcesses.value = emptyList()
         _installedApps.value = emptyList()
@@ -299,7 +312,12 @@ class RemoteWanManager(
                     if (!b64.isNullOrEmpty()) {
                         try {
                             val bytes = Base64.decode(b64, Base64.DEFAULT)
-                            _latestCameraFrame.value = bytes
+                            if (root.get("is_snapshot")?.asBoolean == true) {
+                                if (!snapshotGallery.save(bytes)) _statusMessage.value = "Could not save the camera snapshot"
+                                else _statusMessage.value = "Snapshot saved to the phone gallery"
+                            } else {
+                                _latestCameraFrame.value = bytes
+                            }
                             if (_statusMessage.value.startsWith("Camera stream started")) _statusMessage.value = ""
                         } catch (e: Exception) {
                             Log.e(tag, "Error decoding camera frame", e)
@@ -309,6 +327,7 @@ class RemoteWanManager(
                 "camera_stream_status" -> {
                     val streaming = root.get("streaming")?.asBoolean ?: false
                     _isCameraStreaming.value = streaming
+                    _isCameraRecording.value = root.get("recording")?.asBoolean ?: false
                     if (!streaming) _latestCameraFrame.value = null
                     val message = root.get("message")?.asString.orEmpty()
                     _statusMessage.value = when {
@@ -318,6 +337,10 @@ class RemoteWanManager(
                         _statusMessage.value.startsWith("Camera stream") -> ""
                         else -> _statusMessage.value
                     }
+                }
+                "camera_recording_status" -> {
+                    _isCameraRecording.value = root.get("recording")?.asBoolean ?: false
+                    root.get("message")?.asString?.takeIf { it.isNotBlank() }?.let { _statusMessage.value = "Camera recording: $it" }
                 }
                 "audio_status_response" -> {
                     val recording = root.get("recording")?.asBoolean ?: false
@@ -341,12 +364,20 @@ class RemoteWanManager(
                     val active = root.get("active")?.asBoolean ?: false
                     if (root.get("direction")?.asString == "phone_to_pc") {
                         _isPhoneLiveAudioActive.value = active
+                        _isPhoneLiveAudioRecording.value = active && (root.get("recording")?.asBoolean ?: false)
                         if (!active) liveAudioRecorder.stop()
                     } else {
                         _isPcLiveAudioActive.value = active
+                        _isPcLiveAudioRecording.value = active && (root.get("recording")?.asBoolean ?: false)
                         if (!active) liveAudioPlayer.stop()
                     }
                     root.get("message")?.asString?.takeIf { it.isNotBlank() }?.let { _statusMessage.value = it }
+                }
+                "kill_process_response" -> {
+                    val success = root.get("success")?.asBoolean ?: false
+                    _statusMessage.value = root.get("message")?.asString
+                        ?: if (success) "Task ended" else "Could not end task"
+                    if (success) queryRunningProcesses()
                 }
             }
         } catch (e: Exception) {

@@ -919,6 +919,8 @@ class CameraManager:
         self.auto_record_enabled = False
         self.last_recording_path = None
         self.last_recording_error = ""
+        self.recording_active = False
+        self.latest_frame = None
         self.recording_policy = {"retention_days": 0, "max_storage_mb": 0, "min_free_mb": 512}
         self.has_cv2 = False
         try:
@@ -932,6 +934,21 @@ class CameraManager:
             return None
         try:
             import cv2
+            with self.lock:
+                stream_active = self.streaming
+                frame = self.latest_frame.copy() if stream_active and self.latest_frame is not None else None
+            if stream_active:
+                # Reuse the live capture; opening another VideoCapture for the
+                # same webcam can reset the Windows camera driver.
+                if frame is None:
+                    return None
+                height, width = frame.shape[:2]
+                if width > max_width:
+                    frame = cv2.resize(frame, (max_width, max(1, int(height * max_width / width))))
+                encoded, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+                if not encoded or (max_encoded_bytes and buffer.nbytes > max_encoded_bytes):
+                    return None
+                return base64.b64encode(buffer).decode('utf-8')
             cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
             if not cap.isOpened():
                 cap = cv2.VideoCapture(0)
@@ -1012,6 +1029,7 @@ class CameraManager:
         def _loop():
             writer = None
             recording_path = None
+            recording_attempted = False
             failure_reason = None
             consecutive_read_failures = 0
             consecutive_frame_drops = 0
@@ -1030,23 +1048,32 @@ class CameraManager:
                         continue
                     consecutive_read_failures = 0
                     if ret and frame is not None:
+                        with self.lock:
+                            if generation == self.generation:
+                                self.latest_frame = frame.copy()
                         if record_enabled:
-                            if writer is None:
+                            if writer is None and not recording_attempted:
+                                recording_attempted = True
                                 height, width = frame.shape[:2]
                                 stamp = time.strftime("%Y%m%d_%H%M%S")
                                 recording_path = os.path.join(
                                     self.recordings_dir,
-                                    f"webcam_{stamp}_{int(time.time() * 1000) % 1000:03d}.avi"
+                                    f"webcam_{stamp}_{int(time.time() * 1000) % 1000:03d}.mp4"
                                 )
-                                fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+                                # Keep new webcam recordings in MPEG-4 format so
+                                # Android's built-in player can decode them.
+                                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                                 writer = cv2.VideoWriter(recording_path, fourcc, max(1, fps), (width, height))
                                 if not writer.isOpened():
                                     writer.release()
                                     writer = None
                                     recording_path = None
-                                    print("[-] Could not start webcam video recording (MJPG codec unavailable)")
+                                    self.last_recording_error = "The PC MP4 video encoder is unavailable; webcam recording was not started."
+                                    print(f"[-] {self.last_recording_error}")
                                 else:
                                     self.last_recording_path = recording_path
+                                    with self.lock:
+                                        self.recording_active = True
                                     print(f"[+] Recording webcam stream to {recording_path}")
                             if writer is not None:
                                 writer.write(frame)
@@ -1092,6 +1119,9 @@ class CameraManager:
                     writer.release()
                     print(f"[+] Finished webcam recording: {recording_path}")
                 with self.lock:
+                    if generation == self.generation:
+                        self.recording_active = False
+                        self.latest_frame = None
                     release_capture = self.stream_capture is cap
                     if release_capture:
                         self.stream_capture = None
@@ -1125,6 +1155,8 @@ class CameraManager:
     def _stop_stream(self):
         with self.lock:
             self.streaming = False
+            self.latest_frame = None
+            self.recording_active = False
             self.generation += 1
             thread = self.stream_thread
             capture = self.stream_capture
@@ -1253,6 +1285,9 @@ class LiveAudioManager:
         self.output_queue = None
         self.output_thread = None
         self.output_running = False
+        self.output_sample_rate = self.SAMPLE_RATE
+        self.output_channels = 1
+        self.output_has_received_audio = False
         self.output_respond = None
         self.output_last_seen = 0.0
         self.lease_thread = None
@@ -1443,8 +1478,18 @@ class LiveAudioManager:
         try:
             import sounddevice as sd
             import wave
-            stream = sd.OutputStream(samplerate=self.SAMPLE_RATE, channels=1, dtype="int16",
-                                     blocksize=self.BLOCK_SAMPLES)
+            device = sd.default.device[1]
+            if device is None or int(device) < 0:
+                device = None
+            device_info = sd.query_devices(device, "output")
+            output_rate = max(8000, int(device_info.get("default_samplerate") or 48000))
+            max_channels = int(device_info.get("max_output_channels") or 1)
+            output_channels = 1 if max_channels == 1 else 2
+            sd.check_output_settings(device=device, samplerate=output_rate,
+                                     channels=output_channels, dtype="int16")
+            stream = sd.OutputStream(device=device, samplerate=output_rate,
+                                     channels=output_channels, dtype="int16",
+                                     blocksize=max(0, int(self.BLOCK_SAMPLES * output_rate / self.SAMPLE_RATE)))
             stream.start()
             recording_path = None
             record_warning = ""
@@ -1466,12 +1511,16 @@ class LiveAudioManager:
                 self.output_last_seen = time.monotonic()
                 self.output_recorder = recorder
                 self.output_path = recording_path
+                self.output_sample_rate = output_rate
+                self.output_channels = output_channels
+                self.output_has_received_audio = False
                 self.output_queue = queue.Queue(maxsize=16)
                 self.output_running = True
                 self.output_thread = threading.Thread(
                     target=self._output_loop, args=(stream,), name="LivePhoneAudioPlayback", daemon=True)
                 self.output_thread.start()
-            message = "Phone microphone audio is playing on the PC"
+            device_name = str(device_info.get("name") or "default output")
+            message = f"PC output ready ({device_name}); waiting for phone microphone audio"
             if record and not recorder:
                 message += f"; recording skipped: {record_warning}"
             return True, message
@@ -1494,13 +1543,38 @@ class LiveAudioManager:
             if not self.output_running or self.output_owner != owner:
                 return False
             audio_queue = self.output_queue
+            report_first_frame = not self.output_has_received_audio
+            respond = self.output_respond
+            recording = self.output_recorder is not None
         try:
             audio_queue.put_nowait(pcm)
+            if report_first_frame:
+                with self.lock:
+                    if self.output_running and self.output_owner == owner:
+                        self.output_has_received_audio = True
+            if report_first_frame and respond:
+                try:
+                    respond({"type": "live_audio_status", "direction": "phone_to_pc",
+                             "active": True, "recording": recording, "audio_received": True,
+                             "message": "Phone microphone audio is reaching the PC speakers"})
+                except Exception:
+                    pass
             return True
         except queue.Full:
             try:
                 audio_queue.get_nowait()
                 audio_queue.put_nowait(pcm)
+                if report_first_frame:
+                    with self.lock:
+                        if self.output_running and self.output_owner == owner:
+                            self.output_has_received_audio = True
+                    if respond:
+                        try:
+                            respond({"type": "live_audio_status", "direction": "phone_to_pc",
+                                     "active": True, "recording": recording, "audio_received": True,
+                                     "message": "Phone microphone audio is reaching the PC speakers"})
+                        except Exception:
+                            pass
                 return True
             except queue.Empty:
                 return False
@@ -1519,7 +1593,22 @@ class LiveAudioManager:
                     continue
                 if len(pcm) != self.BLOCK_SAMPLES * 2:
                     continue
-                stream.write(pcm)
+                # sounddevice.OutputStream.write requires a shaped NumPy array;
+                # passing the network byte string raises and silently ends the
+                # phone-to-PC stream on many installs.
+                import numpy as np
+                mono = np.frombuffer(pcm, dtype=np.int16)
+                sample_rate = self.output_sample_rate
+                if sample_rate != self.SAMPLE_RATE:
+                    source_positions = np.arange(mono.size, dtype=np.float32)
+                    output_size = max(1, int(round(mono.size * sample_rate / self.SAMPLE_RATE)))
+                    target_positions = np.linspace(0, mono.size - 1, output_size, dtype=np.float32)
+                    mono = np.interp(target_positions, source_positions, mono).astype(np.int16)
+                if self.output_channels == 2:
+                    output = np.repeat(mono.reshape(-1, 1), 2, axis=1)
+                else:
+                    output = mono.reshape(-1, 1)
+                stream.write(output)
                 if recorder:
                     recorder.writeframesraw(pcm)
         except Exception as exc:
@@ -1552,6 +1641,11 @@ class LiveAudioManager:
             if thread.is_alive():
                 print("[-] Live phone audio output did not stop before timeout")
                 return False
+        if stream:
+            try:
+                stream.close()
+            except Exception:
+                pass
         finished_path = None
         with self.lock:
             if self.output_stream is stream:
@@ -1936,7 +2030,15 @@ class Server:
                 "last_seen": time.monotonic(),
             }
 
+        recording_state = {"active": False, "error": ""}
+
         def _on_frame(encoded_frame):
+            active = bool(self.camera_manager.recording_active)
+            error = self.camera_manager.last_recording_error if not active else ""
+            if active != recording_state["active"] or error != recording_state["error"]:
+                recording_state["active"] = active
+                recording_state["error"] = error
+                respond({"type": "camera_recording_status", "recording": active, "message": error})
             respond({"type": "camera_frame_response", "frame": encoded_frame, "is_streaming": True})
 
         max_bytes = 16 * 1024 if not is_websocket else None
@@ -1965,7 +2067,12 @@ class Server:
                 if self._camera_stream_owner and self._camera_stream_owner.get("session_id") == session_id:
                     self._camera_stream_owner = None
 
-        response = {"type": "camera_stream_status", "streaming": bool(started)}
+        response = {
+            "type": "camera_stream_status",
+            "streaming": bool(started),
+            "recording_enabled": bool(self.camera_manager.auto_record_enabled),
+            "recording": bool(self.camera_manager.recording_active),
+        }
         if started and self.camera_manager.last_recording_error:
             response["message"] = self.camera_manager.last_recording_error
         respond(response)
@@ -2131,7 +2238,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.3.9"
+                    "version": "1.3.10"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -2403,8 +2510,8 @@ class Server:
 
         elif cmd_type == "kill_process":
             pid = data.get("pid")
-            success = self._kill_process(int(pid)) if pid else False
-            resp = {"type": "kill_process_response", "pid": pid, "success": success}
+            success, message = self._kill_process(int(pid)) if pid else (False, "Invalid process ID")
+            resp = {"type": "kill_process_response", "pid": pid, "success": success, "message": message}
             if responder:
                 responder(resp)
             elif addr and self.sock:
@@ -2428,7 +2535,7 @@ class Server:
                 started, message = self.live_audio_manager.start_pc_to_phone(
                     owner, respond, record=bool(data.get("record", False)))
                 respond({"type": "live_audio_status", "direction": "pc_to_phone",
-                         "active": started, "recording": bool(started and data.get("record", False)),
+                         "active": started, "recording": bool(started and self.live_audio_manager.capture_recorder),
                          "message": message})
             threading.Thread(target=_start_live_audio, name="StartLiveAudio", daemon=True).start()
 
@@ -2443,7 +2550,7 @@ class Server:
                 started, message = self.live_audio_manager.start_phone_to_pc(
                     self._camera_client_key(addr), record=bool(data.get("record", False)), respond=respond)
                 respond({"type": "live_audio_status", "direction": "phone_to_pc",
-                         "active": started, "recording": bool(started and data.get("record", False)),
+                         "active": started, "recording": bool(started and self.live_audio_manager.output_recorder),
                          "message": message})
             threading.Thread(target=_start_phone_audio, name="StartPhoneAudio", daemon=True).start()
 
@@ -2511,7 +2618,8 @@ class Server:
         elif cmd_type in ("camera_stream_stop", "stop_camera_stream"):
             def _stop_camera():
                 self._stop_camera_stream_for_client(self._camera_client_key(addr))
-                respond({"type": "camera_stream_status", "streaming": False})
+                respond({"type": "camera_recording_status", "recording": False})
+                respond({"type": "camera_stream_status", "streaming": False, "recording": False})
             threading.Thread(target=_stop_camera, name="StopCameraStream", daemon=True).start()
 
         elif cmd_type in ("audio_record_start", "start_audio_record"):
@@ -2634,6 +2742,12 @@ class Server:
         if self._is_recording_active(path):
             respond({"type": f"{prefix}_error", "message": "Recording is still in progress"})
             return
+        if path.suffix.lower() == ".avi":
+            try:
+                path = self._convert_avi_for_phone(path)
+            except Exception as exc:
+                respond({"type": f"{prefix}_error", "message": f"Could not prepare this video for phone playback: {str(exc)[:140]}"})
+                return
         try:
             size = path.stat().st_size
         except OSError:
@@ -2659,6 +2773,56 @@ class Server:
             args=(path, size, chunk_size, transfer_id, transport, respond, stream_mode, cancel),
             daemon=True,
         ).start()
+
+    def _convert_avi_for_phone(self, source_path):
+        """Convert older MJPEG AVI webcam files to a phone-friendly MP4 once."""
+        import cv2
+        source_path = Path(source_path)
+        target = source_path.with_name(f"{source_path.stem}.phone.mp4")
+        if target.is_file() and target.stat().st_mtime >= source_path.stat().st_mtime and target.stat().st_size > 1024:
+            return target
+        temporary = source_path.with_name(f"{source_path.stem}.phone.tmp.mp4")
+        temporary.unlink(missing_ok=True)
+        capture = cv2.VideoCapture(str(source_path))
+        writer = None
+        frames_written = 0
+        try:
+            if not capture.isOpened():
+                raise RuntimeError("the AVI video codec could not be opened")
+            fps = capture.get(cv2.CAP_PROP_FPS)
+            fps = max(1.0, min(60.0, fps if fps and fps > 0 else 15.0))
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                if writer is None:
+                    height, width = frame.shape[:2]
+                    writer = cv2.VideoWriter(
+                        str(temporary), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+                    )
+                    if not writer.isOpened():
+                        raise RuntimeError("the PC does not have an MP4 video encoder")
+                writer.write(frame)
+                frames_written += 1
+        except Exception:
+            capture.release()
+            if writer is not None:
+                writer.release()
+            temporary.unlink(missing_ok=True)
+            raise
+        finally:
+            capture.release()
+            if writer is not None:
+                writer.release()
+        if frames_written < 1 or not temporary.is_file() or temporary.stat().st_size <= 1024:
+            temporary.unlink(missing_ok=True)
+            raise RuntimeError("the AVI file contains no readable video frames")
+        try:
+            temporary.replace(target)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        return target
 
     def _recording_download_worker(self, path, size, chunk_size, transfer_id, transport, respond, stream_mode=False, cancel=None):
         prefix = "recording_stream" if stream_mode else "recording_download"
@@ -3097,7 +3261,7 @@ class Server:
                         elapsed = max(0.001, now - previous[1])
                         cpu_percent = max(0.0, (cpu_total - previous[0]) * 100.0 / elapsed / logical_cpus)
                     self._process_cpu_samples[pid] = (cpu_total, now)
-                    if memory_mb >= 1.0:
+                    if memory_mb >= 0.5:
                         procs.append({
                             'pid': pid,
                             'name': info.get('name') or "Unknown process",
@@ -3107,16 +3271,18 @@ class Server:
                 except Exception:
                     pass
             self._process_cpu_samples = {pid: sample for pid, sample in self._process_cpu_samples.items() if pid in live_pids}
-            procs.sort(key=lambda x: x['ram'], reverse=True)
+            procs.sort(key=lambda x: (x['cpu'], x['ram']), reverse=True)
         except Exception as e:
             print(f"[-] Error querying processes: {e}")
-        return procs[:35]
+        return procs[:200]
 
     def _get_system_stats(self):
         stats = {"cpu": 0.0, "ram": 0.0, "battery": -1, "power_plugged": True, "disk": 0.0}
         try:
             import psutil
-            stats["cpu"] = round(psutil.cpu_percent(interval=None), 1)
+            # Measure a short interval so the first sample after app startup or
+            # reconnect does not report an uninitialized zero value.
+            stats["cpu"] = round(psutil.cpu_percent(interval=0.15), 1)
             stats["ram"] = round(psutil.virtual_memory().percent, 1)
             disk = psutil.disk_usage(os.path.abspath(os.sep))
             stats["disk"] = round(disk.percent, 1)
@@ -3232,11 +3398,18 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
             p = psutil.Process(pid)
             name = p.name()
             p.terminate()
+            try:
+                p.wait(timeout=3)
+            except psutil.TimeoutExpired:
+                p.kill()
+                p.wait(timeout=2)
             print(f"[+] Terminated process PID {pid} ({name})")
-            return True
+            return True, f"Ended {name} (PID {pid})"
+        except psutil.NoSuchProcess:
+            return True, f"Process PID {pid} had already exited"
         except Exception as e:
             print(f"[-] Could not kill PID {pid}: {e}")
-            return False
+            return False, f"Could not end PID {pid}: {str(e)[:140]}"
 
     def _launch_application(self, app_id):
         if not app_id:

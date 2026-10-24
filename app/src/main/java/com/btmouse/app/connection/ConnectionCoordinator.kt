@@ -229,11 +229,25 @@ class ConnectionCoordinator(
             ConnectionMode.WIFI -> wifiClientManager.latestCameraFrame
         }
 
+    override val cameraSnapshots: StateFlow<List<SnapshotEntry>>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.cameraSnapshots
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.cameraSnapshots
+            ConnectionMode.WIFI -> wifiClientManager.cameraSnapshots
+        }
+
     override val isCameraStreaming: StateFlow<Boolean>
         get() = when (settings.connectionMode.value) {
             ConnectionMode.REMOTE_WAN -> remoteWanManager.isCameraStreaming
             ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isCameraStreaming
             ConnectionMode.WIFI -> wifiClientManager.isCameraStreaming
+        }
+
+    override val isCameraRecording: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isCameraRecording
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isCameraRecording
+            ConnectionMode.WIFI -> wifiClientManager.isCameraRecording
         }
 
     override val isAudioRecording: StateFlow<Boolean>
@@ -255,6 +269,20 @@ class ConnectionCoordinator(
             ConnectionMode.REMOTE_WAN -> remoteWanManager.isPhoneLiveAudioActive
             ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPhoneLiveAudioActive
             ConnectionMode.WIFI -> wifiClientManager.isPhoneLiveAudioActive
+        }
+
+    override val isPcLiveAudioRecording: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPcLiveAudioRecording
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPcLiveAudioRecording
+            ConnectionMode.WIFI -> wifiClientManager.isPcLiveAudioRecording
+        }
+
+    override val isPhoneLiveAudioRecording: StateFlow<Boolean>
+        get() = when (settings.connectionMode.value) {
+            ConnectionMode.REMOTE_WAN -> remoteWanManager.isPhoneLiveAudioRecording
+            ConnectionMode.BLUETOOTH -> bluetoothRfcommManager.isPhoneLiveAudioRecording
+            ConnectionMode.WIFI -> wifiClientManager.isPhoneLiveAudioRecording
         }
 
     override fun querySystemStats() {

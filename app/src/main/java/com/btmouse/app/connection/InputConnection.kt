@@ -71,13 +71,17 @@ interface InputConnection {
     val runningProcesses: StateFlow<List<ProcessInfo>>? get() = null
     val installedApps: StateFlow<List<AppInfo>>? get() = null
     val latestCameraFrame: StateFlow<ByteArray?>? get() = null
+    val cameraSnapshots: StateFlow<List<SnapshotEntry>>? get() = null
     val isCameraStreaming: StateFlow<Boolean>? get() = null
+    val isCameraRecording: StateFlow<Boolean>? get() = null
     val isAudioRecording: StateFlow<Boolean>? get() = null
     val recordings: StateFlow<List<RecordingEntry>>? get() = null
     val recordingTransferStatus: StateFlow<String>? get() = null
     val recordingStreamUrl: StateFlow<String?>? get() = null
     val isPcLiveAudioActive: StateFlow<Boolean>? get() = null
     val isPhoneLiveAudioActive: StateFlow<Boolean>? get() = null
+    val isPcLiveAudioRecording: StateFlow<Boolean>? get() = null
+    val isPhoneLiveAudioRecording: StateFlow<Boolean>? get() = null
 
     fun querySystemStats() {}
     fun queryRunningProcesses() {}

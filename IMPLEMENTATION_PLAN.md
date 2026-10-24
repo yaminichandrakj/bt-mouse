@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.9
-**Owner:** Codex | **Release:** [v1.3.9 published](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.9) · [feature notes](release-notes/v1.3.9.md)
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.10
+**Owner:** Codex | **Release:** v1.3.10 release candidate · [feature notes](release-notes/v1.3.10.md)
 
 ## Product objective
 
@@ -9,16 +9,16 @@ Make the Android phone a dependable PC input and companion device over Bluetooth
 
 ## Current implementation snapshot
 
-Source status below distinguishes CI/build verification from physical-device verification. v1.3.8 passed the GitHub Actions version check, 17 companion regression tests, Android release build, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
+Source status below distinguishes CI/build verification from physical-device verification. v1.3.9 passed the GitHub Actions version check, 17 companion regression checks, Android release build, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
 
 | Area | Present in source | Remaining |
 |---|---|---|
 | Security and pairing | PIN-authenticated UDP commands, persistent PIN, validated app launch, authenticated WebSocket, transport-specific state | Recheck integration and preserve authorization gates |
 | Quick Apps | PC companion can add, rename, remove, and share curated Start Menu shortcuts; phone can add/remove discovered PC shortcuts from its shared list | Build/device-check async refresh and phone management, including preloaded entries |
-| Tasks and stats | Cached/default response then background refresh for process and stats requests; cached disk activity and per-adapter GPU metrics | Hotfix keeps query work off input path; device-check stats refresh and compare values with Task Manager |
-| PC webcam | Snapshot, live preview, stream failure reporting/recovery, opt-in webcam recording, desktop recordings list | Snapshot/start work moved off input path; verify camera lifecycle and full-resolution recording on target PC |
-| Recordings | Authenticated listing and chunked download, integrity checks, Android download/open and online-playback source; desktop retention age/size and minimum-free-space settings | Verify codecs/transports, retention behavior, transfer progress and cleanup |
-| Live audio | Foreground PC-mic-to-phone and phone-mic-to-PC source, optional PC-side audio recording | Verify latency, sample rates, interruptions, echo, recording integrity; device selector and echo handling missing |
+| Tasks and stats | Cached/default response then background refresh; measured CPU sample; up to 200 processes sorted by usage; end-task result returned and list refreshed | Compare live values with Task Manager on target PC |
+| PC webcam | Snapshot gallery stored on phone; live preview survives navigation within app; live recording indicator and errors; new MP4 recordings; old MJPEG AVI converts when opened/downloaded | Verify codecs, webcam lifecycle, conversion, and playback on target PC/phone |
+| Recordings | Authenticated listing and chunked download, integrity checks, Android download/open and online playback; desktop retention settings | Verify conversion/transfer/playback and retention on target devices |
+| Live audio | PC mic and phone mic routes; PC output resampling/channel conversion; first-audio and actual recording status; live controls now inside Camera & Mic | Verify latency, device changes, interruption recovery, playback and recording integrity; device selector and echo handling missing |
 | Browser media | SMTC and browser audio-session detection; selected-screen-region preview with phone toggle in source; stable player identification; corrected Playing/Paused mapping and transient-session state retention | Verify player recognition, transport limits, coordinate scaling, errors, and stop behavior |
 | Startup/update | Windows sign-in option, Android installer handoff, desktop updater retry/rollback logic, version consistency in Actions | Verify packaged update/relaunch/rollback and startup; Android auto-reconnect remains incomplete |
 | Desktop UI | Python companion packaged as a one-file EXE; DPI awareness and version/path title | Sharpen/validate current UI; native Windows app migration not done |
@@ -46,9 +46,13 @@ Phases are ordered from integration and verification toward larger platform work
 3. ~~Correct media playback-state mapping and preserve state across transient media-session errors.~~
 4. ~~Build Android and Windows companion at v1.3.9; both GitHub Actions builds passed.~~
 5. ~~Run existing companion regression checks, Android build checks, and release-version consistency in GitHub Actions for v1.3.9; all passed.~~
-6. Smoke-test Bluetooth HID without the companion and each companion transport independently.
+6. ~~Keep process and stats polling responsive, show the full process list, return end-task results, and use a measured system CPU sample.~~
+7. ~~Save captured snapshots to a phone gallery and keep snapshot capture from interrupting an active webcam stream.~~
+8. ~~Move live two-way audio controls into Camera & Mic and convert phone PCM frames to the PC output device's sample rate and channels.~~
+9. ~~Write phone-compatible MP4 webcam recordings and convert legacy AVI webcam recordings on playback/download.~~
+10. Smoke-test Bluetooth HID without the companion and each companion transport independently.
 
-**Acceptance:** v1.3.9 CI builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
+**Acceptance:** v1.3.10 CI builds and software checks pass. Hardware reliability still requires target-device checks; no claim is made for those until performed.
 
 ### Phase 1 - Webcam video recording, recordings library, and browser video preview (medium effort; high priority)
 
@@ -62,7 +66,7 @@ Phases are ordered from integration and verification toward larger platform work
 **Phone recordings experience**
 - ~~Implement authenticated catalog listing, bounded chunk transfer, SHA-256 verification, download, local open, and online-playback support.~~ Verify listing, transfer, playback, and recording integrity using actual webcam recordings on the phone.
 - Add transfer progress, cancellation, retry/error status, and cleanup after navigation/disconnect.
-- Check produced AVI/WAV formats on supported Android versions. Report unsupported formats clearly; verify seek/cancel behavior and throughput on Bluetooth, Wi-Fi, and WAN.
+- Verify new MP4 and converted legacy AVI/WAV formats on supported Android versions; verify seek/cancel behavior and throughput on Bluetooth, Wi-Fi, and WAN.
 - Add optional phone-local retention and distinguish PC recordings from local copies.
 
 **Selected-area browser video preview**
@@ -155,7 +159,7 @@ Phases are ordered from integration and verification toward larger platform work
 - Compare the displayed running EXE path with the user's shortcut to diagnose the stale-version report.
 - Keep Android versionName/versionCode, PC version, release tag, workflow checks, and asset names consistent.
 - Require a versioned `release-notes/vX.Y.Z.md` feature list for every release and publish it as the GitHub Release description, alongside only the APK and EXE downloads.
-- ~~Actions version check, 17 Python regression tests, signed Android APK build, Windows companion EXE packaging, gated release publication, and asset verification.~~ Release: [v1.3.8](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.8).
+- ~~Actions version check, 17 Python regression checks, signed Android APK build, Windows companion EXE packaging, gated release publication, and asset verification.~~ Release: [v1.3.9](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.9).
 - **Still open:** validate Android and Windows in-app updater installation, relaunch, rollback, and installed-version acknowledgement on target devices. Move signing material to protected CI secrets while preserving the existing Android key.
 
 **Acceptance:** release artifacts match the versioned source and both CI builds pass. Full updater acceptance remains pending real installation and rollback checks.
@@ -181,5 +185,5 @@ Phases are ordered from integration and verification toward larger platform work
 - [ ] Check both updater flows, rollback, and correct relaunch path.
 - [ ] Check startup/reconnect without auto-starting capture.
 - [ ] Compare disk/GPU readings with Task Manager.
-- [x] ~~Verify CI artifacts, existing signing identity, version/tag consistency, release notes, and assets for v1.3.9.~~
-- [x] ~~Publish v1.3.9 after both CI builds pass; hardware checks unavailable in CI remain open.~~
+- [ ] Verify v1.3.10 CI artifacts, signing identity, version/tag consistency, release notes, and assets.
+- [ ] Publish v1.3.10 after both CI builds pass; hardware checks unavailable in CI remain open.

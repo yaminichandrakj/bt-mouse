@@ -986,6 +986,7 @@ fun TasksAndHardwareSection(
     var processSearch by remember { mutableStateOf("") }
     val stats by coordinator.systemStats.collectAsState()
     val processes by coordinator.runningProcesses.collectAsState()
+    val taskActionMessage by coordinator.statusMessage.collectAsState()
 
     // Poll stats every 2.5 seconds
     LaunchedEffect(Unit) {
@@ -1003,8 +1004,11 @@ fun TasksAndHardwareSection(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("PC Hardware & Live Tasks", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        if (taskActionMessage.startsWith("Ended ") || taskActionMessage.startsWith("Could not end") || taskActionMessage.startsWith("Process PID")) {
+            Text(taskActionMessage, color = if (taskActionMessage.startsWith("Could not end")) AccentRose else AccentEmerald, fontSize = 11.sp)
+        }
 
         // 2x2 Stats Dashboard
         Card(
@@ -1204,7 +1208,7 @@ fun TasksAndHardwareSection(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        filtered.take(30).forEach { proc ->
+                        filtered.forEach { proc ->
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -1245,12 +1249,22 @@ fun CameraAndRecorderSection(
     val isStreaming by coordinator.isCameraStreaming.collectAsState()
     val isRecording by coordinator.isAudioRecording.collectAsState()
     val connectionStatus by coordinator.statusMessage.collectAsState()
+    val snapshotEntries by coordinator.cameraSnapshots.collectAsState()
+    val cameraRecording by coordinator.isCameraRecording.collectAsState()
     var cameraStreamMessage by remember { mutableStateOf("") }
-
-    DisposableEffect(coordinator) {
-        onDispose {
-            if (coordinator.isCameraStreaming.value) coordinator.stopCameraStream()
-        }
+    var selectedSnapshot by remember { mutableStateOf<String?>(null) }
+    val selectedSnapshotBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, selectedSnapshot) {
+        value = selectedSnapshot?.let { path -> withContext(Dispatchers.IO) {
+            try { BitmapFactory.decodeFile(path)?.asImageBitmap() } catch (_: Exception) { null }
+        } }
+    }
+    if (selectedSnapshotBitmap != null) {
+        AlertDialog(
+            onDismissRequest = { selectedSnapshot = null },
+            confirmButton = { TextButton(onClick = { selectedSnapshot = null }) { Text("Close") } },
+            text = { Image(bitmap = selectedSnapshotBitmap!!, contentDescription = "Saved webcam snapshot", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.Fit) },
+            containerColor = DarkSurface
+        )
     }
 
     LaunchedEffect(isStreaming, rawBytes) {
@@ -1275,11 +1289,11 @@ fun CameraAndRecorderSection(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Camera & Microphone Control", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        if (connectionStatus.startsWith("Microphone") || connectionStatus.startsWith("Camera stream")) {
+        if (connectionStatus.startsWith("Microphone") || connectionStatus.startsWith("Camera stream") || connectionStatus.startsWith("Camera recording")) {
             Text(connectionStatus, color = if (connectionStatus.contains("error", ignoreCase = true) ||
-                connectionStatus.contains("stopped", ignoreCase = true)) AccentRose else AccentEmerald,
+                connectionStatus.contains("stopped", ignoreCase = true) || connectionStatus.contains("unavailable", ignoreCase = true)) AccentRose else AccentEmerald,
                 fontSize = 11.sp)
         }
         if (cameraStreamMessage.isNotBlank()) {
@@ -1312,7 +1326,7 @@ fun CameraAndRecorderSection(
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            if (isStreaming) "LIVE FEED" else "STANDBY",
+                            if (isStreaming) if (cameraRecording) "LIVE · RECORDING" else "LIVE · NOT RECORDING" else "STANDBY",
                             color = if (isStreaming) AccentEmerald else TextMuted,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
@@ -1400,6 +1414,38 @@ fun CameraAndRecorderSection(
             }
         }
 
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Snapshot Gallery · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                if (snapshotEntries.isEmpty()) {
+                    Text("Snapshots captured from the PC are stored on this phone and appear here.", color = TextSecondary, fontSize = 11.sp)
+                } else {
+                    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        snapshotEntries.forEach { entry ->
+                            val thumbnail by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, entry.path) {
+                                value = withContext(Dispatchers.IO) {
+                                    try { BitmapFactory.decodeFile(entry.path)?.asImageBitmap() } catch (_: Exception) { null }
+                                }
+                            }
+                            thumbnail?.let { bitmap ->
+                                Image(
+                                    bitmap = bitmap,
+                                    contentDescription = "Open snapshot",
+                                    modifier = Modifier.size(100.dp, 76.dp).clip(RoundedCornerShape(8.dp)).clickable { selectedSnapshot = entry.path },
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Microphone Recorder Card
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1460,6 +1506,7 @@ fun CameraAndRecorderSection(
                 }
             }
         }
+        LiveAudioSection(coordinator)
     }
 }
 

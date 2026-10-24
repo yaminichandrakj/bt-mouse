@@ -67,7 +67,7 @@ fun UtilitiesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposi
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            listOf("apps" to "Quick Apps", "tasks" to "Tasks & Stats", "camera" to "Camera & Mic", "live_audio" to "Live Audio", "recordings" to "Recordings", "power" to "Power & Lock").forEach { (key, label) ->
+            listOf("apps" to "Quick Apps", "tasks" to "Tasks & Stats", "camera" to "Camera & Mic", "recordings" to "Recordings", "power" to "Power & Lock").forEach { (key, label) ->
                 FilterChip(
                     selected = activeSection == key,
                     onClick = { activeSection = key },
@@ -84,7 +84,6 @@ fun UtilitiesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposi
         when (activeSection) {
             "tasks" -> TasksAndHardwareSection(coordinator)
             "camera" -> CameraAndRecorderSection(coordinator)
-            "live_audio" -> LiveAudioSection(coordinator)
             "recordings" -> RecordingLibrarySection(coordinator)
             "power" -> PowerAndUnlockSection(coordinator)
             else -> QuickAppsSection(coordinator, settings, hapticsEnabled)
@@ -93,11 +92,13 @@ fun UtilitiesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposi
 }
 
 @Composable
-private fun LiveAudioSection(coordinator: ConnectionCoordinator) {
+fun LiveAudioSection(coordinator: ConnectionCoordinator) {
     val context = LocalContext.current
     val connected by coordinator.isConnected.collectAsState()
     val pcToPhoneActive = coordinator.isPcLiveAudioActive?.collectAsState()?.value ?: false
     val phoneToPcActive = coordinator.isPhoneLiveAudioActive?.collectAsState()?.value ?: false
+    val pcRecording = coordinator.isPcLiveAudioRecording.collectAsState().value
+    val phoneRecording = coordinator.isPhoneLiveAudioRecording.collectAsState().value
     val connectionMessage by coordinator.statusMessage.collectAsState()
     var recordOnPc by remember { mutableStateOf(true) }
     var startPhoneAfterPermission by remember { mutableStateOf(false) }
@@ -113,6 +114,15 @@ private fun LiveAudioSection(coordinator: ConnectionCoordinator) {
             Text(
                 "Stream the PC microphone to this phone over the selected connection. Lower audio quality and longer buffering may apply on Bluetooth or WAN.",
                 color = TextSecondary, fontSize = 11.sp
+            )
+            Text(
+                when {
+                    pcToPhoneActive && pcRecording || phoneToPcActive && phoneRecording -> "● Live audio is recording on the PC."
+                    pcToPhoneActive || phoneToPcActive -> "● Live audio is active and is not being recorded."
+                    else -> "Live audio is off. Recording can be enabled before starting a session."
+                },
+                color = if ((pcToPhoneActive && pcRecording) || (phoneToPcActive && phoneRecording)) AccentCyan else TextSecondary,
+                fontSize = 11.sp
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = recordOnPc, onCheckedChange = { recordOnPc = it }, enabled = !pcToPhoneActive && !phoneToPcActive)
@@ -144,7 +154,9 @@ private fun LiveAudioSection(coordinator: ConnectionCoordinator) {
             Text(
                 when {
                     !connected -> "Connect to the PC to start live audio."
-                    pcToPhoneActive || phoneToPcActive -> "Live audio is active. Keep this screen open while using the microphone."
+                    phoneToPcActive && connectionMessage.contains("waiting for phone microphone", ignoreCase = true) -> connectionMessage
+                    pcToPhoneActive || phoneToPcActive -> connectionMessage.takeIf { it.contains("audio", ignoreCase = true) }
+                        ?: "Live audio is active. Keep this screen open while using the microphone."
                     connectionMessage.startsWith("Could not start") -> connectionMessage
                     else -> "Live audio is off. Phone microphone access is requested only when you start the phone-to-PC session."
                 },

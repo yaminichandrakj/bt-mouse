@@ -61,8 +61,14 @@ class WifiClientManager(
     private val _latestCameraFrame = MutableStateFlow<ByteArray?>(null)
     override val latestCameraFrame: StateFlow<ByteArray?> = _latestCameraFrame.asStateFlow()
 
+    private val snapshotGallery = SnapshotGallery(context)
+    override val cameraSnapshots: StateFlow<List<SnapshotEntry>> get() = snapshotGallery.refresh()
+
     private val _isCameraStreaming = MutableStateFlow(false)
     override val isCameraStreaming: StateFlow<Boolean> = _isCameraStreaming.asStateFlow()
+
+    private val _isCameraRecording = MutableStateFlow(false)
+    override val isCameraRecording: StateFlow<Boolean> = _isCameraRecording.asStateFlow()
 
     private val _isAudioRecording = MutableStateFlow(false)
     override val isAudioRecording: StateFlow<Boolean> = _isAudioRecording.asStateFlow()
@@ -74,6 +80,10 @@ class WifiClientManager(
     override val isPcLiveAudioActive: StateFlow<Boolean> = _isPcLiveAudioActive.asStateFlow()
     private val _isPhoneLiveAudioActive = MutableStateFlow(false)
     override val isPhoneLiveAudioActive: StateFlow<Boolean> = _isPhoneLiveAudioActive.asStateFlow()
+    private val _isPcLiveAudioRecording = MutableStateFlow(false)
+    override val isPcLiveAudioRecording: StateFlow<Boolean> = _isPcLiveAudioRecording.asStateFlow()
+    private val _isPhoneLiveAudioRecording = MutableStateFlow(false)
+    override val isPhoneLiveAudioRecording: StateFlow<Boolean> = _isPhoneLiveAudioRecording.asStateFlow()
     override val recordings: StateFlow<List<RecordingEntry>> = recordingTransfer.recordings
     override val recordingTransferStatus: StateFlow<String> = recordingTransfer.status
     override val recordingStreamUrl: StateFlow<String?> = recordingTransfer.streamUrl
@@ -278,7 +288,12 @@ class WifiClientManager(
                     if (!b64.isNullOrEmpty()) {
                         try {
                             val bytes = Base64.decode(b64, Base64.DEFAULT)
-                            _latestCameraFrame.value = bytes
+                            if (json.get("is_snapshot")?.asBoolean == true) {
+                                if (!snapshotGallery.save(bytes)) _statusMessage.value = "Could not save the camera snapshot"
+                                else _statusMessage.value = "Snapshot saved to the phone gallery"
+                            } else {
+                                _latestCameraFrame.value = bytes
+                            }
                             if (_statusMessage.value.startsWith("Camera stream started")) _statusMessage.value = ""
                         } catch (e: Exception) {}
                     }
@@ -348,7 +363,7 @@ class WifiClientManager(
                                     MessageDigest.getInstance("SHA-256").digest(it).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
                                 }
                                 if (image != null && image.size == assembly.expectedBytes && digest.equals(assembly.expectedSha256, ignoreCase = true)) {
-                                    _latestCameraFrame.value = image
+                                    if (!snapshotGallery.save(image)) _statusMessage.value = "Snapshot arrived but could not be saved on the phone"
                                     val fullBitmap = ByteArray((assembly.chunks.size + 7) / 8) { 0xFF.toByte() }
                                     val excessBits = fullBitmap.size * 8 - assembly.chunks.size
                                     if (excessBits > 0) {
@@ -374,6 +389,7 @@ class WifiClientManager(
                 "camera_stream_status" -> {
                     val streaming = json.get("streaming")?.asBoolean ?: false
                     _isCameraStreaming.value = streaming
+                    _isCameraRecording.value = json.get("recording")?.asBoolean ?: false
                     if (!streaming) _latestCameraFrame.value = null
                     val message = json.get("message")?.asString.orEmpty()
                     _statusMessage.value = when {
@@ -383,6 +399,10 @@ class WifiClientManager(
                         _statusMessage.value.startsWith("Camera stream") -> ""
                         else -> _statusMessage.value
                     }
+                }
+                "camera_recording_status" -> {
+                    _isCameraRecording.value = json.get("recording")?.asBoolean ?: false
+                    json.get("message")?.asString?.takeIf { it.isNotBlank() }?.let { _statusMessage.value = "Camera recording: $it" }
                 }
                 "audio_status_response" -> {
                     val recording = json.get("recording")?.asBoolean ?: false
@@ -406,12 +426,20 @@ class WifiClientManager(
                     val active = json.get("active")?.asBoolean ?: false
                     if (json.get("direction")?.asString == "phone_to_pc") {
                         _isPhoneLiveAudioActive.value = active
+                        _isPhoneLiveAudioRecording.value = active && (json.get("recording")?.asBoolean ?: false)
                         if (!active) liveAudioRecorder.stop()
                     } else {
                         _isPcLiveAudioActive.value = active
+                        _isPcLiveAudioRecording.value = active && (json.get("recording")?.asBoolean ?: false)
                         if (!active) liveAudioPlayer.stop()
                     }
                     json.get("message")?.asString?.takeIf { it.isNotBlank() }?.let { _statusMessage.value = it }
+                }
+                "kill_process_response" -> {
+                    val success = json.get("success")?.asBoolean ?: false
+                    _statusMessage.value = json.get("message")?.asString
+                        ?: if (success) "Task ended" else "Could not end task"
+                    if (success) queryRunningProcesses()
                 }
             }
         } catch (e: Exception) {
@@ -573,11 +601,14 @@ class WifiClientManager(
         _installedApps.value = emptyList()
         _latestCameraFrame.value = null
         _isCameraStreaming.value = false
+        _isCameraRecording.value = false
         _isAudioRecording.value = false
         liveAudioPlayer.stop()
         _isPcLiveAudioActive.value = false
+        _isPcLiveAudioRecording.value = false
         liveAudioRecorder.stop()
         _isPhoneLiveAudioActive.value = false
+        _isPhoneLiveAudioRecording.value = false
     }
 
     private fun sendPacket(
