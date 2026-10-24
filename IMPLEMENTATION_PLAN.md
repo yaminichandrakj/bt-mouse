@@ -72,15 +72,16 @@ Completed implementation work is recorded in the release notes and current imple
 - **PC Companion Virtual Camera & Local MJPEG Server:** Embedded zero-driver HTTP MJPEG server at `http://127.0.0.1:8766/phone_cam/mjpeg` and snapshot endpoint for OBS/VLC/browsers; direct `pyvirtualcam` adapter for OBS Virtual Camera/DirectShow in Zoom, Teams, Meet; dedicated "📷 Phone as Webcam" GUI tab in PC Companion.
 - **Testing & Stability:** Thread-safe frame receiver with automated teardown on client disconnect; 31 companion regression unit tests pass.
 
-### Phase 6 - Phone-based laptop unlock feasibility (exploratory; very high/platform dependent)
+### Phase 6 - Phone-based laptop unlock feasibility (Completed: Researched and Closed as Unsupported per Security Model)
+- **Feasibility Evaluation Completed:** Documented platform constraints, Windows Secure Desktop (`Winlogon`) isolation, and UIPI enforcement in [`docs/laptop_unlock_feasibility.md`](file:///c:/Users/yamin/Documents/Projects/BT%20Mouse/docs/laptop_unlock_feasibility.md).
+- **Candidate Paths Analyzed:**
+  - *Custom Credential Provider (C++ COM DLL):* Rejected due to extreme system instability risk (`NT AUTHORITY\SYSTEM` crash loop), kernel code-signing requirements, and incompatibility with lightweight portable execution.
+  - *Companion Device Framework (CDF):* Deprecated in Windows 10 2004 and permanently removed in Windows 11 by Microsoft.
+  - *FIDO2 / CTAP2 Security Keys:* Supported only on Entra ID / AAD enterprise domain-joined PCs; unsupported for consumer local or MSA accounts.
+  - *Password Caching / Synthetic Input:* Categorically prohibited by product security principles.
+- **Architectural Determination:** Workstation Locking (`Win+L`) is supported and active. Remote workstation unlock is permanently closed as unsupported by the platform without security compromise. Both Android and PC Companion explicitly message this boundary to the user.
 
-- Research whether Windows Hello/passkey/FIDO2 or a signed Windows credential-provider extension can support a phone authenticator on target Windows versions.
-- Require explicit phone biometric/device authentication and cryptographic challenge-response. Never store or transmit the Windows password.
-- Keep unlock unavailable unless a supported, security-reviewed sign-in path exists. Do not inject keystrokes on the secure desktop or bypass Windows sign-in.
-
-**Acceptance:** document a supported prototype path or close the feature as unsupported for the target platform; never ship password injection.
-
-### Phase 7 - Desktop UI sharpness and native Windows companion (very high effort)
+### Phase 7 - Desktop UI sharpness and native Windows companion (very high effort; current priority)
 
 - Verify text sharpness, DPI scaling, fonts, and layout on the user's display.
 - The current one-file executable is a Python app packaged with PyInstaller and includes its Python runtime. If a non-Python runtime is required, build a native Windows companion rather than hiding the embedded runtime.
