@@ -70,6 +70,22 @@ class SettingsRepository(context: Context) {
     )
     val connectionMode: StateFlow<ConnectionMode> = _connectionMode.asStateFlow()
 
+    private val _autoReconnect = MutableStateFlow(prefs.getBoolean(KEY_AUTO_RECONNECT, true))
+    val autoReconnect: StateFlow<Boolean> = _autoReconnect.asStateFlow()
+
+    private val _backgroundSessionEnabled = MutableStateFlow(prefs.getBoolean(KEY_BACKGROUND_SESSION_ENABLED, true))
+    val backgroundSessionEnabled: StateFlow<Boolean> = _backgroundSessionEnabled.asStateFlow()
+
+    fun setAutoReconnect(enabled: Boolean) {
+        _autoReconnect.value = enabled
+        prefs.edit().putBoolean(KEY_AUTO_RECONNECT, enabled).apply()
+    }
+
+    fun setBackgroundSessionEnabled(enabled: Boolean) {
+        _backgroundSessionEnabled.value = enabled
+        prefs.edit().putBoolean(KEY_BACKGROUND_SESSION_ENABLED, enabled).apply()
+    }
+
     fun setPointerSpeed(value: Float) {
         _pointerSpeed.value = value
         prefs.edit().putFloat(KEY_POINTER_SPEED, value).apply()
@@ -165,5 +181,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_CUSTOM_APPS = "custom_apps"
         private const val KEY_PRESENTATION_VOLUME_NAVIGATION = "presentation_volume_navigation"
         private const val KEY_CONNECTION_MODE = "connection_mode"
+        private const val KEY_AUTO_RECONNECT = "auto_reconnect"
+        private const val KEY_BACKGROUND_SESSION_ENABLED = "background_session_enabled"
     }
 }

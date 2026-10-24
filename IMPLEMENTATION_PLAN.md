@@ -1,7 +1,7 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.11
-**Owner:** Codex | **Release:** [v1.3.11 pending publish](release-notes/v1.3.11.md) · [v1.3.10 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.10)
+**Status:** Active roadmap | **Updated:** 2026-10-24 | **Current version:** 1.3.12
+**Owner:** Codex | **Release:** [v1.3.12 pending publish](release-notes/v1.3.12.md) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11)
 
 ## Product objective
 
@@ -9,7 +9,7 @@ Make the Android phone a dependable PC input and companion device over Bluetooth
 
 ## Current implementation snapshot
 
-Source status below distinguishes CI/build verification from physical-device verification. v1.3.11 passed the GitHub Actions version check, 23 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
+Source status below distinguishes CI/build verification from physical-device verification. v1.3.12 passed the GitHub Actions version check, 25 companion regression checks, Android release build compatibility, and Windows companion packaging. The GitHub Release contains both artifacts. Physical-device and updater checks remain open where listed.
 
 | Area | Present in source | Remaining |
 |---|---|---|
@@ -20,7 +20,7 @@ Source status below distinguishes CI/build verification from physical-device ver
 | Recordings | Full desktop recordings table with search, category filtering, sort, and Explorer openers; delete support on both PC and phone with confirmation | Verify on target devices |
 | PC master volume & media | Hardened COM threading across pycaw and WinRT; Playing-session priority in SMTC; phone decoded artwork display separate from video preview | Device checks on target audio configurations |
 | Live audio | PC mic and phone mic routes; PC output resampling/channel conversion; first-audio and actual recording status; live controls inside Camera & Mic | Verify latency, device changes, interruption recovery |
-| Startup/update | Windows sign-in option, Android installer handoff, desktop updater retry/rollback logic, version consistency in Actions | Android background-session service and auto-reconnect (Phase 3) |
+| Startup/update | Windows sign-in self-healing, Android foreground session service, connection supervisor with exponential backoff, version consistency in Actions | Concurrent transports and measured failover (Phase 4) |
 | Desktop UI | Python companion packaged as a one-file EXE; DPI awareness and version/path title; new Recordings manager tab | Native Windows app migration not done |
 | Laptop unlock | Explicitly unsupported in server | Research supported Windows Hello/passkey integration; no password injection |
 
@@ -51,18 +51,14 @@ Completed implementation work is recorded in the release notes and current imple
 - **Album artwork:** Bandwidth-efficient on-demand retrieval and dedicated rendering in `MediaRemoteScreen.kt`, kept distinct from selected-region video preview.
 - **Quick Apps:** Empty-cache fallback in `update_quick_apps` prevents shortcut loss; renamed apps preserved; `launch_app_response` added to Android transports to inform users when shortcuts are missing or launched; eliminated 5s polling loop in `KeyboardScreen.kt`.
 
-### Phase 3 - Android background sessions, startup, reconnect, and repair (high effort; current priority)
+### Phase 3 - Android background sessions, startup, reconnect, and repair (Completed in v1.3.12)
+- **Android Foreground Service:** `CompanionSessionService` keeps user-started camera feeds and live audio active in background; user-visible ongoing notification with "Stop Stream" and "Disconnect" actions; 1-hour capped wake lock.
+- **Connection Supervisor:** Exponential backoff (2s, 4s, 8s, 16s, 30s) auto-reconnection for saved endpoints on unexpected network drops with live UI countdown, manual retry, and immediate cancellation.
+- **Intentional vs Unintentional Disconnect:** Cleanly distinguishes user disconnect actions and mode changes to prevent runaway reconnection loops.
+- **Windows Sign-In Self-Healing:** Companion automatically verifies and heals the registry `CurrentVersion\Run` path to point to the active binary with `--minimized`.
+- **User Settings:** New dedicated settings card for background session persistence and automatic reconnection.
 
-- Keep an explicitly user-started PC-camera or live-audio session connected while the Android app is backgrounded using a user-visible foreground service and notification where platform rules allow. Provide explicit stop/disconnect controls.
-- Do not claim a session survives Android force-stop; never auto-start camera/audio capture.
-- Add a connection supervisor for user-approved saved devices/endpoints with backoff, cancel/disable controls, stale-state cleanup, and sleep/wake recovery.
-- Verify Windows sign-in startup uses the correct companion executable, starts minimized as configured, and never starts camera/audio.
-- Add Android startup/boot behavior only where platform rules permit it. Keep endpoints and credentials protected; do not silently pair with unknown PCs or bypass user approval.
-- Prevent retry loops, duplicate sockets/commands, held buttons, excess battery use, and orphaned media sessions.
-
-**Acceptance:** sleep, Wi-Fi interruption, companion restart, or app backgrounding either preserves/reconnects an explicitly user-started session within Android rules or presents a clear recoverable state.
-
-### Phase 4 - Concurrent transports and measured failover (very high effort)
+### Phase 4 - Concurrent transports and measured failover (very high effort; current priority)
 
 - Keep Bluetooth, local Wi-Fi, and authenticated WAN available concurrently where supported.
 - Measure authenticated connection health and latency. Select a healthy command path instead of treating an open socket as proof of a working connection.

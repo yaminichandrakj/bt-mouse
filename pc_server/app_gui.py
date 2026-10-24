@@ -57,7 +57,7 @@ from server import (Server, ensure_interactive_desktop, IS_WINDOWS, load_or_crea
                     save_pairing_pin, load_quick_apps, save_quick_apps,
                     load_media_preview_region, save_media_preview_region)
 
-APP_VERSION = "1.3.11"
+APP_VERSION = "1.3.12"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 150 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -143,6 +143,7 @@ class CompanionApp(tk.Tk):
         # Handle window close: minimize to tray instead of quitting
         self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
         self._write_update_ready_marker()
+        self._heal_startup_path_if_registered()
         if "--minimized" in sys.argv:
             self.after(700, self.hide_to_tray if self.tray_icon else self.iconify)
 
@@ -199,6 +200,24 @@ class CompanionApp(tk.Tk):
         except (OSError, ImportError) as exc:
             self.startup_var.set(not enabled)
             messagebox.showerror("Startup setting", f"Could not update the Windows sign-in setting.\n\n{exc}", parent=self)
+
+    def _heal_startup_path_if_registered(self):
+        """If startup is enabled in the registry, ensure the registered command matches current binary and args."""
+        if os.name != "nt":
+            return
+        reg_val = self._startup_registry_value()
+        if not reg_val:
+            return
+        expected = self._startup_command()
+        if reg_val.strip() != expected.strip():
+            try:
+                import winreg
+                run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+                with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.SetValueEx(key, "BT Mouse Companion", 0, winreg.REG_SZ, expected)
+                self.log(f"Self-healed Windows startup path to: {expected}")
+            except (OSError, ImportError) as exc:
+                self.log(f"Warning: could not update Windows startup path: {exc}")
 
     def _init_server(self):
         """Initializes a clean Server instance with bound callbacks"""

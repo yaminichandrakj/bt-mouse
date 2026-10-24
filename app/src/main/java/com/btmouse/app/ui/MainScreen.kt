@@ -1,8 +1,10 @@
 package com.btmouse.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,6 +59,7 @@ import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
 import com.btmouse.app.ui.theme.DarkBackground
 import com.btmouse.app.ui.theme.DarkSurface
+import com.btmouse.app.ui.theme.DarkSurfaceVariant
 import com.btmouse.app.ui.theme.PrimaryIndigo
 import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
@@ -88,51 +91,94 @@ fun MainScreen(
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     val isConnected by coordinator.isConnected.collectAsState()
+    val reconnectStatus by coordinator.reconnectStatus.collectAsState()
 
     Scaffold(
         topBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DarkSurface)
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(if (isConnected) AccentEmerald else AccentRose)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (showSettings) "SETTINGS & UPDATES" else when (selectedTabIndex) {
-                            0 -> "BT MOUSE & TRACKPAD"
-                            1 -> "KEYBOARD & SHORTCUTS"
-                            2 -> "PEN & TOUCHSCREEN"
-                            3 -> "MEDIA & VOLUME REMOTE"
-                            4 -> "PC UTILITIES"
-                            5 -> "CONNECTION & QR"
-                            else -> "BT MOUSE"
-                        },
-                        color = TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+            Column(modifier = Modifier.fillMaxWidth().background(DarkSurface)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(if (isConnected) AccentEmerald else AccentRose)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (showSettings) "SETTINGS & UPDATES" else when (selectedTabIndex) {
+                                0 -> "BT MOUSE & TRACKPAD"
+                                1 -> "KEYBOARD & SHORTCUTS"
+                                2 -> "PEN & TOUCHSCREEN"
+                                3 -> "MEDIA & VOLUME REMOTE"
+                                4 -> "PC UTILITIES"
+                                5 -> "CONNECTION & QR"
+                                else -> "BT MOUSE"
+                            },
+                            color = TextPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showSettings = !showSettings },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (showSettings) Icons.Default.ArrowBack else Icons.Default.Settings,
+                            contentDescription = if (showSettings) "Back" else "Settings",
+                            tint = if (showSettings) AccentCyan else TextMuted
+                        )
+                    }
                 }
 
-                IconButton(
-                    onClick = { showSettings = !showSettings },
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = if (showSettings) Icons.Default.ArrowBack else Icons.Default.Settings,
-                        contentDescription = if (showSettings) "Back" else "Settings",
-                        tint = if (showSettings) AccentCyan else TextMuted
-                    )
+                reconnectStatus?.let { status ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DarkSurfaceVariant)
+                            .padding(horizontal = 16.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = status,
+                            color = AccentCyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (status.contains("Tap to retry")) {
+                                Text(
+                                    text = "Retry",
+                                    color = AccentCyan,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .clickable { coordinator.startAutoReconnect() }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = "Cancel",
+                                color = AccentRose,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clickable { coordinator.cancelReconnect() }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                 }
             }
         },

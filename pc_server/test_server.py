@@ -8,7 +8,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 import server
 
@@ -549,6 +549,43 @@ class QuickAppsTests(unittest.TestCase):
         self.assertTrue(responses)
         self.assertTrue(responses[0].get("success"))
         self.assertEqual(responses[0].get("paths"), [shortcut])
+
+
+class StartupSelfHealingTests(unittest.TestCase):
+    def test_heal_startup_path_when_registry_value_mismatched(self):
+        import app_gui
+        app_mock = object.__new__(app_gui.CompanionApp)
+        app_mock._startup_registry_value = Mock(return_value=r'"C:\Old\path.exe" --minimized')
+        app_mock._startup_command = Mock(return_value=r'"C:\New\path.exe" --minimized')
+        app_mock.log = Mock()
+
+        mock_winreg = MagicMock()
+        mock_key = MagicMock()
+        mock_winreg.CreateKeyEx.return_value.__enter__.return_value = mock_key
+        mock_winreg.HKEY_CURRENT_USER = 1
+        mock_winreg.KEY_SET_VALUE = 2
+        mock_winreg.REG_SZ = 3
+
+        with patch.dict(sys.modules, {"winreg": mock_winreg}):
+            app_mock._heal_startup_path_if_registered()
+
+        mock_winreg.SetValueEx.assert_called_once_with(
+            mock_key, "BT Mouse Companion", 0, mock_winreg.REG_SZ, r'"C:\New\path.exe" --minimized'
+        )
+        app_mock.log.assert_called_once()
+
+    def test_heal_startup_path_skips_when_matching(self):
+        import app_gui
+        app_mock = object.__new__(app_gui.CompanionApp)
+        app_mock._startup_registry_value = Mock(return_value=r'"C:\Current\path.exe" --minimized')
+        app_mock._startup_command = Mock(return_value=r'"C:\Current\path.exe" --minimized')
+        app_mock.log = Mock()
+
+        mock_winreg = Mock()
+        with patch.dict(sys.modules, {"winreg": mock_winreg}):
+            app_mock._heal_startup_path_if_registered()
+
+        mock_winreg.SetValueEx.assert_not_called()
 
 
 if __name__ == "__main__":

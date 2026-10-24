@@ -4,7 +4,10 @@ import android.content.Context
 import com.btmouse.app.data.ConnectionMode
 import com.btmouse.app.data.MediaStatus
 import com.btmouse.app.data.SettingsRepository
+import com.btmouse.app.service.CompanionSessionService
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -83,14 +86,29 @@ class ConnectionCoordinator(
             ConnectionMode.REMOTE_WAN -> remoteWanManager
         }
 
+    private val _reconnectStatus = MutableStateFlow<String?>(null)
+    val reconnectStatus: StateFlow<String?> = _reconnectStatus.asStateFlow()
+
+    private var reconnectJob: Job? = null
+    private var sessionMonitorJob: Job? = null
+    private var supervisionJob: Job? = null
+    @Volatile private var wasConnected: Boolean = false
+    @Volatile private var intentionalDisconnect: Boolean = false
+
     fun initialize() {
+        activeInstance = this
         bluetoothHidManager.initialize()
         bluetoothRfcommManager.refreshPairedDevices()
+        monitorSessionAndMedia()
+        monitorConnectionSupervision()
     }
 
     fun setMode(mode: ConnectionMode) {
         val previousMode = settings.connectionMode.value
         if (mode == previousMode) return
+
+        intentionalDisconnect = true
+        cancelReconnect()
 
         // A pending socket can otherwise complete after the UI has switched
         // transports, leaving a hidden connection active in the background.
@@ -103,6 +121,148 @@ class ConnectionCoordinator(
             ConnectionMode.REMOTE_WAN -> remoteWanManager.disconnect()
         }
         settings.setConnectionMode(mode)
+        intentionalDisconnect = false
+    }
+
+    fun prepareForManualConnect() {
+        intentionalDisconnect = false
+        cancelReconnect()
+    }
+
+    fun disconnectAll() {
+        intentionalDisconnect = true
+        cancelReconnect()
+        CompanionSessionService.stop(context)
+        bluetoothRfcommManager.disconnect()
+        bluetoothHidManager.disconnect()
+        wifiClientManager.disconnect()
+        remoteWanManager.disconnect()
+    }
+
+    fun cancelReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        _reconnectStatus.value = null
+    }
+
+    private fun monitorSessionAndMedia() {
+        sessionMonitorJob?.cancel()
+        sessionMonitorJob = scope.launch {
+            combine(
+                isPcLiveAudioActive,
+                isPhoneLiveAudioActive,
+                isCameraStreaming,
+                isConnected,
+                settings.backgroundSessionEnabled
+            ) { pcAudio, phoneAudio, camera, connected, bgEnabled ->
+                val hasActiveMedia = pcAudio || phoneAudio || camera
+                Triple(hasActiveMedia, connected, bgEnabled)
+            }.collect { (hasActiveMedia, connected, bgEnabled) ->
+                if (bgEnabled && hasActiveMedia) {
+                    CompanionSessionService.start(context)
+                } else if (!hasActiveMedia && !connected) {
+                    CompanionSessionService.stop(context)
+                } else if (hasActiveMedia) {
+                    CompanionSessionService.update(context)
+                }
+            }
+        }
+    }
+
+    private fun monitorConnectionSupervision() {
+        supervisionJob?.cancel()
+        supervisionJob = scope.launch {
+            isConnected.collect { connected ->
+                if (connected) {
+                    wasConnected = true
+                    cancelReconnect()
+                } else {
+                    if (wasConnected && !intentionalDisconnect && settings.autoReconnect.value) {
+                        startAutoReconnect()
+                    }
+                }
+            }
+        }
+    }
+
+    fun startAutoReconnect() {
+        cancelReconnect()
+        reconnectJob = scope.launch {
+            val delays = listOf(2000L, 4000L, 8000L, 16000L, 30000L)
+            for (attempt in 1..delays.size) {
+                if (!settings.autoReconnect.value || isConnected.value || intentionalDisconnect) {
+                    _reconnectStatus.value = null
+                    return@launch
+                }
+                val delaySec = delays[attempt - 1] / 1000
+                for (sec in delaySec downTo 1) {
+                    if (!settings.autoReconnect.value || isConnected.value || intentionalDisconnect) {
+                        _reconnectStatus.value = null
+                        return@launch
+                    }
+                    _reconnectStatus.value = "Reconnecting in ${sec}s (attempt $attempt/${delays.size})..."
+                    delay(1000L)
+                }
+                if (!settings.autoReconnect.value || isConnected.value || intentionalDisconnect) {
+                    _reconnectStatus.value = null
+                    return@launch
+                }
+                _reconnectStatus.value = "Attempting reconnection ($attempt/${delays.size})..."
+
+                val mode = settings.connectionMode.value
+                when (mode) {
+                    ConnectionMode.WIFI -> {
+                        val host = settings.wifiHost.value
+                        val port = settings.wifiPort.value
+                        val pin = settings.serverPin.value.trim()
+                        if (host.isNotBlank() && port in 1..65535 && pin.length == 6 && pin.all { it.isDigit() }) {
+                            wifiClientManager.connectManual(host, port)
+                        } else {
+                            _reconnectStatus.value = "Auto-reconnect cancelled: check Wi-Fi host & PIN"
+                            return@launch
+                        }
+                    }
+                    ConnectionMode.REMOTE_WAN -> {
+                        val url = settings.wanUrl.value.trim()
+                        val token = settings.wanToken.value.trim()
+                        if (url.isNotBlank()) {
+                            remoteWanManager.connect(url, token)
+                        } else {
+                            _reconnectStatus.value = "Auto-reconnect cancelled: missing WAN URL"
+                            return@launch
+                        }
+                    }
+                    ConnectionMode.BLUETOOTH -> {
+                        val device = bluetoothRfcommManager.lastConnectedDevice
+                        if (device != null) {
+                            bluetoothRfcommManager.connectToDevice(device)
+                            bluetoothHidManager.connectToDevice(device)
+                        } else {
+                            bluetoothRfcommManager.refreshPairedDevices()
+                            val paired = bluetoothRfcommManager.pairedDevices.value
+                            if (paired.isNotEmpty()) {
+                                bluetoothRfcommManager.connectToDevice(paired.first())
+                                bluetoothHidManager.connectToDevice(paired.first())
+                            } else {
+                                _reconnectStatus.value = "Auto-reconnect cancelled: no paired device"
+                                return@launch
+                            }
+                        }
+                    }
+                }
+
+                var elapsed = 0
+                while (elapsed < 4000 && !isConnected.value && !intentionalDisconnect) {
+                    delay(250)
+                    elapsed += 250
+                }
+                if (isConnected.value) {
+                    _reconnectStatus.value = null
+                    return@launch
+                }
+            }
+            _reconnectStatus.value = "Reconnect timed out. Tap to retry."
+        }
     }
 
     override fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int, hScroll: Int) {
@@ -371,9 +531,22 @@ class ConnectionCoordinator(
     }
 
     fun cleanup() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        cancelReconnect()
+        sessionMonitorJob?.cancel()
+        supervisionJob?.cancel()
+        CompanionSessionService.stop(context)
         remoteWanManager.disconnect()
         bluetoothRfcommManager.disconnect()
         bluetoothHidManager.cleanup()
         wifiClientManager.cleanup()
+    }
+
+    companion object {
+        @Volatile
+        var activeInstance: ConnectionCoordinator? = null
+            internal set
     }
 }

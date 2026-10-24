@@ -53,6 +53,9 @@ class BluetoothRfcommManager(
     private val _pairedDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val pairedDevices: StateFlow<List<BluetoothDevice>> = _pairedDevices.asStateFlow()
 
+    var lastConnectedDevice: BluetoothDevice? = null
+        private set
+
     private val _mediaStatus = MutableStateFlow(MediaStatus())
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
 
@@ -152,6 +155,7 @@ class BluetoothRfcommManager(
 
                 socket = btSocket
                 outputStream = btSocket.outputStream
+                lastConnectedDevice = device
                 _isConnected.value = true
                 _connectedDeviceName.value = devName
                 _statusMessage.value = "Connected to $devName (Bluetooth)"

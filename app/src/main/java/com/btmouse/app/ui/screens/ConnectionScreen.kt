@@ -100,6 +100,7 @@ fun ConnectionScreen(
     val isConnected by coordinator.isConnected.collectAsState()
     val statusMessage by coordinator.statusMessage.collectAsState()
     val connectedDevice by coordinator.connectedDeviceName.collectAsState()
+    val reconnectStatus by coordinator.reconnectStatus.collectAsState()
 
     val pairedDevices by coordinator.bluetoothRfcommManager.pairedDevices.collectAsState()
 
@@ -132,6 +133,7 @@ fun ConnectionScreen(
                         if (token.isNotBlank()) {
                             settings.setWanToken(token)
                             settings.setServerPin(token)
+                            coordinator.prepareForManualConnect()
                             coordinator.remoteWanManager.connect(url, token)
                         } else {
                             Toast.makeText(context, "Enter the pairing PIN, then connect", Toast.LENGTH_LONG).show()
@@ -149,6 +151,7 @@ fun ConnectionScreen(
                     settings.setServerPin(wifiPin)
                     settings.setWifiHost(ip)
                     settings.setWifiPort(port)
+                    coordinator.prepareForManualConnect()
                     coordinator.wifiClientManager.connectManual(ip, port, name)
                     return true
                 }
@@ -163,6 +166,7 @@ fun ConnectionScreen(
                     settings.setServerPin(wifiPin)
                     settings.setWifiHost(ip)
                     settings.setWifiPort(port)
+                    coordinator.prepareForManualConnect()
                     coordinator.wifiClientManager.connectManual(ip, port, name)
                     return true
                 }
@@ -325,25 +329,46 @@ fun ConnectionScreen(
                 if (isConnected) {
                     Spacer(modifier = Modifier.width(8.dp))
                     OutlinedButton(
-                        onClick = {
-                            when (activeMode) {
-                                ConnectionMode.BLUETOOTH -> {
-                                    coordinator.bluetoothRfcommManager.disconnect()
-                                    coordinator.bluetoothHidManager.disconnect()
-                                }
-                                ConnectionMode.WIFI -> {
-                                    coordinator.wifiClientManager.disconnect()
-                                }
-                                ConnectionMode.REMOTE_WAN -> {
-                                    coordinator.remoteWanManager.disconnect()
-                                }
-                            }
-                        },
+                        onClick = { coordinator.disconnectAll() },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
                         shape = RoundedCornerShape(8.dp),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Text("Disconnect", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                    }
+                }
+            }
+        }
+
+        if (reconnectStatus != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = reconnectStatus ?: "",
+                        color = AccentCyan,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row {
+                        if (reconnectStatus?.contains("Tap to retry") == true) {
+                            TextButton(onClick = { coordinator.startAutoReconnect() }) {
+                                Text("Retry", color = AccentCyan, fontSize = 12.sp)
+                            }
+                        }
+                        TextButton(onClick = { coordinator.cancelReconnect() }) {
+                            Text("Cancel", color = AccentRose, fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -419,6 +444,7 @@ fun ConnectionScreen(
                                 device = device,
                                 isCurrentlyConnected = isConnected && connectedDevice?.contains(device.name ?: "") == true,
                                 onConnect = {
+                                    coordinator.prepareForManualConnect()
                                     coordinator.bluetoothRfcommManager.connectToDevice(device)
                                     coordinator.bluetoothHidManager.connectToDevice(device)
                                 }
@@ -526,6 +552,7 @@ fun ConnectionScreen(
                                     settings.setServerPin(wifiPin)
                                     settings.setWifiHost(manualHost)
                                     settings.setWifiPort(portInt)
+                                    coordinator.prepareForManualConnect()
                                     coordinator.wifiClientManager.connectManual(manualHost, portInt)
                                 },
                                 modifier = Modifier.fillMaxWidth(),
@@ -623,6 +650,7 @@ fun ConnectionScreen(
                                     settings.setWanUrl(inputWanUrl.trim())
                                     settings.setWanToken(inputWanToken.trim())
                                     settings.setServerPin(inputWanToken.trim())
+                                    coordinator.prepareForManualConnect()
                                     coordinator.remoteWanManager.connect(inputWanUrl.trim(), inputWanToken.trim())
                                 },
                                 modifier = Modifier.fillMaxWidth(),

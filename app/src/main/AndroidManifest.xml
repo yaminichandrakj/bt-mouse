@@ -23,6 +23,14 @@
     <!-- Required for the user-confirmed in-app APK update flow. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Foreground service and notifications for active companion streaming -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Haptic feedback for tactile clicks -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
@@ -73,6 +81,12 @@
         <meta-data
             android:name="com.google.mlkit.vision.DEPENDENCIES"
             android:value="barcode_ui" />
+
+        <!-- Foreground service for preserving active streaming sessions in background -->
+        <service
+            android:name=".service.CompanionSessionService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|microphone|mediaPlayback" />
 
     </application>
 

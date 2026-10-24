@@ -107,6 +107,8 @@ fun SettingsScreen(
     val hapticFeedback by settings.hapticFeedback.collectAsState()
     val airMouseSensitivity by settings.airMouseSensitivity.collectAsState()
     val isGyroSupported by airMouseManager.isSupported.collectAsState()
+    val backgroundSessionEnabled by settings.backgroundSessionEnabled.collectAsState()
+    val autoReconnect by settings.autoReconnect.collectAsState()
 
     val scrollState = rememberScrollState()
 
@@ -231,6 +233,52 @@ fun SettingsScreen(
                     Switch(
                         checked = hapticFeedback,
                         onCheckedChange = { settings.setHapticFeedback(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                    )
+                }
+            }
+        }
+
+        // Connection & Background Sessions Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Connection & Background Sessions", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+
+                // Background Companion Session Switch
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                        Text("Background Companion Session", color = TextPrimary, fontSize = 14.sp)
+                        Text("Keep live audio and camera streams connected when switching apps using a foreground notification", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = backgroundSessionEnabled,
+                        onCheckedChange = { settings.setBackgroundSessionEnabled(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                    )
+                }
+
+                // Automatic Reconnect Switch
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                        Text("Automatic Reconnect", color = TextPrimary, fontSize = 14.sp)
+                        Text("Automatically reconnect to saved PC with exponential backoff on network drop", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = autoReconnect,
+                        onCheckedChange = { settings.setAutoReconnect(it) },
                         colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
                     )
                 }
