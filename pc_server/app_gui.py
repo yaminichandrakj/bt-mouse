@@ -79,6 +79,7 @@ try:
         QMessageBox,
         QDialog,
         QSizePolicy,
+        QProgressDialog,
     )
     HAS_QT = True
 except ImportError:
@@ -89,6 +90,7 @@ except ImportError:
     QLabel = object
 
 from remote_tunnel import RemoteIdentity, TunnelPublisher
+from update_script import build_update_script
 from server import (
     Server,
     ensure_interactive_desktop,
@@ -106,6 +108,25 @@ APP_VERSION = "1.4.3"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
+COMPANION_UPDATE_STEP_LOG = Path(tempfile.gettempdir()) / "btmouse-update.log"
+
+
+class _UpdateCancelled(Exception):
+    pass
+
+
+def companion_update_wait_pids():
+    """PIDs the swap must outlive: this process, plus the one-file launcher that holds the EXE open."""
+    pids = [os.getpid()]
+    if getattr(sys, "frozen", False):
+        try:
+            import psutil
+            parent = psutil.Process().parent()
+            if parent and Path(parent.exe()).resolve() == Path(sys.executable).resolve():
+                pids.append(parent.pid)
+        except Exception:
+            pass
+    return pids
 
 
 def set_windows_dpi_awareness():
@@ -2756,7 +2777,8 @@ class CompanionApp(QMainWindow):
                 QMessageBox.warning(
                     self,
                     "Companion update rolled back",
-                    f"The update could not start, so the previous version was restored.\n\n{message}",
+                    f"The update could not finish, so the previous version was kept.\n\n{message}\n\n"
+                    f"Step-by-step log: {COMPANION_UPDATE_STEP_LOG}",
                 )
         except OSError as exc:
             self.log(f"Could not read update recovery details: {exc}")
@@ -2804,8 +2826,7 @@ class CompanionApp(QMainWindow):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if ans == QMessageBox.StandardButton.Yes:
-                    self.btn_update.setText("Downloading…")
-                    threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
+                    self._start_update_download(tag_name, asset)
                 else:
                     self.btn_update.setEnabled(True)
                     self.btn_update.setText("Check for updates")
@@ -2820,6 +2841,49 @@ class CompanionApp(QMainWindow):
                 ),
             )
 
+    def _start_update_download(self, tag_name, asset):
+        self.btn_update.setText("Downloading…")
+        self._update_cancel = threading.Event()
+        dlg = QProgressDialog(f"Downloading {tag_name}…", "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Updating BT Mouse Companion")
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumWidth(420)
+        dlg.canceled.connect(self._update_cancel.set)
+        dlg.setValue(0)
+        dlg.show()
+        self._update_dialog = dlg
+        threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
+
+    def _set_update_progress(self, tag_name, downloaded, total):
+        dlg = getattr(self, "_update_dialog", None)
+        if dlg is None:
+            return
+        dlg.setValue(int(downloaded * 100 / total) if total else 0)
+        dlg.setLabelText(
+            f"Downloading {tag_name}… {downloaded / 1048576:.1f} of {total / 1048576:.1f} MB"
+        )
+
+    def _close_update_dialog(self):
+        dlg = getattr(self, "_update_dialog", None)
+        self._update_dialog = None
+        if dlg is not None:
+            dlg.close()
+        self.btn_update.setEnabled(True)
+        self.btn_update.setText("Check for updates")
+
+    def _show_update_installing(self, tag_name):
+        dlg = getattr(self, "_update_dialog", None)
+        if dlg is not None:
+            dlg.setCancelButton(None)
+            dlg.setRange(0, 0)  # busy indicator while the swap runs after we exit
+            dlg.setLabelText(
+                f"Installing {tag_name}.\n\nThe companion will close and reopen by itself "
+                "in about 10–30 seconds. Please don't reopen it yourself."
+            )
+        QTimer.singleShot(2500, self.quit_application)
+
     def _download_companion_update_worker(self, tag_name, asset):
         staged_path = None
         try:
@@ -2830,22 +2894,28 @@ class CompanionApp(QMainWindow):
                 download_url,
                 headers={"User-Agent": "BT-Mouse-Companion-Updater", "Accept": "application/octet-stream"},
             )
-            digest = hashlib.sha256()
+            total = int(asset["size"])
             downloaded = 0
+            last_percent = -1
             temp_dir = Path(tempfile.gettempdir())
             staged_path = temp_dir / f"BT-Mouse-Companion-{tag_name}.exe"
             with urllib.request.urlopen(request, timeout=60) as response, staged_path.open("wb") as output:
                 while True:
-                    chunk = response.read(1024 * 1024)
+                    if self._update_cancel.is_set():
+                        raise _UpdateCancelled()
+                    chunk = response.read(256 * 1024)
                     if not chunk:
                         break
                     downloaded += len(chunk)
-                    if downloaded > asset["size"] or downloaded > MAX_COMPANION_UPDATE_BYTES:
+                    if downloaded > total or downloaded > MAX_COMPANION_UPDATE_BYTES:
                         raise ValueError("The downloaded update is larger than expected.")
-                    digest.update(chunk)
                     output.write(chunk)
+                    percent = downloaded * 100 // total if total else 0
+                    if percent != last_percent:
+                        last_percent = percent
+                        self._run_on_ui(lambda d=downloaded: self._set_update_progress(tag_name, d, total))
 
-            if downloaded != asset["size"]:
+            if downloaded != total:
                 raise ValueError("The downloaded update size did not match the release metadata.")
             with staged_path.open("rb") as downloaded_file:
                 if downloaded_file.read(2) != b"MZ":
@@ -2853,66 +2923,34 @@ class CompanionApp(QMainWindow):
 
             executable = Path(sys.executable).resolve()
             script_path = temp_dir / f"btmouse-update-{os.getpid()}.ps1"
-            log_path = COMPANION_UPDATE_ERROR_LOG
-            replacement_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe"
-            backup_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.backup.exe"
-            ready_marker = temp_dir / f"btmouse-update-ready-{os.getpid()}.txt"
-            ps_quote = lambda value: "'" + str(value).replace("'", "''") + "'"
-            script = (
-                "$ErrorActionPreference = 'Stop'\n"
-                f"$pidToWait = {os.getpid()}\n"
-                f"$target = {ps_quote(executable)}\n"
-                f"$staged = {ps_quote(staged_path)}\n"
-                f"$replacement = {ps_quote(replacement_path)}\n"
-                f"$backup = {ps_quote(backup_path)}\n"
-                f"$readyMarker = {ps_quote(ready_marker)}\n"
-                f"$log = {ps_quote(log_path)}\n"
-                f"$expectedLength = {asset['size']}\n"
-                f"$expectedVersion = {ps_quote(tag_name.lstrip('v'))}\n"
-                "$deadline = (Get-Date).AddSeconds(120)\n"
-                "try {\n"
-                "  while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {\n"
-                "    if ((Get-Date) -gt $deadline) { throw 'The companion did not close in time.' }\n"
-                "    Start-Sleep -Seconds 1\n"
-                "  }\n"
-                "  Copy-Item -LiteralPath $staged -Destination $replacement -Force -ErrorAction Stop\n"
-                "  Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction Stop\n"
-                "  Move-Item -LiteralPath $replacement -Destination $target -Force\n"
-                "  $quotedMarker = '\"' + $readyMarker + '\"'\n"
-                "  $started = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ArgumentList @('--btmouse-update-ready', $quotedMarker) -PassThru\n"
-                "  $launchDeadline = (Get-Date).AddSeconds(30)\n"
-                "  $ready = $false\n"
-                "  while ((Get-Date) -lt $launchDeadline) {\n"
-                "    if (Test-Path -LiteralPath $readyMarker) {\n"
-                "      if ((Get-Content -LiteralPath $readyMarker -Raw).Trim() -eq $expectedVersion) { $ready = $true; break }\n"
-                "    }\n"
-                "    Start-Sleep -Seconds 1\n"
-                "  }\n"
-                "  if (-not $ready) { throw 'The updated companion did not acknowledge startup.' }\n"
-                "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
-                "} catch {\n"
-                "  $failure = $_.Exception.Message\n"
-                "  if (Test-Path -LiteralPath $backup) {\n"
-                "    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue\n"
-                "    Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction SilentlyContinue\n"
-                "    Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target)\n"
-                "  }\n"
-                "  $failure | Out-File -LiteralPath $log -Encoding utf8\n"
-                "}\n"
+            script = build_update_script(
+                wait_pids=companion_update_wait_pids(),
+                target=executable,
+                staged=staged_path,
+                replacement=executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe",
+                backup=executable.parent / f".BT-Mouse-Companion-{os.getpid()}.backup.exe",
+                ready_marker=temp_dir / f"btmouse-update-ready-{os.getpid()}.txt",
+                error_log=COMPANION_UPDATE_ERROR_LOG,
+                step_log=COMPANION_UPDATE_STEP_LOG,
+                expected_version=tag_name.lstrip("v"),
             )
-            script_path.write_text(script, encoding="utf-8")
+            # BOM so Windows PowerShell 5.1 reads non-ASCII paths (e.g. user names) correctly.
+            script_path.write_text(script, encoding="utf-8-sig")
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
                 creationflags=flags,
             )
-            self._run_on_ui(lambda: QTimer.singleShot(200, self.quit_application))
+            self._run_on_ui(lambda: self._show_update_installing(tag_name))
+        except _UpdateCancelled:
+            if staged_path:
+                staged_path.unlink(missing_ok=True)
+            self._run_on_ui(self._close_update_dialog)
         except Exception as exc:
             self._run_on_ui(
                 lambda error=str(exc): (
+                    self._close_update_dialog(),
                     QMessageBox.critical(self, "Update Failed", f"Could not install update.\n\n{error}"),
-                    self.btn_update.setEnabled(True),
-                    self.btn_update.setText("Check for updates"),
                 ),
             )
 

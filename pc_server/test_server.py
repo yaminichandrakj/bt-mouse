@@ -12,6 +12,7 @@ from unittest.mock import Mock, MagicMock, patch
 
 import server
 import remote_tunnel
+import update_script
 
 
 class ServerProtocolTests(unittest.TestCase):
@@ -1019,6 +1020,46 @@ class RemoteTunnelTests(unittest.TestCase):
         tampered[0] ^= 1
         with self.assertRaises(Exception):
             VerifyKey(base64.b64decode(ident.public_b64)).verify(record.encode(), bytes(tampered))
+
+
+class CompanionUpdateScriptTests(unittest.TestCase):
+    """The EXE swap must outlive the one-file launcher, which keeps the EXE locked briefly."""
+
+    def build(self, pids=(111, 222)):
+        return update_script.build_update_script(
+            wait_pids=pids, target=r"C:\Users\O'Neil\Desktop\BT-Mouse-Companion.exe",
+            staged=r"C:\t\new.exe", replacement=r"C:\t\.new.exe", backup=r"C:\t\.backup.exe",
+            ready_marker=r"C:\t\ready.txt", error_log=r"C:\t\err.log", step_log=r"C:\t\steps.log",
+            expected_version="1.4.3",
+        )
+
+    def test_waits_for_every_process_holding_the_exe(self):
+        script = self.build()
+        self.assertIn("$pidsToWait = @(111, 222)", script)
+        self.assertIn("foreach ($p in $pidsToWait)", script)
+
+    def test_retries_while_the_exe_is_still_locked(self):
+        script = self.build()
+        self.assertIn("Retry { Move-Item -LiteralPath $target -Destination $backup -Force } 'Moving the old version aside' 60", script)
+
+    def test_keeps_a_slow_starting_new_version_instead_of_rolling_back(self):
+        script = self.build()
+        self.assertIn(f"AddSeconds({update_script.LAUNCH_ACK_SECONDS})", script)
+        self.assertGreaterEqual(update_script.LAUNCH_ACK_SECONDS, 60)
+        self.assertIn("elseif (-not $started.HasExited)", script)
+
+    def test_logs_steps_and_quotes_paths(self):
+        script = self.build()
+        self.assertIn("$stepLog = 'C:\\t\\steps.log'", script)
+        self.assertIn("Log 'Update finished'", script)
+        self.assertIn("'C:\\Users\\O''Neil\\Desktop\\BT-Mouse-Companion.exe'", script)
+
+    def test_companion_uses_shared_script_and_shows_progress(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("build_update_script(", gui)
+        self.assertIn("wait_pids=companion_update_wait_pids()", gui)
+        self.assertIn("QProgressDialog(", gui)
+        self.assertIn('encoding="utf-8-sig"', gui)
 
 
 class WanQrWiringTests(unittest.TestCase):
