@@ -88,6 +88,7 @@ except ImportError:
     QDialog = object
     QLabel = object
 
+from remote_tunnel import RemoteIdentity, TunnelPublisher
 from server import (
     Server,
     ensure_interactive_desktop,
@@ -649,6 +650,10 @@ class CompanionApp(QMainWindow):
         self.current_port = 53530
         self.ws_port = 53531
         self.auth_token = load_or_create_pairing_pin()
+
+        self.remote_identity = RemoteIdentity()
+        self.tunnel = None
+        self.remote_public_url = None
 
         self.server = None
         self.server_thread = None
@@ -1714,7 +1719,8 @@ class CompanionApp(QMainWindow):
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_l.addWidget(lbl_t)
 
-        lbl_d = QLabel("Scan from the Remote WAN tab on your phone to auto-fill the WebSocket URL and 6-digit PIN.")
+        lbl_d = QLabel("Scan from the Remote WAN tab on your phone. On the same Wi-Fi it uses the local address; "
+                       "off-network it resolves your tunnel address automatically. Same QR, same PIN.")
         lbl_d.setWordWrap(True)
         lbl_d.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_d.setStyleSheet("color: #94A3B8; font-size: 12px;")
@@ -1759,6 +1765,38 @@ class CompanionApp(QMainWindow):
         btn_upd.clicked.connect(self._update_auth_token)
         pin_row.addWidget(btn_upd)
         in_l.addLayout(pin_row)
+
+        # --- Internet access (Cloudflare quick tunnel) ---
+        inet_box = QFrame()
+        inet_box.setObjectName("SubCard")
+        i_l = QVBoxLayout(inet_box)
+        lbl_ih = QLabel("INTERNET ACCESS (OFF-NETWORK)")
+        lbl_ih.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        i_l.addWidget(lbl_ih)
+
+        i_l.addWidget(QLabel("Cloudflare Worker URL:"))
+        self.ent_worker_url = QLineEdit(self.remote_identity.worker_url)
+        self.ent_worker_url.setPlaceholderText("https://btmouse-rv.<you>.workers.dev")
+        worker_row = QHBoxLayout()
+        worker_row.addWidget(self.ent_worker_url, 1)
+        btn_save_worker = QPushButton("Save")
+        btn_save_worker.clicked.connect(self._save_worker_url)
+        worker_row.addWidget(btn_save_worker)
+        i_l.addLayout(worker_row)
+
+        self.btn_tunnel = QPushButton("Turn on internet access")
+        self.btn_tunnel.setObjectName("PrimaryBtn")
+        self.btn_tunnel.clicked.connect(self._toggle_tunnel)
+        i_l.addWidget(self.btn_tunnel)
+
+        self.lbl_tunnel_status = QLabel("Internet access off")
+        self.lbl_tunnel_status.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        i_l.addWidget(self.lbl_tunnel_status)
+        self.lbl_public_url = QLabel("—")
+        self.lbl_public_url.setWordWrap(True)
+        self.lbl_public_url.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; color: #10B981;")
+        i_l.addWidget(self.lbl_public_url)
+        in_l.addWidget(inet_box)
 
         in_l.addStretch()
 
@@ -2319,6 +2357,12 @@ class CompanionApp(QMainWindow):
             "pin": self.auth_token,
             "token": self.auth_token,
         }
+        if self.remote_identity.worker_url and self.remote_identity.public_b64:
+            payload["rv"] = {
+                "worker": self.remote_identity.worker_url,
+                "id": self.remote_identity.record_id,
+                "pub": self.remote_identity.public_b64,
+            }
         if hasattr(self, "wan_qr_label"):
             self._set_qr_pixmap(self.wan_qr_label, payload, 200)
         if hasattr(self, "lbl_wan_url"):
@@ -2362,6 +2406,49 @@ class CompanionApp(QMainWindow):
             QMessageBox.information(self, "PIN Updated", "The new 6-digit pairing PIN is now active.")
         else:
             QMessageBox.warning(self, "Invalid PIN", "Enter exactly 6 digits for the pairing PIN.")
+
+    def _save_worker_url(self):
+        url = self.ent_worker_url.text().strip().rstrip("/")
+        if url and not url.startswith("https://"):
+            QMessageBox.warning(self, "Invalid URL",
+                                "The Worker URL should start with https:// "
+                                "(for example https://btmouse-rv.<you>.workers.dev).")
+            return
+        self.remote_identity.set_worker_url(url)
+        self.generate_wan_qr()
+        if url:
+            QMessageBox.information(self, "Saved",
+                                   "Worker URL saved. Turn on internet access to publish "
+                                   "your tunnel address, then scan the QR from your phone.")
+
+    def _toggle_tunnel(self):
+        if self.tunnel is not None:
+            self.tunnel.stop()
+            self.tunnel = None
+            self.btn_tunnel.setText("Turn on internet access")
+            return
+        if not self.remote_identity.worker_url:
+            QMessageBox.warning(self, "Worker URL needed",
+                                "Save your Cloudflare Worker URL first.")
+            return
+        self.tunnel = TunnelPublisher(
+            self.remote_identity,
+            self.ws_port,
+            socket.gethostname(),
+            on_status=lambda m: self._run_on_ui(lambda: self._set_tunnel_status(m)),
+            on_url=lambda u: self._run_on_ui(lambda: self._set_public_url(u)),
+        )
+        self.btn_tunnel.setText("Turn off internet access")
+        self.tunnel.start()
+
+    def _set_tunnel_status(self, message):
+        if hasattr(self, "lbl_tunnel_status"):
+            self.lbl_tunnel_status.setText(message)
+
+    def _set_public_url(self, url):
+        self.remote_public_url = url
+        if hasattr(self, "lbl_public_url"):
+            self.lbl_public_url.setText(url or "—")
 
     def _save_recording_preferences(self):
         enabled = self.chk_auto_video.isChecked()
@@ -2833,6 +2920,11 @@ class CompanionApp(QMainWindow):
         if self.tray_icon:
             try:
                 self.tray_icon.hide()
+            except Exception:
+                pass
+        if self.tunnel:
+            try:
+                self.tunnel.stop()
             except Exception:
                 pass
         if self.server:

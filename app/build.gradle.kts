@@ -104,6 +104,7 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.play.services.code.scanner)
     implementation(libs.okhttp)
+    implementation("com.google.crypto.tink:tink-android:1.13.0")
 
     debugImplementation(libs.androidx.ui.tooling)
 }

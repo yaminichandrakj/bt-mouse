@@ -573,8 +573,17 @@ class ConnectionCoordinator(
                         }
                     }
                     ConnectionMode.REMOTE_WAN -> {
-                        val url = settings.wanUrl.value.trim()
+                        val fallbackUrl = settings.wanUrl.value.trim()
                         val token = settings.wanToken.value.trim()
+                        // Prefer a freshly resolved tunnel URL; the stored one may be a stale
+                        // trycloudflare address after the PC restarted its tunnel.
+                        val rv = RemoteRendezvousResolver.fromSettings(settings)
+                        val url = if (rv.isComplete) {
+                            when (val r = RemoteRendezvousResolver.resolve(rv)) {
+                                is RemoteRendezvousResolver.Result.Ok -> r.url
+                                is RemoteRendezvousResolver.Result.Error -> fallbackUrl
+                            }
+                        } else fallbackUrl
                         if (url.isNotBlank()) {
                             remoteWanManager.connect(url, token)
                         } else {

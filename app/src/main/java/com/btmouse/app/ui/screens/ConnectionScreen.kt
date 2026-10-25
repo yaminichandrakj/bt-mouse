@@ -61,6 +61,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +74,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
+import com.btmouse.app.connection.RemoteRendezvousResolver
 import com.btmouse.app.data.ConnectionMode
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.theme.AccentAmber
@@ -89,6 +91,7 @@ import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import kotlinx.coroutines.launch
 
 @SuppressLint("MissingPermission")
 @Composable
@@ -97,6 +100,7 @@ fun ConnectionScreen(
     settings: SettingsRepository
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
     val activeMode by coordinator.activeMode.collectAsState()
     val isConnected by coordinator.isConnected.collectAsState()
@@ -136,20 +140,48 @@ fun ConnectionScreen(
                     settings.setWanToken(scannedPin)
                 }
                 if (type == "btmouse_wan" || obj.has("url")) {
-                    val url = obj.get("url")?.asString ?: ""
+                    val lanUrl = obj.get("url")?.asString ?: ""
                     val token = scannedPin.ifBlank {
                         settings.serverPin.value.ifBlank { settings.wanToken.value }
                     }
-                    if (url.isNotEmpty()) {
-                        settings.setWanUrl(url)
+                    // A rendezvous block lets the phone look up the PC's current tunnel URL,
+                    // so it keeps working off-network after a tunnel restart without re-scanning.
+                    val rvObj = obj.getAsJsonObject("rv")
+                    if (rvObj != null) {
+                        settings.setRendezvous(
+                            rvObj.get("worker")?.asString ?: "",
+                            rvObj.get("id")?.asString ?: "",
+                            rvObj.get("pub")?.asString ?: ""
+                        )
+                    }
+                    if (lanUrl.isNotEmpty() || rvObj != null) {
+                        settings.setWanUrl(lanUrl)
                         coordinator.setMode(ConnectionMode.REMOTE_WAN, disconnectPrevious = false)
-                        if (token.isNotBlank()) {
-                            settings.setWanToken(token)
-                            settings.setServerPin(token)
-                            coordinator.prepareForManualConnect()
-                            coordinator.remoteWanManager.connect(url, token)
-                        } else {
+                        if (token.isBlank()) {
                             Toast.makeText(context, "Enter the pairing PIN, then connect", Toast.LENGTH_LONG).show()
+                            return true
+                        }
+                        settings.setWanToken(token)
+                        settings.setServerPin(token)
+                        coordinator.prepareForManualConnect()
+                        val rv = RemoteRendezvousResolver.fromSettings(settings)
+                        if (rv.isComplete) {
+                            Toast.makeText(context, "Finding your PC…", Toast.LENGTH_SHORT).show()
+                            scope.launch {
+                                when (val r = RemoteRendezvousResolver.resolve(rv)) {
+                                    is RemoteRendezvousResolver.Result.Ok ->
+                                        coordinator.remoteWanManager.connect(r.url, token)
+                                    is RemoteRendezvousResolver.Result.Error -> {
+                                        if (lanUrl.isNotBlank()) {
+                                            coordinator.remoteWanManager.connect(lanUrl, token)
+                                        } else {
+                                            Toast.makeText(context, r.message, Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (lanUrl.isNotBlank()) {
+                            coordinator.remoteWanManager.connect(lanUrl, token)
                         }
                         return true
                     }
