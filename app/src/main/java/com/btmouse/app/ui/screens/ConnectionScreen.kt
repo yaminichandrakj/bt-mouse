@@ -172,10 +172,11 @@ fun ConnectionScreen(
                                     is RemoteRendezvousResolver.Result.Ok ->
                                         coordinator.remoteWanManager.connect(r.url, token)
                                     is RemoteRendezvousResolver.Result.Error -> {
+                                        // Say why the internet lookup failed; the local address
+                                        // below only works when the phone is on the PC's Wi-Fi.
+                                        Toast.makeText(context, r.message, Toast.LENGTH_LONG).show()
                                         if (lanUrl.isNotBlank()) {
                                             coordinator.remoteWanManager.connect(lanUrl, token)
-                                        } else {
-                                            Toast.makeText(context, r.message, Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 }

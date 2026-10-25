@@ -38,6 +38,9 @@ except Exception:  # pragma: no cover - import guard
 
 # Record freshness the phone also enforces; we re-publish well inside this.
 RECORD_REFRESH_SECONDS = 240
+# Cloudflare rejects urllib's default "Python-urllib/x.y" agent with error 1010
+# before the request reaches the Worker, so always identify ourselves.
+USER_AGENT = "BTMouse-Companion"
 _TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.IGNORECASE)
 
 
@@ -300,13 +303,18 @@ class TunnelPublisher:
         ).encode("utf-8")
         endpoint = f"{self.identity.worker_url}/r/{self.identity.record_id}"
         req = urllib.request.Request(endpoint, data=body, method="PUT",
-                                     headers={"content-type": "application/json"})
+                                     headers={"content-type": "application/json",
+                                              "user-agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 if resp.status == 200:
                     return
                 self.on_status(f"Publish returned HTTP {resp.status}")
         except urllib.error.HTTPError as e:
-            self.on_status(f"Publish rejected (HTTP {e.code}) — check the Worker URL")
+            try:
+                detail = e.read(200).decode("utf-8", "replace").strip()
+            except Exception:
+                detail = ""
+            self.on_status(f"Publish rejected (HTTP {e.code}){': ' + detail if detail else ''}")
         except Exception as e:
             self.on_status(f"Publish failed: {e}")

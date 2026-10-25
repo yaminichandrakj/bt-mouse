@@ -873,7 +873,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.4.2")
+        self.assertEqual(app_gui.APP_VERSION, "1.4.3")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -988,6 +988,19 @@ class RemoteTunnelTests(unittest.TestCase):
             match.group(0).replace("https://", "wss://", 1),
             "wss://affect-gen-journey-speech.trycloudflare.com",
         )
+
+    def test_publish_sends_named_user_agent(self):
+        # Cloudflare answers urllib's default agent with error 1010 before the Worker runs.
+        ident = remote_tunnel.RemoteIdentity()
+        ident.set_worker_url("https://x.workers.dev")
+        publisher = remote_tunnel.TunnelPublisher(ident, 53531, "PC")
+        response = MagicMock(status=200)
+        response.__enter__.return_value = response
+        with patch.object(remote_tunnel.urllib.request, "urlopen", return_value=response) as urlopen:
+            publisher._publish("wss://x.trycloudflare.com")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "PUT")
+        self.assertEqual(request.get_header("User-agent"), remote_tunnel.USER_AGENT)
 
     @unittest.skipUnless(remote_tunnel.HAS_NACL, "PyNaCl not installed")
     def test_signed_record_round_trips_and_rejects_tamper(self):
