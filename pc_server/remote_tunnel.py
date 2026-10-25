@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -64,7 +65,7 @@ def find_cloudflared():
         Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "cloudflared" / "cloudflared.exe",
     ]
     # When frozen by PyInstaller, a bundled copy sits next to the executable payload.
-    meipass = getattr(__import__("sys"), "_MEIPASS", None)
+    meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         candidates.insert(0, Path(meipass) / "cloudflared.exe")
     for c in candidates:

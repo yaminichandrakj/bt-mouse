@@ -102,7 +102,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
