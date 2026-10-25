@@ -52,6 +52,19 @@ class SettingsRepository(context: Context) {
     private val _laptopPin = MutableStateFlow(prefs.getString(KEY_LAPTOP_PIN, "") ?: "")
     val laptopPin: StateFlow<String> = _laptopPin.asStateFlow()
 
+    // The paired PC's name: shown on the Connect screen and used to pick it from bonded Bluetooth devices.
+    private val _pcName = MutableStateFlow(prefs.getString(KEY_PC_NAME, "") ?: "")
+    val pcName: StateFlow<String> = _pcName.asStateFlow()
+
+    // Bluetooth address of the paired PC, set when the user taps it once in the Bluetooth list.
+    private val _pcBluetoothAddress = MutableStateFlow(prefs.getString(KEY_PC_BT_ADDRESS, "") ?: "")
+    val pcBluetoothAddress: StateFlow<String> = _pcBluetoothAddress.asStateFlow()
+
+    fun setPcBluetoothAddress(address: String) {
+        _pcBluetoothAddress.value = address
+        prefs.edit().putString(KEY_PC_BT_ADDRESS, address).apply()
+    }
+
     // WAN rendezvous: where to look up the PC's current tunnel URL, and the key to verify it.
     private val _rvWorker = MutableStateFlow(prefs.getString(KEY_RV_WORKER, "") ?: "")
     val rvWorker: StateFlow<String> = _rvWorker.asStateFlow()
@@ -164,6 +177,37 @@ class SettingsRepository(context: Context) {
         prefs.edit().putString(KEY_LAPTOP_PIN, value).apply()
     }
 
+    /** Everything one pairing QR carries, saved together. */
+    fun savePairedPc(name: String, host: String, port: Int, pin: String, wsUrl: String) {
+        _pcName.value = name
+        _wifiHost.value = host
+        _wifiPort.value = port
+        _serverPin.value = pin
+        _wanToken.value = pin
+        _wanUrl.value = wsUrl
+        prefs.edit()
+            .putString(KEY_PC_NAME, name)
+            .putString(KEY_WIFI_HOST, host)
+            .putInt(KEY_WIFI_PORT, port)
+            .putString(KEY_SERVER_PIN, pin)
+            .putString(KEY_WAN_TOKEN, pin)
+            .putString(KEY_WAN_URL, wsUrl)
+            .apply()
+    }
+
+    /** New PIN after the user changed it on the PC; everything else about the pairing stays. */
+    fun setPairingPin(pin: String) {
+        _serverPin.value = pin
+        _wanToken.value = pin
+        prefs.edit().putString(KEY_SERVER_PIN, pin).putString(KEY_WAN_TOKEN, pin).apply()
+    }
+
+    fun forgetPairedPc() {
+        savePairedPc(name = "", host = "", port = 53530, pin = "", wsUrl = "")
+        setRendezvous("", "", "")
+        setPcBluetoothAddress("")
+    }
+
     fun setRendezvous(worker: String, id: String, pub: String) {
         _rvWorker.value = worker
         _rvId.value = id
@@ -207,6 +251,8 @@ class SettingsRepository(context: Context) {
         private const val KEY_WAN_URL = "wan_url"
         private const val KEY_WAN_TOKEN = "wan_token"
         private const val KEY_LAPTOP_PIN = "laptop_pin"
+        private const val KEY_PC_NAME = "pc_name"
+        private const val KEY_PC_BT_ADDRESS = "pc_bt_address"
         private const val KEY_RV_WORKER = "rv_worker"
         private const val KEY_RV_ID = "rv_id"
         private const val KEY_RV_PUB = "rv_pub"

@@ -1,5 +1,7 @@
 package com.btmouse.app.connection
 
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.content.Context
 import com.btmouse.app.data.ConnectionMode
 import com.btmouse.app.data.MediaStatus
@@ -38,6 +40,16 @@ private data class BtTransportTelemetry(
     val rfcommHealthy: Boolean,
     val rfcommLatencyMs: Long?,
     val hidConnected: Boolean
+)
+
+private const val LINK_TOP_UP_INTERVAL_MS = 30_000L
+
+enum class LinkState { OFF, WEAK, LIVE }
+
+data class LinkStates(
+    val wifi: LinkState = LinkState.OFF,
+    val bluetooth: LinkState = LinkState.OFF,
+    val internet: LinkState = LinkState.OFF
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -83,66 +95,62 @@ class ConnectionCoordinator(
         TransportTelemetry(connected, healthy, lat)
     }
 
+    // One paired PC, every link up at once: commands go over the fastest healthy one.
     val activeTransport: StateFlow<ActiveTransport> = combine(
-        settings.failoverEnabled,
-        settings.connectionMode,
         wifiState,
         btState,
         wanState
-    ) { failover, mode, wifi, bt, wan ->
-        if (failover) {
-            val healthyCompanionCandidates = buildList {
-                if (wifi.connected && wifi.healthy) {
-                    add(ActiveTransport.WIFI to (wifi.latencyMs ?: 15L))
-                }
-                if (bt.rfcommConnected && bt.rfcommHealthy) {
-                    add(ActiveTransport.BLUETOOTH_RFCOMM to (bt.rfcommLatencyMs ?: 35L))
-                }
-                if (wan.connected && wan.healthy) {
-                    add(ActiveTransport.REMOTE_WAN to (wan.latencyMs ?: 80L))
-                }
+    ) { wifi, bt, wan ->
+        val healthyCompanionCandidates = buildList {
+            if (wifi.connected && wifi.healthy) {
+                add(ActiveTransport.WIFI to (wifi.latencyMs ?: 15L))
             }
-            if (healthyCompanionCandidates.isNotEmpty()) {
-                healthyCompanionCandidates.minByOrNull { it.second }!!.first
-            } else {
-                when {
-                    wifi.connected -> ActiveTransport.WIFI
-                    bt.rfcommConnected -> ActiveTransport.BLUETOOTH_RFCOMM
-                    wan.connected -> ActiveTransport.REMOTE_WAN
-                    bt.hidConnected -> ActiveTransport.BLUETOOTH_HID
-                    else -> ActiveTransport.NONE
-                }
+            if (bt.rfcommConnected && bt.rfcommHealthy) {
+                add(ActiveTransport.BLUETOOTH_RFCOMM to (bt.rfcommLatencyMs ?: 35L))
             }
+            if (wan.connected && wan.healthy) {
+                add(ActiveTransport.REMOTE_WAN to (wan.latencyMs ?: 80L))
+            }
+        }
+        if (healthyCompanionCandidates.isNotEmpty()) {
+            healthyCompanionCandidates.minByOrNull { it.second }!!.first
         } else {
-            when (mode) {
-                ConnectionMode.BLUETOOTH -> {
-                    if (bt.rfcommConnected) ActiveTransport.BLUETOOTH_RFCOMM
-                    else if (bt.hidConnected) ActiveTransport.BLUETOOTH_HID
-                    else ActiveTransport.NONE
-                }
-                ConnectionMode.WIFI -> if (wifi.connected) ActiveTransport.WIFI else ActiveTransport.NONE
-                ConnectionMode.REMOTE_WAN -> if (wan.connected) ActiveTransport.REMOTE_WAN else ActiveTransport.NONE
+            when {
+                wifi.connected -> ActiveTransport.WIFI
+                bt.rfcommConnected -> ActiveTransport.BLUETOOTH_RFCOMM
+                wan.connected -> ActiveTransport.REMOTE_WAN
+                bt.hidConnected -> ActiveTransport.BLUETOOTH_HID
+                else -> ActiveTransport.NONE
             }
         }
     }.stateIn(scope, SharingStarted.Eagerly, ActiveTransport.NONE)
 
     override val isConnected: StateFlow<Boolean> = combine(
-        settings.failoverEnabled,
-        settings.connectionMode,
         wifiState,
         btState,
         wanState
-    ) { failover, mode, wifi, bt, wan ->
-        if (failover) {
-            wifi.connected || bt.rfcommConnected || bt.hidConnected || wan.connected
-        } else {
-            when (mode) {
-                ConnectionMode.BLUETOOTH -> bt.rfcommConnected || bt.hidConnected
-                ConnectionMode.WIFI -> wifi.connected
-                ConnectionMode.REMOTE_WAN -> wan.connected
-            }
-        }
+    ) { wifi, bt, wan ->
+        wifi.connected || bt.rfcommConnected || bt.hidConnected || wan.connected
     }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    /** Per-link state for the Connect screen's Wi-Fi / Bluetooth / Internet chips. */
+    val linkStates: StateFlow<LinkStates> = combine(wifiState, btState, wanState) { wifi, bt, wan ->
+        LinkStates(
+            wifi = linkStateOf(wifi.connected, wifi.healthy),
+            bluetooth = linkStateOf(bt.rfcommConnected || bt.hidConnected, !bt.rfcommConnected || bt.rfcommHealthy),
+            internet = linkStateOf(wan.connected, wan.healthy)
+        )
+    }.stateIn(scope, SharingStarted.Eagerly, LinkStates())
+
+    private fun linkStateOf(connected: Boolean, healthy: Boolean): LinkState = when {
+        !connected -> LinkState.OFF
+        healthy -> LinkState.LIVE
+        else -> LinkState.WEAK
+    }
+
+    private val _linkNotice = MutableStateFlow<String?>(null)
+    /** Why a link could not come up (for example "PC is offline"), shown under the status card. */
+    val linkNotice: StateFlow<String?> = _linkNotice.asStateFlow()
 
     override val measuredLatencyMs: StateFlow<Long?> = combine(
         activeTransport,
@@ -191,41 +199,22 @@ class ConnectionCoordinator(
 
     override val statusMessage: StateFlow<String> = combine(
         activeTransport,
-        settings.connectionMode,
         bluetoothRfcommManager.statusMessage,
         bluetoothHidManager.statusMessage,
         wifiClientManager.statusMessage,
         remoteWanManager.statusMessage
-    ) { values ->
-        val transport = values[0] as ActiveTransport
-        val mode = values[1] as ConnectionMode
-        val btRfcommStatus = values[2] as String
-        val btHidStatus = values[3] as String
-        val wifiStatus = values[4] as String
-        val wanStatus = values[5] as String
-
-        when (mode) {
-            ConnectionMode.WIFI -> if (!wifiClientManager.isConnected.value && wifiStatus != "Wi-Fi disconnected") {
-                return@combine wifiStatus
-            }
-            ConnectionMode.REMOTE_WAN -> if (!remoteWanManager.isConnected.value && wanStatus != "Disconnected") {
-                return@combine wanStatus
-            }
-            ConnectionMode.BLUETOOTH -> if (!bluetoothRfcommManager.isConnected.value && !bluetoothHidManager.isConnected.value) {
-                return@combine if (btRfcommStatus != "Bluetooth disconnected") btRfcommStatus else btHidStatus
-            }
-        }
-
+    ) { transport, btRfcommStatus, btHidStatus, wifiStatus, wanStatus ->
         when (transport) {
             ActiveTransport.WIFI -> wifiStatus
             ActiveTransport.BLUETOOTH_RFCOMM -> btRfcommStatus
             ActiveTransport.BLUETOOTH_HID -> btHidStatus
             ActiveTransport.REMOTE_WAN -> wanStatus
-            ActiveTransport.NONE -> when (mode) {
-                ConnectionMode.BLUETOOTH -> btRfcommStatus
-                ConnectionMode.WIFI -> wifiStatus
-                ConnectionMode.REMOTE_WAN -> wanStatus
-            }
+            // Nothing up yet: show whichever link has something to say (connecting, failed, PIN wrong...).
+            ActiveTransport.NONE -> listOf(
+                wifiStatus to "Wi-Fi disconnected",
+                wanStatus to "Disconnected",
+                btRfcommStatus to "Bluetooth disconnected"
+            ).firstOrNull { (status, idle) -> status.isNotBlank() && status != idle }?.first ?: "Not connected"
         }
     }.stateIn(scope, SharingStarted.Eagerly, "Initializing...")
 
@@ -388,6 +377,7 @@ class ConnectionCoordinator(
     private var reconnectJob: Job? = null
     private var sessionMonitorJob: Job? = null
     private var supervisionJob: Job? = null
+    private var linkTopUpJob: Job? = null
     private var transportTransitionJob: Job? = null
     private var lastObservedTransport: ActiveTransport = ActiveTransport.NONE
     @Volatile private var wasConnected: Boolean = false
@@ -414,6 +404,25 @@ class ConnectionCoordinator(
             monitorTransportTransitions()
             monitorSessionAndMedia()
             monitorConnectionSupervision()
+            monitorLinkTopUp()
+        }
+    }
+
+    /**
+     * Auto-reconnect only runs once every link is down. While at least one is up, bring back
+     * any that dropped (e.g. Wi-Fi when you walk back into range) so failover keeps options.
+     */
+    private fun monitorLinkTopUp() {
+        linkTopUpJob?.cancel()
+        linkTopUpJob = scope.launch {
+            while (true) {
+                delay(LINK_TOP_UP_INTERVAL_MS)
+                val links = linkStates.value
+                val anyDown = links.wifi == LinkState.OFF || links.bluetooth == LinkState.OFF || links.internet == LinkState.OFF
+                if (isConnected.value && anyDown && !intentionalDisconnect && settings.autoReconnect.value) {
+                    bringUpAllLinks()
+                }
+            }
         }
     }
 
@@ -470,6 +479,79 @@ class ConnectionCoordinator(
     fun prepareForManualConnect() {
         intentionalDisconnect = false
         cancelReconnect()
+    }
+
+    /** Connect to the paired PC over every link it can reach; failover then uses the fastest. */
+    fun connectSavedPc() {
+        prepareForManualConnect()
+        _linkNotice.value = null
+        scope.launch {
+            if (!bringUpAllLinks()) {
+                _linkNotice.value = "Scan the QR code on the Pair a device page of the PC companion first"
+            }
+        }
+    }
+
+    /**
+     * Starts each link that is not already up, using what the single pairing QR saved.
+     * Returns false when nothing is paired yet, so there was nothing to try.
+     */
+    private suspend fun bringUpAllLinks(): Boolean {
+        val pin = settings.serverPin.value.trim()
+        if (pin.length != 6 || !pin.all { it.isDigit() }) return false
+        val pcName = settings.pcName.value.trim()
+        var attempted = false
+
+        // Bluetooth: only the PC we paired with, never just the first bonded device (earbuds, watch...).
+        findPcBluetoothDevice(pcName)?.let { device ->
+            if (!bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager.connectToDevice(device)
+            if (!bluetoothHidManager.isConnected.value) bluetoothHidManager.connectToDevice(device)
+            attempted = true
+        }
+
+        // Wi-Fi: the fast UDP link when the phone is on the PC's network.
+        val host = settings.wifiHost.value.trim()
+        val port = settings.wifiPort.value
+        if (host.isNotBlank() && port in 1..65535) {
+            if (!wifiClientManager.isConnected.value) {
+                wifiClientManager.connectManual(host, port, pcName.ifBlank { "PC Server" })
+            }
+            attempted = true
+        }
+
+        // Internet: look up the PC's current tunnel address; fall back to its local WebSocket.
+        val rv = RemoteRendezvousResolver.fromSettings(settings)
+        val fallbackUrl = settings.wanUrl.value.trim()
+        if (rv.isComplete || fallbackUrl.isNotBlank()) {
+            if (!remoteWanManager.isConnected.value) {
+                val url = if (rv.isComplete) {
+                    when (val r = RemoteRendezvousResolver.resolve(rv)) {
+                        is RemoteRendezvousResolver.Result.Ok -> r.url
+                        is RemoteRendezvousResolver.Result.Error -> {
+                            _linkNotice.value = "Internet: ${r.message}"
+                            fallbackUrl
+                        }
+                    }
+                } else fallbackUrl
+                if (url.isNotBlank()) remoteWanManager.connect(url, pin)
+            }
+            attempted = true
+        }
+        return attempted
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun findPcBluetoothDevice(pcName: String): BluetoothDevice? {
+        return try {
+            bluetoothRfcommManager.refreshPairedDevices()
+            val bonded = bluetoothRfcommManager.pairedDevices.value
+            val savedAddress = settings.pcBluetoothAddress.value
+            bonded.firstOrNull { savedAddress.isNotBlank() && it.address.equals(savedAddress, ignoreCase = true) }
+                ?: bonded.firstOrNull { pcName.isNotBlank() && it.name.equals(pcName, ignoreCase = true) }
+                ?: bluetoothRfcommManager.lastConnectedDevice?.takeIf { last -> bonded.any { it.address == last.address } }
+        } catch (_: SecurityException) {
+            null
+        }
     }
 
     fun disconnectAll() {
@@ -559,55 +641,9 @@ class ConnectionCoordinator(
                 }
                 _reconnectStatus.value = "Attempting reconnection ($attempt/${delays.size})..."
 
-                val mode = settings.connectionMode.value
-                when (mode) {
-                    ConnectionMode.WIFI -> {
-                        val host = settings.wifiHost.value
-                        val port = settings.wifiPort.value
-                        val pin = settings.serverPin.value.trim()
-                        if (host.isNotBlank() && port in 1..65535 && pin.length == 6 && pin.all { it.isDigit() }) {
-                            wifiClientManager.connectManual(host, port)
-                        } else {
-                            _reconnectStatus.value = "Auto-reconnect cancelled: check Wi-Fi host & PIN"
-                            return@launch
-                        }
-                    }
-                    ConnectionMode.REMOTE_WAN -> {
-                        val fallbackUrl = settings.wanUrl.value.trim()
-                        val token = settings.wanToken.value.trim()
-                        // Prefer a freshly resolved tunnel URL; the stored one may be a stale
-                        // trycloudflare address after the PC restarted its tunnel.
-                        val rv = RemoteRendezvousResolver.fromSettings(settings)
-                        val url = if (rv.isComplete) {
-                            when (val r = RemoteRendezvousResolver.resolve(rv)) {
-                                is RemoteRendezvousResolver.Result.Ok -> r.url
-                                is RemoteRendezvousResolver.Result.Error -> fallbackUrl
-                            }
-                        } else fallbackUrl
-                        if (url.isNotBlank()) {
-                            remoteWanManager.connect(url, token)
-                        } else {
-                            _reconnectStatus.value = "Auto-reconnect cancelled: missing WAN URL"
-                            return@launch
-                        }
-                    }
-                    ConnectionMode.BLUETOOTH -> {
-                        val device = bluetoothRfcommManager.lastConnectedDevice
-                        if (device != null) {
-                            bluetoothRfcommManager.connectToDevice(device)
-                            bluetoothHidManager.connectToDevice(device)
-                        } else {
-                            bluetoothRfcommManager.refreshPairedDevices()
-                            val paired = bluetoothRfcommManager.pairedDevices.value
-                            if (paired.isNotEmpty()) {
-                                bluetoothRfcommManager.connectToDevice(paired.first())
-                                bluetoothHidManager.connectToDevice(paired.first())
-                            } else {
-                                _reconnectStatus.value = "Auto-reconnect cancelled: no paired device"
-                                return@launch
-                            }
-                        }
-                    }
+                if (!bringUpAllLinks()) {
+                    _reconnectStatus.value = "Auto-reconnect cancelled: pair the PC by scanning its QR code"
+                    return@launch
                 }
 
                 var elapsed = 0

@@ -981,6 +981,14 @@ class RemoteTunnelTests(unittest.TestCase):
         self.assertEqual(ident.worker_url, "https://x.workers.dev")
         self.assertEqual(remote_tunnel.RemoteIdentity().worker_url, "https://x.workers.dev")
 
+    def test_internet_access_choice_survives_restart(self):
+        ident = remote_tunnel.RemoteIdentity()
+        self.assertFalse(ident.tunnel_enabled)
+        ident.set_tunnel_enabled(True)
+        reloaded = remote_tunnel.RemoteIdentity()
+        self.assertTrue(reloaded.tunnel_enabled)
+        self.assertEqual(reloaded.record_id, ident.record_id)
+
     def test_tunnel_url_regex_matches_cloudflared_banner(self):
         line = "|  https://affect-gen-journey-speech.trycloudflare.com    |"
         match = remote_tunnel._TUNNEL_URL_RE.search(line)
@@ -1069,6 +1077,21 @@ class WanQrWiringTests(unittest.TestCase):
         self.assertIn('payload["rv"]', gui)
         self.assertIn('"worker": self.remote_identity.worker_url', gui)
         self.assertIn("def _toggle_tunnel", gui)
+
+    def test_one_pairing_qr_carries_every_link(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn('"type": "btmouse_pc"', gui)
+        for field in ('"ip": self.current_ip', '"port": self.current_port', '"ws_port": self.ws_port',
+                      '"name": socket.gethostname()'):
+            self.assertIn(field, gui)
+        self.assertIn("self._set_qr_pixmap(self.qr_label, self.pairing_payload()", gui)
+
+    def test_one_pair_page_replaces_separate_connection_pages(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn('("Pair a device", "link", self._create_pair_page)', gui)
+        for removed in ("_create_wifi_page", "_create_bt_page", "_create_wan_page", "wan_qr_label"):
+            self.assertNotIn(removed, gui)
+        self.assertIn("QTimer.singleShot(1500, self._restore_tunnel)", gui)
 
 
 if __name__ == "__main__":
