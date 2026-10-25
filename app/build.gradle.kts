@@ -12,8 +12,8 @@ android {
         applicationId = "com.btmouse.app"
         minSdk = 28
         targetSdk = 34
-        versionCode = 25
-        versionName = "1.4.1"
+        versionCode = 26
+        versionName = "1.4.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -104,6 +104,7 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.play.services.code.scanner)
     implementation(libs.okhttp)
+    implementation("com.google.crypto.tink:tink-android:1.13.0")
 
     debugImplementation(libs.androidx.ui.tooling)
 }

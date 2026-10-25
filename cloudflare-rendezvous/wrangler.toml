@@ -1,0 +1,12 @@
+name = "btmouse-rv"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+# Ed25519 in WebCrypto needs this flag on older compat dates; harmless to keep.
+compatibility_flags = ["nodejs_compat"]
+
+# KV namespace that stores the signed address records.
+# Create it once with:  wrangler kv namespace create RENDEZVOUS
+# then paste the printed id below.
+[[kv_namespaces]]
+binding = "RENDEZVOUS"
+id = "PASTE_KV_NAMESPACE_ID_HERE"

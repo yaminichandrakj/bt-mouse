@@ -52,6 +52,16 @@ class SettingsRepository(context: Context) {
     private val _laptopPin = MutableStateFlow(prefs.getString(KEY_LAPTOP_PIN, "") ?: "")
     val laptopPin: StateFlow<String> = _laptopPin.asStateFlow()
 
+    // WAN rendezvous: where to look up the PC's current tunnel URL, and the key to verify it.
+    private val _rvWorker = MutableStateFlow(prefs.getString(KEY_RV_WORKER, "") ?: "")
+    val rvWorker: StateFlow<String> = _rvWorker.asStateFlow()
+
+    private val _rvId = MutableStateFlow(prefs.getString(KEY_RV_ID, "") ?: "")
+    val rvId: StateFlow<String> = _rvId.asStateFlow()
+
+    private val _rvPub = MutableStateFlow(prefs.getString(KEY_RV_PUB, "") ?: "")
+    val rvPub: StateFlow<String> = _rvPub.asStateFlow()
+
     private val _customAppsJson = MutableStateFlow(prefs.getString(KEY_CUSTOM_APPS, "[]") ?: "[]")
     val customAppsJson: StateFlow<String> = _customAppsJson.asStateFlow()
 
@@ -154,6 +164,17 @@ class SettingsRepository(context: Context) {
         prefs.edit().putString(KEY_LAPTOP_PIN, value).apply()
     }
 
+    fun setRendezvous(worker: String, id: String, pub: String) {
+        _rvWorker.value = worker
+        _rvId.value = id
+        _rvPub.value = pub
+        prefs.edit()
+            .putString(KEY_RV_WORKER, worker)
+            .putString(KEY_RV_ID, id)
+            .putString(KEY_RV_PUB, pub)
+            .apply()
+    }
+
     fun setCustomAppsJson(value: String) {
         _customAppsJson.value = value
         prefs.edit().putString(KEY_CUSTOM_APPS, value).apply()
@@ -186,6 +207,9 @@ class SettingsRepository(context: Context) {
         private const val KEY_WAN_URL = "wan_url"
         private const val KEY_WAN_TOKEN = "wan_token"
         private const val KEY_LAPTOP_PIN = "laptop_pin"
+        private const val KEY_RV_WORKER = "rv_worker"
+        private const val KEY_RV_ID = "rv_id"
+        private const val KEY_RV_PUB = "rv_pub"
         private const val KEY_CUSTOM_APPS = "custom_apps"
         private const val KEY_PRESENTATION_VOLUME_NAVIGATION = "presentation_volume_navigation"
         private const val KEY_CONNECTION_MODE = "connection_mode"

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, patch
 
 import server
+import remote_tunnel
 
 
 class ServerProtocolTests(unittest.TestCase):
@@ -872,7 +873,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.4.1")
+        self.assertEqual(app_gui.APP_VERSION, "1.4.2")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -954,6 +955,66 @@ class SingleInstanceTests(unittest.TestCase):
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
         self.assertIn("if not acquire_single_instance_lock():", gui_source)
         self.assertIn('f"Local\\\\{SINGLE_INSTANCE_NAME}"', gui_source)
+
+
+class RemoteTunnelTests(unittest.TestCase):
+    """WAN rendezvous identity/record behaviour (Phase 1)."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._saved_path = remote_tunnel.REMOTE_CONFIG_PATH
+        remote_tunnel.REMOTE_CONFIG_PATH = Path(self._tmp) / "remote.json"
+
+    def tearDown(self):
+        remote_tunnel.REMOTE_CONFIG_PATH = self._saved_path
+
+    def test_record_id_is_stable_hex_across_reload(self):
+        ident = remote_tunnel.RemoteIdentity()
+        self.assertRegex(ident.record_id, r"^[a-f0-9]{32}$")
+        # A reload must keep the same id so the printed QR stays valid across restarts.
+        self.assertEqual(remote_tunnel.RemoteIdentity().record_id, ident.record_id)
+
+    def test_worker_url_is_normalised_and_persisted(self):
+        ident = remote_tunnel.RemoteIdentity()
+        ident.set_worker_url("https://x.workers.dev/")
+        self.assertEqual(ident.worker_url, "https://x.workers.dev")
+        self.assertEqual(remote_tunnel.RemoteIdentity().worker_url, "https://x.workers.dev")
+
+    def test_tunnel_url_regex_matches_cloudflared_banner(self):
+        line = "|  https://affect-gen-journey-speech.trycloudflare.com    |"
+        match = remote_tunnel._TUNNEL_URL_RE.search(line)
+        self.assertIsNotNone(match)
+        self.assertEqual(
+            match.group(0).replace("https://", "wss://", 1),
+            "wss://affect-gen-journey-speech.trycloudflare.com",
+        )
+
+    @unittest.skipUnless(remote_tunnel.HAS_NACL, "PyNaCl not installed")
+    def test_signed_record_round_trips_and_rejects_tamper(self):
+        from nacl.signing import VerifyKey
+
+        ident = remote_tunnel.RemoteIdentity()
+        self.assertEqual(len(base64.b64decode(ident.public_b64)), 32)
+        record = json.dumps(
+            {"v": 1, "url": "wss://x.trycloudflare.com", "ts": 1, "host": "PC"},
+            separators=(",", ":"),
+        )
+        sig = ident.sign_b64(record.encode())
+        self.assertEqual(len(base64.b64decode(sig)), 64)
+        VerifyKey(base64.b64decode(ident.public_b64)).verify(record.encode(), base64.b64decode(sig))
+        tampered = bytearray(base64.b64decode(sig))
+        tampered[0] ^= 1
+        with self.assertRaises(Exception):
+            VerifyKey(base64.b64decode(ident.public_b64)).verify(record.encode(), bytes(tampered))
+
+
+class WanQrWiringTests(unittest.TestCase):
+    def test_wan_qr_includes_rendezvous_block_and_tunnel_controls(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("from remote_tunnel import RemoteIdentity, TunnelPublisher", gui)
+        self.assertIn('payload["rv"]', gui)
+        self.assertIn('"worker": self.remote_identity.worker_url', gui)
+        self.assertIn("def _toggle_tunnel", gui)
 
 
 if __name__ == "__main__":

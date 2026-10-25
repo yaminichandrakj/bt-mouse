@@ -5,8 +5,16 @@ from PyInstaller.utils.hooks import collect_all
 datas = [('icon.ico', '.'), ('icon.png', '.')]
 binaries = []
 hiddenimports = []
+
+# Bundle cloudflared.exe for one-click internet access if a copy sits next to the spec.
+# Optional: when absent, the companion falls back to a PATH / Program Files lookup at runtime.
+import os as _os
+_cf = _os.path.join(_os.path.dirname(_os.path.abspath(SPEC)), 'cloudflared.exe')
+if _os.path.isfile(_cf):
+    binaries += [(_cf, '.')]
+
 for package in (
-    'imageio_ffmpeg',
+    'imageio_ffmpeg', 'nacl',
     'sounddevice', 'cv2', 'numpy', 'pycaw', 'comtypes',
     'winrt.windows.media.control', 'winrt.windows.foundation',
     'winrt.windows.devices.bluetooth.rfcomm', 'winrt.windows.networking.sockets',
