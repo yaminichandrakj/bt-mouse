@@ -79,6 +79,7 @@ try:
         QMessageBox,
         QDialog,
         QSizePolicy,
+        QProgressDialog,
     )
     HAS_QT = True
 except ImportError:
@@ -89,6 +90,7 @@ except ImportError:
     QLabel = object
 
 from remote_tunnel import RemoteIdentity, TunnelPublisher
+from update_script import build_update_script
 from server import (
     Server,
     ensure_interactive_desktop,
@@ -102,10 +104,29 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
+COMPANION_UPDATE_STEP_LOG = Path(tempfile.gettempdir()) / "btmouse-update.log"
+
+
+class _UpdateCancelled(Exception):
+    pass
+
+
+def companion_update_wait_pids():
+    """PIDs the swap must outlive: this process, plus the one-file launcher that holds the EXE open."""
+    pids = [os.getpid()]
+    if getattr(sys, "frozen", False):
+        try:
+            import psutil
+            parent = psutil.Process().parent()
+            if parent and Path(parent.exe()).resolve() == Path(sys.executable).resolve():
+                pids.append(parent.pid)
+        except Exception:
+            pass
+    return pids
 
 
 def set_windows_dpi_awareness():
@@ -358,6 +379,7 @@ FLUENT_GLYPHS = {
     "globe": 0xE774,
     "key": 0xE8D7,
     "library": 0xE8F1,
+    "link": 0xE71B,
     "lock": 0xE72E,
     "mic": 0xE720,
     "monitor": 0xE7F4,
@@ -723,6 +745,7 @@ class CompanionApp(QMainWindow):
         QTimer.singleShot(250, self.refresh_quick_apps)
 
         self.start_server()
+        QTimer.singleShot(1500, self._restore_tunnel)
         self._write_update_ready_marker()
         self._heal_startup_path_if_registered()
 
@@ -957,12 +980,10 @@ class CompanionApp(QMainWindow):
         self.nav_buttons = []
 
         pages = [
-            ("Wi-Fi && QR pairing", "wifi", self._create_wifi_page),
+            ("Pair a device", "link", self._create_pair_page),
             ("Phone as webcam", "camera", self._create_phone_cam_page),
             ("Media library", "library", self._create_recordings_page),
             ("Webcam && quick apps", "apps", self._create_desktop_page),
-            ("Bluetooth", "bluetooth", self._create_bt_page),
-            ("Remote access", "globe", self._create_wan_page),
             ("Drawing slate", "pen", self._create_tablet_page),
             ("Activity", "pulse", self._create_logs_page),
         ]
@@ -1060,27 +1081,35 @@ class CompanionApp(QMainWindow):
         root_layout.addWidget(bar)
 
     # ------------------------------------------------------------------
-    # Page 1: Wi-Fi & Instant QR Pairing
+    # Page 1: Pair a device (one QR for Wi-Fi, Bluetooth and internet)
     # ------------------------------------------------------------------
-    def _create_wifi_page(self):
+    def _section_label(self, text):
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
+        return lbl
+
+    def _create_pair_page(self):
         page = QWidget()
         layout = QHBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(16)
 
-        # Left Card: QR Code
+        # Left: the one QR that pairs every connection type.
         qr_card = QFrame()
         qr_card.setObjectName("Card")
         qr_layout = QVBoxLayout(qr_card)
         qr_layout.setContentsMargins(24, 24, 24, 24)
         qr_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        lbl_t = QLabel("Pair with a QR code")
+        lbl_t = QLabel("Pair a phone or tablet")
         lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_layout.addWidget(lbl_t)
 
-        lbl_d = QLabel("Scan with the BT Mouse Android app — IP, UDP port, and 6-digit PIN auto-fill automatically.")
+        lbl_d = QLabel(
+            "Scan once. The app saves this PC and connects over Wi-Fi, Bluetooth and the "
+            "internet by itself, switching to whichever is fastest."
+        )
         lbl_d.setStyleSheet("color: #94A3B8; font-size: 12px;")
         lbl_d.setWordWrap(True)
         lbl_d.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1088,94 +1117,134 @@ class CompanionApp(QMainWindow):
         qr_layout.addSpacing(12)
 
         self.qr_label = QLabel()
-        self.qr_label.setFixedSize(240, 240)
+        self.qr_label.setFixedSize(260, 260)
         self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr_label.setStyleSheet("background-color: #FFFFFF; border-radius: 12px; padding: 10px;")
         qr_layout.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignCenter)
         qr_layout.addSpacing(12)
 
-        lbl_hint = QLabel("In the phone app: Connect  ›  Scan QR code")
+        lbl_hint = QLabel("In the phone app: Connect  ›  Scan PC QR code")
         lbl_hint.setStyleSheet("color: #38BDF8; font-weight: 700; font-size: 13px;")
         lbl_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         qr_layout.addWidget(lbl_hint)
 
+        btn_ref = make_button("Refresh QR code", "refresh")
+        btn_ref.clicked.connect(self.generate_qr)
+        qr_layout.addWidget(btn_ref, 0, Qt.AlignmentFlag.AlignCenter)
+
         layout.addWidget(qr_card, 1)
 
-        # Right Card: Network Details
+        # Right: PIN, then each connection type, in one scrollable column.
         info_card = QFrame()
         info_card.setObjectName("Card")
         info_layout = QVBoxLayout(info_card)
         info_layout.setContentsMargins(24, 24, 24, 24)
         info_layout.setSpacing(12)
 
-        lbl_it = QLabel("Connection details")
-        lbl_it.setStyleSheet("font-size: 17px; font-weight: 600;")
-        info_layout.addWidget(lbl_it)
+        # PIN: the only thing you change after pairing.
+        pin_box = QFrame()
+        pin_box.setObjectName("SubCard")
+        pin_l = QVBoxLayout(pin_box)
+        pin_l.addWidget(self._section_label("PAIRING PIN"))
+        self.lbl_wifi_pin = QLabel(self.auth_token)
+        self.lbl_wifi_pin.setStyleSheet("font-family: Consolas, monospace; font-size: 26px; font-weight: 700; color: #10B981;")
+        pin_l.addWidget(self.lbl_wifi_pin)
+        lbl_pin_d = QLabel("Change it whenever you like. Paired devices just ask for the new PIN; no rescan needed.")
+        lbl_pin_d.setWordWrap(True)
+        lbl_pin_d.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        pin_l.addWidget(lbl_pin_d)
+        pin_row = QHBoxLayout()
+        self.ent_token = QLineEdit(self.auth_token)
+        self.ent_token.setMaxLength(6)
+        pin_row.addWidget(self.ent_token, 1)
+        btn_upd = QPushButton("Save PIN")
+        btn_upd.setObjectName("PrimaryBtn")
+        btn_upd.clicked.connect(self._update_auth_token)
+        pin_row.addWidget(btn_upd)
+        btn_copy_pin = make_button("Copy", "copy")
+        btn_copy_pin.clicked.connect(self.copy_pairing_pin)
+        pin_row.addWidget(btn_copy_pin)
+        pin_l.addLayout(pin_row)
+        info_layout.addWidget(pin_box)
 
-        lbl_ad = QLabel("Network Adapter / Interface:")
-        lbl_ad.setStyleSheet("color: #94A3B8; font-weight: 600;")
-        info_layout.addWidget(lbl_ad)
-
+        # Wi-Fi (same network).
+        wifi_box = QFrame()
+        wifi_box.setObjectName("SubCard")
+        wifi_l = QVBoxLayout(wifi_box)
+        wifi_l.addWidget(self._section_label("WI-FI  ·  SAME NETWORK"))
         self.combo_adapter = QComboBox()
         for name, ip in self.adapters:
             self.combo_adapter.addItem(f"{name}: {ip}", ip)
         self.combo_adapter.currentIndexChanged.connect(self._on_adapter_selected)
-        info_layout.addWidget(self.combo_adapter)
-
-        grid = QHBoxLayout()
-        grid.setSpacing(10)
-
-        ip_box = QFrame()
-        ip_box.setObjectName("SubCard")
-        ip_l = QVBoxLayout(ip_box)
-        lbl_iph = QLabel("LOCAL IP ADDRESS")
-        lbl_iph.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
-        ip_l.addWidget(lbl_iph)
+        wifi_l.addWidget(self.combo_adapter)
+        addr_row = QHBoxLayout()
         self.lbl_ip_val = QLabel(self.current_ip)
-        self.lbl_ip_val.setStyleSheet("font-family: Consolas, monospace; font-size: 20px; font-weight: 700; color: #38BDF8;")
-        ip_l.addWidget(self.lbl_ip_val)
-        grid.addWidget(ip_box, 2)
-
-        port_box = QFrame()
-        port_box.setObjectName("SubCard")
-        port_l = QVBoxLayout(port_box)
-        lbl_ph = QLabel("UDP PORT")
-        lbl_ph.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
-        port_l.addWidget(lbl_ph)
-        self.lbl_port_val = QLabel(str(self.current_port))
-        self.lbl_port_val.setStyleSheet("font-family: Consolas, monospace; font-size: 20px; font-weight: 700; color: #F8FAFC;")
-        port_l.addWidget(self.lbl_port_val)
-        grid.addWidget(port_box, 1)
-
-        info_layout.addLayout(grid)
-
-        pin_box = QFrame()
-        pin_box.setObjectName("SubCard")
-        pin_l = QVBoxLayout(pin_box)
-        lbl_pin_h = QLabel("6-DIGIT PAIRING PIN (EMBEDDED IN QR CODE)")
-        lbl_pin_h.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
-        pin_l.addWidget(lbl_pin_h)
-        self.lbl_wifi_pin = QLabel(self.auth_token)
-        self.lbl_wifi_pin.setStyleSheet("font-family: Consolas, monospace; font-size: 26px; font-weight: 700; color: #10B981;")
-        pin_l.addWidget(self.lbl_wifi_pin)
-        info_layout.addWidget(pin_box)
-
-        info_layout.addStretch()
-
+        self.lbl_ip_val.setStyleSheet("font-family: Consolas, monospace; font-size: 18px; font-weight: 700; color: #38BDF8;")
+        addr_row.addWidget(self.lbl_ip_val, 1)
+        self.lbl_port_val = QLabel(f"UDP {self.current_port}  ·  WS {self.ws_port}")
+        self.lbl_port_val.setStyleSheet("font-family: Consolas, monospace; font-size: 12px; color: #CBD5E1;")
+        addr_row.addWidget(self.lbl_port_val)
+        wifi_l.addLayout(addr_row)
+        self.lbl_wan_url = QLabel(f"ws://{self.current_ip}:{self.ws_port}")
+        self.lbl_wan_url.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; color: #94A3B8;")
+        wifi_l.addWidget(self.lbl_wan_url)
         btn_copy_ip = make_button("Copy IP address", "copy")
         btn_copy_ip.clicked.connect(self.copy_ip)
-        info_layout.addWidget(btn_copy_ip)
+        wifi_l.addWidget(btn_copy_ip)
+        info_layout.addWidget(wifi_box)
 
-        btn_copy_pin = make_button("Copy pairing PIN", "key")
-        btn_copy_pin.clicked.connect(self.copy_pairing_pin)
-        info_layout.addWidget(btn_copy_pin)
+        # Bluetooth (nearby, works with no network at all).
+        bt_box = QFrame()
+        bt_box.setObjectName("SubCard")
+        bt_l = QVBoxLayout(bt_box)
+        bt_l.addWidget(self._section_label("BLUETOOTH  ·  NEARBY, NO NETWORK NEEDED"))
+        lbl_bt = QLabel(
+            f"Pair this PC (“{socket.gethostname()}”) with your phone once in Windows Bluetooth "
+            "settings. After you scan the QR, the app also connects over Bluetooth whenever the PC is in range."
+        )
+        lbl_bt.setWordWrap(True)
+        lbl_bt.setStyleSheet("color: #CBD5E1; font-size: 12px;")
+        bt_l.addWidget(lbl_bt)
+        btn_bt = make_button("Open Bluetooth settings", "bluetooth")
+        btn_bt.clicked.connect(self.open_windows_bt_settings)
+        bt_l.addWidget(btn_bt)
+        info_layout.addWidget(bt_box)
 
-        btn_ref = make_button("Refresh QR code", "refresh")
-        btn_ref.setObjectName("PrimaryBtn")
-        btn_ref.clicked.connect(self.generate_qr)
-        info_layout.addWidget(btn_ref)
+        # Internet (anywhere, through the Cloudflare quick tunnel).
+        inet_box = QFrame()
+        inet_box.setObjectName("SubCard")
+        i_l = QVBoxLayout(inet_box)
+        i_l.addWidget(self._section_label("INTERNET  ·  FROM ANYWHERE"))
+        i_l.addWidget(QLabel("Cloudflare Worker URL:"))
+        self.ent_worker_url = QLineEdit(self.remote_identity.worker_url)
+        self.ent_worker_url.setPlaceholderText("https://btmouse-rv.<you>.workers.dev")
+        worker_row = QHBoxLayout()
+        worker_row.addWidget(self.ent_worker_url, 1)
+        btn_save_worker = QPushButton("Save")
+        btn_save_worker.clicked.connect(self._save_worker_url)
+        worker_row.addWidget(btn_save_worker)
+        i_l.addLayout(worker_row)
+        self.btn_tunnel = QPushButton("Turn on internet access")
+        self.btn_tunnel.setObjectName("PrimaryBtn")
+        self.btn_tunnel.clicked.connect(self._toggle_tunnel)
+        i_l.addWidget(self.btn_tunnel)
+        self.lbl_tunnel_status = QLabel("Internet access off")
+        self.lbl_tunnel_status.setWordWrap(True)
+        self.lbl_tunnel_status.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        i_l.addWidget(self.lbl_tunnel_status)
+        self.lbl_public_url = QLabel("—")
+        self.lbl_public_url.setWordWrap(True)
+        self.lbl_public_url.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; color: #10B981;")
+        i_l.addWidget(self.lbl_public_url)
+        info_layout.addWidget(inet_box)
+        info_layout.addStretch()
 
-        layout.addWidget(info_card, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(info_card)
+        layout.addWidget(scroll, 1)
+
         self.generate_qr()
         return page
 
@@ -1646,171 +1715,6 @@ class CompanionApp(QMainWindow):
         layout.addStretch()
         scroll.setWidget(content)
         return scroll
-
-    # ------------------------------------------------------------------
-    # Page 5: Bluetooth Assistant
-    # ------------------------------------------------------------------
-    def _create_bt_page(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(20, 20, 20, 20)
-
-        card = QFrame()
-        card.setObjectName("Card")
-        c_l = QVBoxLayout(card)
-        c_l.setContentsMargins(24, 24, 24, 24)
-        c_l.setSpacing(14)
-
-        lbl_t = QLabel("Bluetooth")
-        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
-        c_l.addWidget(lbl_t)
-
-        lbl_d = QLabel(
-            "Your phone connects over Bluetooth in two complementary ways:\n"
-            "• Bluetooth RFCOMM (Companion Link): Carries media controls, system stats, live audio, and camera frames.\n"
-            "• Bluetooth HID (Direct Hardware Profile): Emulates a physical Bluetooth mouse & keyboard at the OS level."
-        )
-        lbl_d.setWordWrap(True)
-        lbl_d.setStyleSheet("color: #CBD5E1; line-height: 1.4;")
-        c_l.addWidget(lbl_d)
-
-        btn_bt = make_button("Open Bluetooth settings", "settings")
-        btn_bt.setObjectName("PrimaryBtn")
-        btn_bt.setFixedWidth(280)
-        btn_bt.clicked.connect(self.open_windows_bt_settings)
-        c_l.addWidget(btn_bt)
-
-        steps_box = QFrame()
-        steps_box.setObjectName("SubCard")
-        s_l = QVBoxLayout(steps_box)
-        lbl_sh = QLabel("PAIRING & FAILOVER CHECKLIST")
-        lbl_sh.setStyleSheet("color: #38BDF8; font-weight: 700; font-size: 12px;")
-        s_l.addWidget(lbl_sh)
-        lbl_st = QLabel(
-            "1. Pair your Android phone and PC in Windows Bluetooth Settings.\n"
-            "2. In the BT Mouse app, open Connect  ›  Bluetooth and tap Connect next to your PC.\n"
-            "3. Enable 'Automatic Measured Failover' in Settings to seamlessly switch between Wi-Fi and Bluetooth without dropping video or audio streams."
-        )
-        lbl_st.setWordWrap(True)
-        s_l.addWidget(lbl_st)
-        c_l.addWidget(steps_box)
-        c_l.addStretch()
-
-        layout.addWidget(card)
-        return page
-
-    # ------------------------------------------------------------------
-    # Page 6: Remote WAN
-    # ------------------------------------------------------------------
-    def _create_wan_page(self):
-        page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
-
-        qr_card = QFrame()
-        qr_card.setObjectName("Card")
-        qr_l = QVBoxLayout(qr_card)
-        qr_l.setContentsMargins(24, 24, 24, 24)
-        qr_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        lbl_t = QLabel("Remote pairing")
-        lbl_t.setStyleSheet("font-size: 17px; font-weight: 600;")
-        lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        qr_l.addWidget(lbl_t)
-
-        lbl_d = QLabel("Scan from the Remote WAN tab on your phone. On the same Wi-Fi it uses the local address; "
-                       "off-network it resolves your tunnel address automatically. Same QR, same PIN.")
-        lbl_d.setWordWrap(True)
-        lbl_d.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_d.setStyleSheet("color: #94A3B8; font-size: 12px;")
-        qr_l.addWidget(lbl_d)
-        qr_l.addSpacing(12)
-
-        self.wan_qr_label = QLabel()
-        self.wan_qr_label.setFixedSize(220, 220)
-        self.wan_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.wan_qr_label.setStyleSheet("background-color: #FFFFFF; border-radius: 12px; padding: 10px;")
-        qr_l.addWidget(self.wan_qr_label, 0, Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(qr_card, 1)
-
-        info_card = QFrame()
-        info_card.setObjectName("Card")
-        in_l = QVBoxLayout(info_card)
-        in_l.setContentsMargins(24, 24, 24, 24)
-        in_l.setSpacing(12)
-
-        lbl_it = QLabel("WebSocket & PIN")
-        lbl_it.setStyleSheet("font-size: 17px; font-weight: 600;")
-        in_l.addWidget(lbl_it)
-
-        url_box = QFrame()
-        url_box.setObjectName("SubCard")
-        u_l = QVBoxLayout(url_box)
-        lbl_uh = QLabel("LOCAL WEBSOCKET ENDPOINT")
-        lbl_uh.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
-        u_l.addWidget(lbl_uh)
-        self.lbl_wan_url = QLabel(f"ws://{self.current_ip}:{self.ws_port}")
-        self.lbl_wan_url.setStyleSheet("font-family: Consolas, monospace; font-size: 15px; font-weight: 600; color: #10B981;")
-        u_l.addWidget(self.lbl_wan_url)
-        in_l.addWidget(url_box)
-
-        in_l.addWidget(QLabel("Update 6-Digit Security PIN:"))
-        pin_row = QHBoxLayout()
-        self.ent_token = QLineEdit(self.auth_token)
-        self.ent_token.setMaxLength(6)
-        pin_row.addWidget(self.ent_token, 1)
-        btn_upd = QPushButton("Save PIN")
-        btn_upd.setObjectName("PrimaryBtn")
-        btn_upd.clicked.connect(self._update_auth_token)
-        pin_row.addWidget(btn_upd)
-        in_l.addLayout(pin_row)
-
-        # --- Internet access (Cloudflare quick tunnel) ---
-        inet_box = QFrame()
-        inet_box.setObjectName("SubCard")
-        i_l = QVBoxLayout(inet_box)
-        lbl_ih = QLabel("INTERNET ACCESS (OFF-NETWORK)")
-        lbl_ih.setStyleSheet("color: #94A3B8; font-size: 10px; font-weight: 700;")
-        i_l.addWidget(lbl_ih)
-
-        i_l.addWidget(QLabel("Cloudflare Worker URL:"))
-        self.ent_worker_url = QLineEdit(self.remote_identity.worker_url)
-        self.ent_worker_url.setPlaceholderText("https://btmouse-rv.<you>.workers.dev")
-        worker_row = QHBoxLayout()
-        worker_row.addWidget(self.ent_worker_url, 1)
-        btn_save_worker = QPushButton("Save")
-        btn_save_worker.clicked.connect(self._save_worker_url)
-        worker_row.addWidget(btn_save_worker)
-        i_l.addLayout(worker_row)
-
-        self.btn_tunnel = QPushButton("Turn on internet access")
-        self.btn_tunnel.setObjectName("PrimaryBtn")
-        self.btn_tunnel.clicked.connect(self._toggle_tunnel)
-        i_l.addWidget(self.btn_tunnel)
-
-        self.lbl_tunnel_status = QLabel("Internet access off")
-        self.lbl_tunnel_status.setStyleSheet("color: #94A3B8; font-size: 11px;")
-        i_l.addWidget(self.lbl_tunnel_status)
-        self.lbl_public_url = QLabel("—")
-        self.lbl_public_url.setWordWrap(True)
-        self.lbl_public_url.setStyleSheet("font-family: Consolas, monospace; font-size: 11px; color: #10B981;")
-        i_l.addWidget(self.lbl_public_url)
-        in_l.addWidget(inet_box)
-
-        in_l.addStretch()
-
-        btn_cp_url = make_button("Copy WebSocket URL", "copy")
-        btn_cp_url.clicked.connect(self.copy_wan_url)
-        in_l.addWidget(btn_cp_url)
-
-        btn_ref_wan = make_button("Refresh QR code", "refresh")
-        btn_ref_wan.clicked.connect(self.generate_wan_qr)
-        in_l.addWidget(btn_ref_wan)
-
-        layout.addWidget(info_card, 1)
-        self.generate_wan_qr()
-        return page
 
     # ------------------------------------------------------------------
     # Page 7: Tablet Writing Pad
@@ -2333,27 +2237,16 @@ class CompanionApp(QMainWindow):
         except Exception as exc:
             label.setText(f"QR Error: {exc}")
 
-    def generate_qr(self):
-        hostname = socket.gethostname()
+    def pairing_payload(self):
+        """One QR for every link: Wi-Fi (UDP + WebSocket), Bluetooth (matched by PC name) and internet."""
         payload = {
-            "type": "btmouse",
+            "type": "btmouse_pc",
+            "v": 2,
+            "name": socket.gethostname(),
             "ip": self.current_ip,
             "port": self.current_port,
-            "name": hostname,
-            "pin": self.auth_token,
-            "token": self.auth_token,
-        }
-        if hasattr(self, "qr_label"):
-            self._set_qr_pixmap(self.qr_label, payload, 220)
-
-    def generate_wan_qr(self):
-        hostname = socket.gethostname()
-        payload = {
-            "type": "btmouse_wan",
+            "ws_port": self.ws_port,
             "url": f"ws://{self.current_ip}:{self.ws_port}",
-            "ip": self.current_ip,
-            "port": self.ws_port,
-            "name": hostname,
             "pin": self.auth_token,
             "token": self.auth_token,
         }
@@ -2363,10 +2256,17 @@ class CompanionApp(QMainWindow):
                 "id": self.remote_identity.record_id,
                 "pub": self.remote_identity.public_b64,
             }
-        if hasattr(self, "wan_qr_label"):
-            self._set_qr_pixmap(self.wan_qr_label, payload, 200)
+        return payload
+
+    def generate_qr(self):
+        if hasattr(self, "qr_label"):
+            self._set_qr_pixmap(self.qr_label, self.pairing_payload(), 240)
         if hasattr(self, "lbl_wan_url"):
             self.lbl_wan_url.setText(f"ws://{self.current_ip}:{self.ws_port}")
+
+    def generate_wan_qr(self):
+        # The internet details now live in the same QR as everything else.
+        self.generate_qr()
 
     def _on_adapter_selected(self, idx):
         if 0 <= idx < len(self.adapters):
@@ -2426,11 +2326,21 @@ class CompanionApp(QMainWindow):
             self.tunnel.stop()
             self.tunnel = None
             self.btn_tunnel.setText("Turn on internet access")
+            self.remote_identity.set_tunnel_enabled(False)
             return
         if not self.remote_identity.worker_url:
             QMessageBox.warning(self, "Worker URL needed",
                                 "Save your Cloudflare Worker URL first.")
             return
+        self._start_tunnel()
+
+    def _restore_tunnel(self):
+        """Bring internet access back after a restart if it was on, so the PC stays reachable."""
+        if self.tunnel is None and self.remote_identity.tunnel_enabled and self.remote_identity.worker_url:
+            self._start_tunnel()
+
+    def _start_tunnel(self):
+        self.remote_identity.set_tunnel_enabled(True)
         self.tunnel = TunnelPublisher(
             self.remote_identity,
             self.ws_port,
@@ -2756,7 +2666,8 @@ class CompanionApp(QMainWindow):
                 QMessageBox.warning(
                     self,
                     "Companion update rolled back",
-                    f"The update could not start, so the previous version was restored.\n\n{message}",
+                    f"The update could not finish, so the previous version was kept.\n\n{message}\n\n"
+                    f"Step-by-step log: {COMPANION_UPDATE_STEP_LOG}",
                 )
         except OSError as exc:
             self.log(f"Could not read update recovery details: {exc}")
@@ -2804,8 +2715,7 @@ class CompanionApp(QMainWindow):
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if ans == QMessageBox.StandardButton.Yes:
-                    self.btn_update.setText("Downloading…")
-                    threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
+                    self._start_update_download(tag_name, asset)
                 else:
                     self.btn_update.setEnabled(True)
                     self.btn_update.setText("Check for updates")
@@ -2820,6 +2730,49 @@ class CompanionApp(QMainWindow):
                 ),
             )
 
+    def _start_update_download(self, tag_name, asset):
+        self.btn_update.setText("Downloading…")
+        self._update_cancel = threading.Event()
+        dlg = QProgressDialog(f"Downloading {tag_name}…", "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Updating BT Mouse Companion")
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumWidth(420)
+        dlg.canceled.connect(self._update_cancel.set)
+        dlg.setValue(0)
+        dlg.show()
+        self._update_dialog = dlg
+        threading.Thread(target=self._download_companion_update_worker, args=(tag_name, asset), daemon=True).start()
+
+    def _set_update_progress(self, tag_name, downloaded, total):
+        dlg = getattr(self, "_update_dialog", None)
+        if dlg is None:
+            return
+        dlg.setValue(int(downloaded * 100 / total) if total else 0)
+        dlg.setLabelText(
+            f"Downloading {tag_name}… {downloaded / 1048576:.1f} of {total / 1048576:.1f} MB"
+        )
+
+    def _close_update_dialog(self):
+        dlg = getattr(self, "_update_dialog", None)
+        self._update_dialog = None
+        if dlg is not None:
+            dlg.close()
+        self.btn_update.setEnabled(True)
+        self.btn_update.setText("Check for updates")
+
+    def _show_update_installing(self, tag_name):
+        dlg = getattr(self, "_update_dialog", None)
+        if dlg is not None:
+            dlg.setCancelButton(None)
+            dlg.setRange(0, 0)  # busy indicator while the swap runs after we exit
+            dlg.setLabelText(
+                f"Installing {tag_name}.\n\nThe companion will close and reopen by itself "
+                "in about 10–30 seconds. Please don't reopen it yourself."
+            )
+        QTimer.singleShot(2500, self.quit_application)
+
     def _download_companion_update_worker(self, tag_name, asset):
         staged_path = None
         try:
@@ -2830,22 +2783,28 @@ class CompanionApp(QMainWindow):
                 download_url,
                 headers={"User-Agent": "BT-Mouse-Companion-Updater", "Accept": "application/octet-stream"},
             )
-            digest = hashlib.sha256()
+            total = int(asset["size"])
             downloaded = 0
+            last_percent = -1
             temp_dir = Path(tempfile.gettempdir())
             staged_path = temp_dir / f"BT-Mouse-Companion-{tag_name}.exe"
             with urllib.request.urlopen(request, timeout=60) as response, staged_path.open("wb") as output:
                 while True:
-                    chunk = response.read(1024 * 1024)
+                    if self._update_cancel.is_set():
+                        raise _UpdateCancelled()
+                    chunk = response.read(256 * 1024)
                     if not chunk:
                         break
                     downloaded += len(chunk)
-                    if downloaded > asset["size"] or downloaded > MAX_COMPANION_UPDATE_BYTES:
+                    if downloaded > total or downloaded > MAX_COMPANION_UPDATE_BYTES:
                         raise ValueError("The downloaded update is larger than expected.")
-                    digest.update(chunk)
                     output.write(chunk)
+                    percent = downloaded * 100 // total if total else 0
+                    if percent != last_percent:
+                        last_percent = percent
+                        self._run_on_ui(lambda d=downloaded: self._set_update_progress(tag_name, d, total))
 
-            if downloaded != asset["size"]:
+            if downloaded != total:
                 raise ValueError("The downloaded update size did not match the release metadata.")
             with staged_path.open("rb") as downloaded_file:
                 if downloaded_file.read(2) != b"MZ":
@@ -2853,66 +2812,34 @@ class CompanionApp(QMainWindow):
 
             executable = Path(sys.executable).resolve()
             script_path = temp_dir / f"btmouse-update-{os.getpid()}.ps1"
-            log_path = COMPANION_UPDATE_ERROR_LOG
-            replacement_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe"
-            backup_path = executable.parent / f".BT-Mouse-Companion-{os.getpid()}.backup.exe"
-            ready_marker = temp_dir / f"btmouse-update-ready-{os.getpid()}.txt"
-            ps_quote = lambda value: "'" + str(value).replace("'", "''") + "'"
-            script = (
-                "$ErrorActionPreference = 'Stop'\n"
-                f"$pidToWait = {os.getpid()}\n"
-                f"$target = {ps_quote(executable)}\n"
-                f"$staged = {ps_quote(staged_path)}\n"
-                f"$replacement = {ps_quote(replacement_path)}\n"
-                f"$backup = {ps_quote(backup_path)}\n"
-                f"$readyMarker = {ps_quote(ready_marker)}\n"
-                f"$log = {ps_quote(log_path)}\n"
-                f"$expectedLength = {asset['size']}\n"
-                f"$expectedVersion = {ps_quote(tag_name.lstrip('v'))}\n"
-                "$deadline = (Get-Date).AddSeconds(120)\n"
-                "try {\n"
-                "  while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {\n"
-                "    if ((Get-Date) -gt $deadline) { throw 'The companion did not close in time.' }\n"
-                "    Start-Sleep -Seconds 1\n"
-                "  }\n"
-                "  Copy-Item -LiteralPath $staged -Destination $replacement -Force -ErrorAction Stop\n"
-                "  Move-Item -LiteralPath $target -Destination $backup -Force -ErrorAction Stop\n"
-                "  Move-Item -LiteralPath $replacement -Destination $target -Force\n"
-                "  $quotedMarker = '\"' + $readyMarker + '\"'\n"
-                "  $started = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ArgumentList @('--btmouse-update-ready', $quotedMarker) -PassThru\n"
-                "  $launchDeadline = (Get-Date).AddSeconds(30)\n"
-                "  $ready = $false\n"
-                "  while ((Get-Date) -lt $launchDeadline) {\n"
-                "    if (Test-Path -LiteralPath $readyMarker) {\n"
-                "      if ((Get-Content -LiteralPath $readyMarker -Raw).Trim() -eq $expectedVersion) { $ready = $true; break }\n"
-                "    }\n"
-                "    Start-Sleep -Seconds 1\n"
-                "  }\n"
-                "  if (-not $ready) { throw 'The updated companion did not acknowledge startup.' }\n"
-                "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
-                "} catch {\n"
-                "  $failure = $_.Exception.Message\n"
-                "  if (Test-Path -LiteralPath $backup) {\n"
-                "    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue\n"
-                "    Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction SilentlyContinue\n"
-                "    Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target)\n"
-                "  }\n"
-                "  $failure | Out-File -LiteralPath $log -Encoding utf8\n"
-                "}\n"
+            script = build_update_script(
+                wait_pids=companion_update_wait_pids(),
+                target=executable,
+                staged=staged_path,
+                replacement=executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe",
+                backup=executable.parent / f".BT-Mouse-Companion-{os.getpid()}.backup.exe",
+                ready_marker=temp_dir / f"btmouse-update-ready-{os.getpid()}.txt",
+                error_log=COMPANION_UPDATE_ERROR_LOG,
+                step_log=COMPANION_UPDATE_STEP_LOG,
+                expected_version=tag_name.lstrip("v"),
             )
-            script_path.write_text(script, encoding="utf-8")
+            # BOM so Windows PowerShell 5.1 reads non-ASCII paths (e.g. user names) correctly.
+            script_path.write_text(script, encoding="utf-8-sig")
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
                 creationflags=flags,
             )
-            self._run_on_ui(lambda: QTimer.singleShot(200, self.quit_application))
+            self._run_on_ui(lambda: self._show_update_installing(tag_name))
+        except _UpdateCancelled:
+            if staged_path:
+                staged_path.unlink(missing_ok=True)
+            self._run_on_ui(self._close_update_dialog)
         except Exception as exc:
             self._run_on_ui(
                 lambda error=str(exc): (
+                    self._close_update_dialog(),
                     QMessageBox.critical(self, "Update Failed", f"Could not install update.\n\n{error}"),
-                    self.btn_update.setEnabled(True),
-                    self.btn_update.setText("Check for updates"),
                 ),
             )
 

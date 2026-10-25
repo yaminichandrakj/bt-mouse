@@ -1,0 +1,97 @@
+"""
+PowerShell script that swaps in a downloaded companion EXE after the app exits.
+
+A one-file PyInstaller EXE runs as two processes: a small launcher and the real app
+as its child. The launcher keeps the EXE open for a few seconds after the child exits
+while it deletes its unpacked files, so the swap must wait for *both* and retry while
+the file is still locked. Every step is appended to a log so a failed update leaves
+evidence behind.
+"""
+
+LAUNCH_ACK_SECONDS = 90
+
+
+def _ps_quote(value) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def build_update_script(wait_pids, target, staged, replacement, backup,
+                        ready_marker, error_log, step_log, expected_version) -> str:
+    pids = ", ".join(str(int(p)) for p in wait_pids) or "0"
+    return (
+        "$ErrorActionPreference = 'Stop'\n"
+        f"$pidsToWait = @({pids})\n"
+        f"$target = {_ps_quote(target)}\n"
+        f"$staged = {_ps_quote(staged)}\n"
+        f"$replacement = {_ps_quote(replacement)}\n"
+        f"$backup = {_ps_quote(backup)}\n"
+        f"$readyMarker = {_ps_quote(ready_marker)}\n"
+        f"$log = {_ps_quote(error_log)}\n"
+        f"$stepLog = {_ps_quote(step_log)}\n"
+        f"$expectedVersion = {_ps_quote(expected_version)}\n"
+        "function Log([string]$message) {\n"
+        "  try { Add-Content -LiteralPath $stepLog -Value ('{0:yyyy-MM-dd HH:mm:ss} {1}' -f (Get-Date), $message) } catch {}\n"
+        "}\n"
+        "function Retry([scriptblock]$action, [string]$what, [int]$seconds) {\n"
+        "  $until = (Get-Date).AddSeconds($seconds)\n"
+        "  while ($true) {\n"
+        "    try { & $action; return } catch {\n"
+        "      if ((Get-Date) -gt $until) { throw ($what + ' failed: ' + $_.Exception.Message) }\n"
+        "      Start-Sleep -Milliseconds 500\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+        "Log ('Updating to ' + $expectedVersion + '; waiting for the companion to close')\n"
+        "try {\n"
+        "  $deadline = (Get-Date).AddSeconds(120)\n"
+        "  foreach ($p in $pidsToWait) {\n"
+        "    while (Get-Process -Id $p -ErrorAction SilentlyContinue) {\n"
+        "      if ((Get-Date) -gt $deadline) { throw 'The companion did not close in time.' }\n"
+        "      Start-Sleep -Milliseconds 500\n"
+        "    }\n"
+        "  }\n"
+        "  Log 'Companion closed'\n"
+        "  Retry { Copy-Item -LiteralPath $staged -Destination $replacement -Force } 'Copying the update' 30\n"
+        "  Retry { Move-Item -LiteralPath $target -Destination $backup -Force } 'Moving the old version aside' 60\n"
+        "  Log 'Old version moved aside'\n"
+        "  Retry { Move-Item -LiteralPath $replacement -Destination $target -Force } 'Installing the new version' 30\n"
+        "  Log 'New version installed; starting it'\n"
+        "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
+        "  $started = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target)"
+        " -ArgumentList @('--btmouse-update-ready', ('\"' + $readyMarker + '\"')) -PassThru\n"
+        f"  $launchDeadline = (Get-Date).AddSeconds({LAUNCH_ACK_SECONDS})\n"
+        "  $ready = $false\n"
+        "  while ((Get-Date) -lt $launchDeadline) {\n"
+        "    if (Test-Path -LiteralPath $readyMarker) {\n"
+        "      if ((Get-Content -LiteralPath $readyMarker -Raw).Trim() -eq $expectedVersion) { $ready = $true; break }\n"
+        "    }\n"
+        "    if ($started.HasExited) { break }\n"
+        "    Start-Sleep -Milliseconds 500\n"
+        "  }\n"
+        "  if ($ready) { Log 'New version started' }\n"
+        "  elseif (-not $started.HasExited) {\n"
+        "    # Still unpacking or being scanned: it is running, so keep it rather than roll back.\n"
+        f"    Log 'New version still starting after {LAUNCH_ACK_SECONDS}s; keeping it'\n"
+        "  }\n"
+        "  else { throw ('The updated companion closed during startup (exit code ' + $started.ExitCode + ').') }\n"
+        "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
+        "  Remove-Item -LiteralPath $readyMarker -Force -ErrorAction SilentlyContinue\n"
+        "  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
+        "  Log 'Update finished'\n"
+        "} catch {\n"
+        "  $failure = $_.Exception.Message\n"
+        "  Log ('FAILED: ' + $failure)\n"
+        "  if (Test-Path -LiteralPath $backup) {\n"
+        "    try {\n"
+        "      Retry {\n"
+        "        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }\n"
+        "        Move-Item -LiteralPath $backup -Destination $target\n"
+        "      } 'Restoring the previous version' 30\n"
+        "      Log 'Previous version restored'\n"
+        "    } catch { Log ('Restore failed: ' + $_.Exception.Message) }\n"
+        "  }\n"
+        "  Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue\n"
+        "  $failure | Out-File -LiteralPath $log -Encoding utf8\n"
+        "  Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ErrorAction SilentlyContinue\n"
+        "}\n"
+    )

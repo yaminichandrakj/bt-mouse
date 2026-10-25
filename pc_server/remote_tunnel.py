@@ -38,6 +38,9 @@ except Exception:  # pragma: no cover - import guard
 
 # Record freshness the phone also enforces; we re-publish well inside this.
 RECORD_REFRESH_SECONDS = 240
+# Cloudflare rejects urllib's default "Python-urllib/x.y" agent with error 1010
+# before the request reaches the Worker, so always identify ourselves.
+USER_AGENT = "BTMouse-Companion"
 _TUNNEL_URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com", re.IGNORECASE)
 
 
@@ -84,6 +87,7 @@ class RemoteIdentity:
         self._signing_key = None
         self.record_id = ""
         self.worker_url = ""
+        self.tunnel_enabled = False
         self._load_or_create()
 
     def _load_or_create(self):
@@ -96,6 +100,7 @@ class RemoteIdentity:
         seed_b64 = str(data.get("seed", "")).strip()
         self.record_id = str(data.get("record_id", "")).strip()
         self.worker_url = str(data.get("worker_url", "")).strip()
+        self.tunnel_enabled = bool(data.get("tunnel_enabled", False))
 
         changed = False
         if HAS_NACL:
@@ -126,9 +131,12 @@ class RemoteIdentity:
             REMOTE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp = REMOTE_CONFIG_PATH.with_suffix(".tmp")
             tmp.write_text(
-                json.dumps(
-                    {"seed": seed_b64, "record_id": self.record_id, "worker_url": self.worker_url}
-                ),
+                json.dumps({
+                    "seed": seed_b64,
+                    "record_id": self.record_id,
+                    "worker_url": self.worker_url,
+                    "tunnel_enabled": self.tunnel_enabled,
+                }),
                 encoding="utf-8",
             )
             if os.name != "nt":
@@ -137,10 +145,17 @@ class RemoteIdentity:
         except OSError as e:
             print(f"[!] Could not persist remote identity: {e}")
 
+    def _seed_b64(self) -> str:
+        return _b64(bytes(self._signing_key)) if self._signing_key else ""
+
     def set_worker_url(self, url: str):
         self.worker_url = (url or "").strip().rstrip("/")
-        seed_b64 = _b64(bytes(self._signing_key)) if self._signing_key else ""
-        self._save(seed_b64)
+        self._save(self._seed_b64())
+
+    def set_tunnel_enabled(self, enabled: bool):
+        """Remembered so internet access comes back after a reboot or an update."""
+        self.tunnel_enabled = bool(enabled)
+        self._save(self._seed_b64())
 
     @property
     def public_b64(self) -> str:
@@ -300,13 +315,18 @@ class TunnelPublisher:
         ).encode("utf-8")
         endpoint = f"{self.identity.worker_url}/r/{self.identity.record_id}"
         req = urllib.request.Request(endpoint, data=body, method="PUT",
-                                     headers={"content-type": "application/json"})
+                                     headers={"content-type": "application/json",
+                                              "user-agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 if resp.status == 200:
                     return
                 self.on_status(f"Publish returned HTTP {resp.status}")
         except urllib.error.HTTPError as e:
-            self.on_status(f"Publish rejected (HTTP {e.code}) — check the Worker URL")
+            try:
+                detail = e.read(200).decode("utf-8", "replace").strip()
+            except Exception:
+                detail = ""
+            self.on_status(f"Publish rejected (HTTP {e.code}){': ' + detail if detail else ''}")
         except Exception as e:
             self.on_status(f"Publish failed: {e}")

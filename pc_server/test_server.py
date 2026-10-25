@@ -12,6 +12,7 @@ from unittest.mock import Mock, MagicMock, patch
 
 import server
 import remote_tunnel
+import update_script
 
 
 class ServerProtocolTests(unittest.TestCase):
@@ -873,7 +874,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.4.2")
+        self.assertEqual(app_gui.APP_VERSION, "1.4.3")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -980,6 +981,14 @@ class RemoteTunnelTests(unittest.TestCase):
         self.assertEqual(ident.worker_url, "https://x.workers.dev")
         self.assertEqual(remote_tunnel.RemoteIdentity().worker_url, "https://x.workers.dev")
 
+    def test_internet_access_choice_survives_restart(self):
+        ident = remote_tunnel.RemoteIdentity()
+        self.assertFalse(ident.tunnel_enabled)
+        ident.set_tunnel_enabled(True)
+        reloaded = remote_tunnel.RemoteIdentity()
+        self.assertTrue(reloaded.tunnel_enabled)
+        self.assertEqual(reloaded.record_id, ident.record_id)
+
     def test_tunnel_url_regex_matches_cloudflared_banner(self):
         line = "|  https://affect-gen-journey-speech.trycloudflare.com    |"
         match = remote_tunnel._TUNNEL_URL_RE.search(line)
@@ -988,6 +997,19 @@ class RemoteTunnelTests(unittest.TestCase):
             match.group(0).replace("https://", "wss://", 1),
             "wss://affect-gen-journey-speech.trycloudflare.com",
         )
+
+    def test_publish_sends_named_user_agent(self):
+        # Cloudflare answers urllib's default agent with error 1010 before the Worker runs.
+        ident = remote_tunnel.RemoteIdentity()
+        ident.set_worker_url("https://x.workers.dev")
+        publisher = remote_tunnel.TunnelPublisher(ident, 53531, "PC")
+        response = MagicMock(status=200)
+        response.__enter__.return_value = response
+        with patch.object(remote_tunnel.urllib.request, "urlopen", return_value=response) as urlopen:
+            publisher._publish("wss://x.trycloudflare.com")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "PUT")
+        self.assertEqual(request.get_header("User-agent"), remote_tunnel.USER_AGENT)
 
     @unittest.skipUnless(remote_tunnel.HAS_NACL, "PyNaCl not installed")
     def test_signed_record_round_trips_and_rejects_tamper(self):
@@ -1008,6 +1030,46 @@ class RemoteTunnelTests(unittest.TestCase):
             VerifyKey(base64.b64decode(ident.public_b64)).verify(record.encode(), bytes(tampered))
 
 
+class CompanionUpdateScriptTests(unittest.TestCase):
+    """The EXE swap must outlive the one-file launcher, which keeps the EXE locked briefly."""
+
+    def build(self, pids=(111, 222)):
+        return update_script.build_update_script(
+            wait_pids=pids, target=r"C:\Users\O'Neil\Desktop\BT-Mouse-Companion.exe",
+            staged=r"C:\t\new.exe", replacement=r"C:\t\.new.exe", backup=r"C:\t\.backup.exe",
+            ready_marker=r"C:\t\ready.txt", error_log=r"C:\t\err.log", step_log=r"C:\t\steps.log",
+            expected_version="1.4.3",
+        )
+
+    def test_waits_for_every_process_holding_the_exe(self):
+        script = self.build()
+        self.assertIn("$pidsToWait = @(111, 222)", script)
+        self.assertIn("foreach ($p in $pidsToWait)", script)
+
+    def test_retries_while_the_exe_is_still_locked(self):
+        script = self.build()
+        self.assertIn("Retry { Move-Item -LiteralPath $target -Destination $backup -Force } 'Moving the old version aside' 60", script)
+
+    def test_keeps_a_slow_starting_new_version_instead_of_rolling_back(self):
+        script = self.build()
+        self.assertIn(f"AddSeconds({update_script.LAUNCH_ACK_SECONDS})", script)
+        self.assertGreaterEqual(update_script.LAUNCH_ACK_SECONDS, 60)
+        self.assertIn("elseif (-not $started.HasExited)", script)
+
+    def test_logs_steps_and_quotes_paths(self):
+        script = self.build()
+        self.assertIn("$stepLog = 'C:\\t\\steps.log'", script)
+        self.assertIn("Log 'Update finished'", script)
+        self.assertIn("'C:\\Users\\O''Neil\\Desktop\\BT-Mouse-Companion.exe'", script)
+
+    def test_companion_uses_shared_script_and_shows_progress(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("build_update_script(", gui)
+        self.assertIn("wait_pids=companion_update_wait_pids()", gui)
+        self.assertIn("QProgressDialog(", gui)
+        self.assertIn('encoding="utf-8-sig"', gui)
+
+
 class WanQrWiringTests(unittest.TestCase):
     def test_wan_qr_includes_rendezvous_block_and_tunnel_controls(self):
         gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
@@ -1015,6 +1077,21 @@ class WanQrWiringTests(unittest.TestCase):
         self.assertIn('payload["rv"]', gui)
         self.assertIn('"worker": self.remote_identity.worker_url', gui)
         self.assertIn("def _toggle_tunnel", gui)
+
+    def test_one_pairing_qr_carries_every_link(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn('"type": "btmouse_pc"', gui)
+        for field in ('"ip": self.current_ip', '"port": self.current_port', '"ws_port": self.ws_port',
+                      '"name": socket.gethostname()'):
+            self.assertIn(field, gui)
+        self.assertIn("self._set_qr_pixmap(self.qr_label, self.pairing_payload()", gui)
+
+    def test_one_pair_page_replaces_separate_connection_pages(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn('("Pair a device", "link", self._create_pair_page)', gui)
+        for removed in ("_create_wifi_page", "_create_bt_page", "_create_wan_page", "wan_qr_label"):
+            self.assertNotIn(removed, gui)
+        self.assertIn("QTimer.singleShot(1500, self._restore_tunnel)", gui)
 
 
 if __name__ == "__main__":
