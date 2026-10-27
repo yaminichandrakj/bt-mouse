@@ -38,6 +38,8 @@ except Exception:  # pragma: no cover - import guard
 
 # Record freshness the phone also enforces; we re-publish well inside this.
 RECORD_REFRESH_SECONDS = 240
+PUBLISH_RETRY_MIN_SECONDS = 5
+PUBLISH_RETRY_MAX_SECONDS = 60
 # Cloudflare rejects urllib's default "Python-urllib/x.y" agent with error 1010
 # before the request reaches the Worker, so always identify ourselves.
 USER_AGENT = "BTMouse-Companion"
@@ -294,12 +296,20 @@ class TunnelPublisher:
         self._publish_thread.start()
 
     def _publish_loop(self):
+        retry_delay = PUBLISH_RETRY_MIN_SECONDS
         while self._running:
             url = self.current_url
             if not url:
                 return
-            self._publish(url)
-            for _ in range(RECORD_REFRESH_SECONDS * 2):
+            if self._publish(url):
+                retry_delay = PUBLISH_RETRY_MIN_SECONDS
+                wait = RECORD_REFRESH_SECONDS
+            else:
+                # A flaky network (one timed-out handshake) must not leave the phone
+                # without an address for a whole refresh period: retry soon, backing off.
+                wait = retry_delay
+                retry_delay = min(retry_delay * 2, PUBLISH_RETRY_MAX_SECONDS)
+            for _ in range(wait * 2):
                 if not self._running or self.current_url != url:
                     break
                 time.sleep(0.5)
@@ -318,15 +328,17 @@ class TunnelPublisher:
                                      headers={"content-type": "application/json",
                                               "user-agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:
                 if resp.status == 200:
-                    return
-                self.on_status(f"Publish returned HTTP {resp.status}")
+                    self.on_status("Internet access on — your phone can reach this PC from anywhere")
+                    return True
+                self.on_status(f"Publish returned HTTP {resp.status}; retrying")
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read(200).decode("utf-8", "replace").strip()
             except Exception:
                 detail = ""
-            self.on_status(f"Publish rejected (HTTP {e.code}){': ' + detail if detail else ''}")
+            self.on_status(f"Publish rejected (HTTP {e.code}){': ' + detail if detail else ''}; retrying")
         except Exception as e:
-            self.on_status(f"Publish failed: {e}")
+            self.on_status(f"Publish failed ({e}); retrying shortly")
+        return False
