@@ -11,19 +11,32 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary = PrimaryIndigo,
-    onPrimary = TextPrimary,
-    primaryContainer = PrimaryIndigoVariant,
-    onPrimaryContainer = TextPrimary,
-    secondary = AccentCyan,
-    onSecondary = DarkBackground,
+    // Default buttons get the grey "selected" fill with white text; screens ask for white explicitly.
+    primary = Selected,
+    onPrimary = OnInk,
+    primaryContainer = Selected,
+    onPrimaryContainer = OnInk,
+    secondary = OnInkSoft,
+    onSecondary = Ink,
+    secondaryContainer = Selected,
+    onSecondaryContainer = OnInk,
+    tertiary = StatusGreen,
+    error = StatusRed,
+    errorContainer = DangerContainer,
+    onErrorContainer = OnDanger,
+    surfaceContainerLowest = Ink,
+    surfaceContainerLow = Raised,
+    surfaceContainer = Panel,
+    surfaceContainerHigh = Control,
+    surfaceContainerHighest = ControlHigh,
     background = DarkBackground,
     onBackground = TextPrimary,
     surface = DarkSurface,
     onSurface = TextPrimary,
     surfaceVariant = DarkSurfaceVariant,
     onSurfaceVariant = TextSecondary,
-    outline = DarkBorder
+    outline = Outline,
+    outlineVariant = Hairline
 )
 
 @Composable

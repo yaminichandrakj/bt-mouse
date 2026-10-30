@@ -37,6 +37,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.btmouse.app.ui.components.FullscreenViewer
+import com.btmouse.app.ui.components.LiveBadge
+import com.btmouse.app.ui.components.PillStyle
+import com.btmouse.app.ui.components.RoundIconButton
+import com.btmouse.app.ui.components.ZoomableImage
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraFront
 import androidx.compose.material.icons.filled.CameraRear
@@ -137,6 +143,9 @@ import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.KeyButton
 import com.btmouse.app.ui.components.ChipIcon
 import com.btmouse.app.ui.components.IconLabel
+import com.btmouse.app.ui.theme.OnDanger
+import com.btmouse.app.ui.theme.DangerContainer
+import com.btmouse.app.ui.theme.Ink
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -151,454 +160,6 @@ import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-
-@Composable
-fun KeyboardScreen(
-    coordinator: ConnectionCoordinator,
-    settings: SettingsRepository
-) {
-    val context = LocalContext.current
-    val hapticsEnabled by settings.hapticFeedback.collectAsState()
-    var inputText by remember { mutableStateOf("") }
-    var isLiveTypingEnabled by remember { mutableStateOf(true) }
-    var activeSubTab by remember { mutableStateOf("keys") } // "keys", "apps", "power", "numpad"
-
-    // Modifier toggles
-    var isCtrlActive by remember { mutableStateOf(false) }
-    var isAltActive by remember { mutableStateOf(false) }
-    var isShiftActive by remember { mutableStateOf(false) }
-    var isWinActive by remember { mutableStateOf(false) }
-
-    fun currentModifierByte(): Byte {
-        var mod: Byte = 0
-        if (isCtrlActive) mod = (mod.toInt() or HidConstants.MODIFIER_LEFT_CTRL.toInt()).toByte()
-        if (isAltActive) mod = (mod.toInt() or HidConstants.MODIFIER_LEFT_ALT.toInt()).toByte()
-        if (isShiftActive) mod = (mod.toInt() or HidConstants.MODIFIER_LEFT_SHIFT.toInt()).toByte()
-        if (isWinActive) mod = (mod.toInt() or HidConstants.MODIFIER_LEFT_GUI.toInt()).toByte()
-        return mod
-    }
-
-    fun triggerKey(keyCode: Byte) {
-        val mod = currentModifierByte()
-        coordinator.sendKeyStroke(keyCode, mod)
-    }
-
-    // Handles live keystroke streaming
-    fun handleTextChange(newText: String) {
-        if (!isLiveTypingEnabled) {
-            inputText = newText
-            return
-        }
-
-        val oldText = inputText
-        if (newText.length > oldText.length) {
-            if (newText.startsWith(oldText)) {
-                val added = newText.substring(oldText.length)
-                coordinator.sendText(added)
-            } else {
-                repeat(oldText.length) {
-                    coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0)
-                }
-                coordinator.sendText(newText)
-            }
-        } else if (newText.length < oldText.length) {
-            if (oldText.startsWith(newText)) {
-                val deletedCount = oldText.length - newText.length
-                repeat(deletedCount) {
-                    coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0)
-                }
-            } else {
-                repeat(oldText.length) {
-                    coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0)
-                }
-                coordinator.sendText(newText)
-            }
-        }
-        inputText = newText
-    }
-
-    val scrollState = rememberScrollState()
-    val tabScrollState = rememberScrollState()
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(DarkBackground)
-            .padding(12.dp)
-            .verticalScroll(scrollState),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        // Keyboard and numpad remain in Keys; PC utilities live in their own tab.
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(tabScrollState),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FilterChip(
-                selected = activeSubTab == "keys",
-                onClick = { activeSubTab = "keys" },
-                label = { Text("Keyboard", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { ChipIcon(Icons.Filled.Keyboard) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-            FilterChip(
-                selected = activeSubTab == "numpad",
-                onClick = { activeSubTab = "numpad" },
-                label = { Text("Numpad", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                leadingIcon = { ChipIcon(Icons.Filled.Dialpad) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                    selectedLabelColor = AccentCyan,
-                    containerColor = DarkSurface
-                ),
-                shape = RoundedCornerShape(8.dp)
-            )
-
-            if (activeSubTab == "keys") {
-                FilterChip(
-                    selected = isLiveTypingEnabled,
-                    onClick = { isLiveTypingEnabled = !isLiveTypingEnabled },
-                    label = { Text(if (isLiveTypingEnabled) "Live" else "Batch", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingIcon = { ChipIcon(if (isLiveTypingEnabled) Icons.Filled.Bolt else Icons.Filled.EditNote) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = if (isLiveTypingEnabled) AccentCyan else TextPrimary,
-                        containerColor = DarkSurface
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-            }
-        }
-
-        when (activeSubTab) {
-            "numpad" -> NumpadScreen(coordinator, settings)
-            else -> {
-
-        // Live Text Input Box
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = inputText,
-                onValueChange = { handleTextChange(it) },
-                modifier = Modifier.weight(1f),
-                placeholder = {
-                    Text(
-                        if (isLiveTypingEnabled) "Live typing directly streams to PC as you type..."
-                        else "Type text here and tap send...",
-                        color = TextMuted,
-                        fontSize = 12.sp
-                    )
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = if (isLiveTypingEnabled) AccentCyan else PrimaryIndigo,
-                    unfocusedBorderColor = DarkBorder,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary,
-                    focusedContainerColor = DarkSurfaceVariant,
-                    unfocusedContainerColor = DarkSurfaceVariant
-                ),
-                shape = RoundedCornerShape(12.dp),
-                trailingIcon = {
-                    if (inputText.isNotEmpty()) {
-                        IconButton(onClick = { inputText = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear", tint = TextMuted)
-                        }
-                    }
-                },
-                singleLine = false,
-                maxLines = 2
-            )
-
-            if (!isLiveTypingEnabled) {
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotEmpty()) {
-                            coordinator.sendText(inputText)
-                            inputText = ""
-                        }
-                    },
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(PrimaryIndigo)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Send,
-                        contentDescription = "Send",
-                        tint = TextPrimary
-                    )
-                }
-            }
-        }
-
-        // Quick PC Shortcuts with Icons - 4-Column Responsive Layout
-        Text("Quick Shortcuts", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-
-        // Row 1: Edit & History
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Copy",
-                icon = Icons.Default.ContentCopy,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_C, HidConstants.MODIFIER_LEFT_CTRL) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Paste",
-                icon = Icons.Default.ContentPaste,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_V, HidConstants.MODIFIER_LEFT_CTRL) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Cut",
-                icon = Icons.Default.ContentCut,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_X, HidConstants.MODIFIER_LEFT_CTRL) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Undo",
-                icon = Icons.Default.Undo,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_Z, HidConstants.MODIFIER_LEFT_CTRL) }
-            )
-        }
-
-        // Row 2: Windows Navigation
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "All",
-                icon = Icons.Default.SelectAll,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_A, HidConstants.MODIFIER_LEFT_CTRL) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Switch",
-                icon = Icons.Default.Layers,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_TAB, HidConstants.MODIFIER_LEFT_ALT) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Desktop",
-                icon = Icons.Default.DesktopWindows,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_D, HidConstants.MODIFIER_LEFT_GUI) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Lock",
-                icon = Icons.Default.Lock,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_L, HidConstants.MODIFIER_LEFT_GUI) }
-            )
-        }
-
-        // Row 3: Tools & Utilities
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Task Mgr",
-                icon = Icons.Default.Speed,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = {
-                    val mod = (HidConstants.MODIFIER_LEFT_CTRL.toInt() or HidConstants.MODIFIER_LEFT_SHIFT.toInt()).toByte()
-                    coordinator.sendKeyStroke(HidConstants.KEY_ESC, mod)
-                }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Files",
-                icon = Icons.Default.Folder,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_E, HidConstants.MODIFIER_LEFT_GUI) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Search",
-                icon = Icons.Default.Search,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { coordinator.sendKeyStroke(HidConstants.KEY_S, HidConstants.MODIFIER_LEFT_GUI) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Esc",
-                icon = Icons.Default.Close,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { triggerKey(HidConstants.KEY_ESC) }
-            )
-        }
-
-        // Row 4: Controls & Navigation
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Tab",
-                icon = Icons.Default.KeyboardTab,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { triggerKey(HidConstants.KEY_TAB) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Bksp",
-                icon = Icons.Default.Backspace,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { triggerKey(HidConstants.KEY_BACKSPACE) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Del",
-                icon = Icons.Default.Delete,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { triggerKey(HidConstants.KEY_DELETE) }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Enter",
-                icon = Icons.Default.KeyboardReturn,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { triggerKey(HidConstants.KEY_ENTER) }
-            )
-        }
-
-        // Modifier Keys (Latchable toggles)
-        Text("Modifiers", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Ctrl",
-                isActive = isCtrlActive,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { isCtrlActive = !isCtrlActive }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Alt",
-                isActive = isAltActive,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { isAltActive = !isAltActive }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Shift",
-                isActive = isShiftActive,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { isShiftActive = !isShiftActive }
-            )
-            KeyButton(
-                modifier = Modifier.weight(1f),
-                label = "Win",
-                isActive = isWinActive,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { isWinActive = !isWinActive }
-            )
-        }
-
-        // Function Row
-        Text("Function Keys", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            KeyButton(modifier = Modifier.weight(1f), label = "F1", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F1) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F2", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F2) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F3", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F3) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F4", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F4) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F5", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F5) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F6", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F6) })
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            KeyButton(modifier = Modifier.weight(1f), label = "F7", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F7) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F8", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F8) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F9", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F9) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F10", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F10) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F11", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F11) })
-            KeyButton(modifier = Modifier.weight(1f), label = "F12", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_F12) })
-        }
-
-        // Navigation cluster
-        Text("Navigation & Arrows", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            KeyButton(modifier = Modifier.weight(1f), label = "Home", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_HOME) })
-            KeyButton(modifier = Modifier.weight(1f), label = "PgUp", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_PAGE_UP) })
-            KeyButton(modifier = Modifier.weight(1f), label = "PgDn", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_PAGE_DOWN) })
-            KeyButton(modifier = Modifier.weight(1f), label = "End", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_END) })
-        }
-
-        // Space + Arrows + Enter
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            KeyButton(modifier = Modifier.weight(1.8f), label = "Space", hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_SPACE) })
-            KeyButton(modifier = Modifier.weight(1f), label = "←", fontSize = 18.sp, hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_LEFT_ARROW) })
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                KeyButton(modifier = Modifier.fillMaxWidth(), label = "↑", fontSize = 18.sp, minHeight = 32.dp, hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_UP_ARROW) })
-                KeyButton(modifier = Modifier.fillMaxWidth(), label = "↓", fontSize = 18.sp, minHeight = 32.dp, hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_DOWN_ARROW) })
-            }
-            KeyButton(modifier = Modifier.weight(1f), label = "→", fontSize = 18.sp, hapticsEnabled = hapticsEnabled, onDown = { triggerKey(HidConstants.KEY_RIGHT_ARROW) })
-            KeyButton(
-                modifier = Modifier.weight(1.5f),
-                label = "Enter",
-                icon = Icons.Default.KeyboardReturn,
-                isAccent = true,
-                hapticsEnabled = hapticsEnabled,
-                onDown = { triggerKey(HidConstants.KEY_ENTER) }
-            )
-        }
-        }
-        }
-        Spacer(modifier = Modifier.height(20.dp))
-    }
-}
 
 @Composable
 fun QuickAppsSection(
@@ -852,7 +413,7 @@ fun QuickAppsSection(
                             showAddCustomDialog = false
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)
                 ) {
                     Text("Add Shortcut", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -937,7 +498,7 @@ fun QuickAppsSection(
                         customCommand = ""
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Text("Run", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1070,274 +631,6 @@ fun QuickAppsSection(
 }
 
 @Composable
-fun TasksAndHardwareSection(
-    coordinator: ConnectionCoordinator
-) {
-    var processSearch by remember { mutableStateOf("") }
-    val stats by coordinator.systemStats.collectAsState()
-    val processes by coordinator.runningProcesses.collectAsState()
-    val taskActionMessage by coordinator.statusMessage.collectAsState()
-
-    // Poll stats every 2.5 seconds
-    LaunchedEffect(Unit) {
-        coordinator.querySystemStats()
-        coordinator.queryRunningProcesses()
-        var processRefreshElapsed = 0
-        while (true) {
-            delay(2500)
-            coordinator.querySystemStats()
-            processRefreshElapsed += 2500
-            if (processRefreshElapsed >= 5_000) {
-                coordinator.queryRunningProcesses()
-                processRefreshElapsed = 0
-            }
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("PC Hardware & Live Tasks", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        if (taskActionMessage.startsWith("Ended ") || taskActionMessage.startsWith("Could not end") || taskActionMessage.startsWith("Process PID")) {
-            Text(taskActionMessage, color = if (taskActionMessage.startsWith("Could not end")) AccentRose else AccentEmerald, fontSize = 11.sp)
-        }
-
-        // 2x2 Stats Dashboard
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Live System Performance", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    IconButton(
-                        onClick = {
-                            coordinator.querySystemStats()
-                            coordinator.queryRunningProcesses()
-                        },
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AccentCyan, modifier = Modifier.size(16.dp))
-                    }
-                }
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // CPU Card
-                    Card(
-                        modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Text("CPU Usage", color = TextSecondary, fontSize = 11.sp)
-                            val cpu = stats?.cpu ?: 0f
-                            Text("${cpu.toInt()}%", color = AccentCyan, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                progress = { (cpu / 100f).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                                color = AccentCyan,
-                                trackColor = DarkBorder
-                            )
-                        }
-                    }
-
-                    // RAM Card
-                    Card(
-                        modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Text("RAM Usage", color = TextSecondary, fontSize = 11.sp)
-                            val ram = stats?.ram ?: 0f
-                            Text("${ram.toInt()}%", color = PrimaryIndigo, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                progress = { (ram / 100f).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                                color = PrimaryIndigo,
-                                trackColor = DarkBorder
-                            )
-                        }
-                    }
-                }
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Battery Card
-                    Card(
-                        modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Text("Battery Status", color = TextSecondary, fontSize = 11.sp)
-                            val batt = stats?.battery ?: -1f
-                            val plugged = stats?.powerPlugged ?: true
-                            Text(
-                                if (batt >= 0) "${batt.toInt()}%" else "AC Power",
-                                color = AccentEmerald,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            IconLabel(
-                                if (plugged) Icons.Filled.BatteryChargingFull else Icons.Filled.BatteryStd,
-                                if (plugged) "Charging" else "On battery",
-                                color = TextMuted,
-                                fontSize = 10.sp,
-                                iconSize = 12.dp
-                            )
-                        }
-                    }
-
-                    // Disk Card
-                    Card(
-                        modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
-                            Text("Storage capacity used", color = TextSecondary, fontSize = 11.sp)
-                            val disk = stats?.disk ?: 0f
-                            Text("${disk.toInt()}%", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            LinearProgressIndicator(
-                                progress = { (disk / 100f).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                                color = AccentRose,
-                                trackColor = DarkBorder
-                            )
-                            val diskActive = stats?.diskActivity ?: -1f
-                            Text(
-                                if (diskActive >= 0f) "Disk active ${diskActive.toInt()}%" else "Disk active unavailable",
-                                color = TextMuted, fontSize = 9.sp, modifier = Modifier.padding(top = 5.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Graphics & AI Hardware", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                val gpuList = stats?.gpus.orEmpty()
-                if (gpuList.isEmpty()) {
-                    Text("GPU usage is unavailable on this PC or its Windows driver.", color = TextMuted, fontSize = 11.sp)
-                } else {
-                    gpuList.forEach { gpu ->
-                        val value = gpu.utilization
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(
-                                if (value >= 0f) "${gpu.name} · ${value.toInt()}%${if (gpu.engine.isNotBlank()) " (${gpu.engine})" else ""}"
-                                else "${gpu.name} · usage unavailable",
-                                color = TextSecondary, fontSize = 11.sp, maxLines = 1
-                            )
-                            if (value >= 0f) LinearProgressIndicator(
-                                progress = { (value / 100f).coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
-                                color = AccentCyan, trackColor = DarkBorder
-                            )
-                        }
-                    }
-                }
-                val npu = stats?.npu ?: -1f
-                Text(if (npu >= 0f) "NPU · ${npu.toInt()}%" else "NPU · not detected by Windows",
-                    color = TextSecondary, fontSize = 11.sp)
-            }
-        }
-
-        // Running Processes / Task Manager
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Running Tasks (${processes.size})", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    TextButton(onClick = { coordinator.queryRunningProcesses() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = AccentCyan)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Refresh Tasks", color = AccentCyan, fontSize = 11.sp)
-                    }
-                }
-
-                OutlinedTextField(
-                    value = processSearch,
-                    onValueChange = { processSearch = it },
-                    placeholder = { Text("Filter processes...", color = TextMuted, fontSize = 12.sp) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AccentCyan,
-                        unfocusedBorderColor = DarkBorder,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    ),
-                    singleLine = true
-                )
-
-                val filtered = processes.filter { it.name.contains(processSearch, ignoreCase = true) }
-
-                if (filtered.isEmpty()) {
-                    Text(
-                        if (processes.isEmpty()) "Tap 'Refresh Tasks' to fetch active programs from your PC."
-                        else "No processes matching '$processSearch'",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(vertical = 10.dp)
-                    )
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        filtered.forEach { proc ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(proc.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1)
-                                        Text("PID: ${proc.pid}  |  RAM: ${proc.ram.toInt()} MB  |  CPU: ${proc.cpu.toInt()}%", color = TextSecondary, fontSize = 10.sp)
-                                    }
-                                    Button(
-                                        onClick = { coordinator.killProcess(proc.pid) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose.copy(alpha = 0.2f), contentColor = AccentRose),
-                                        shape = RoundedCornerShape(6.dp),
-                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("End Task", fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun FullscreenVideoModal(
     title: String,
     subtitle: String,
@@ -1348,146 +641,26 @@ fun FullscreenVideoModal(
     onSnapshot: (() -> Unit)? = null,
     onStopStream: (() -> Unit)? = null
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
+    val ratio = bitmap?.let { (it.width.toFloat() / it.height.coerceAtLeast(1)).coerceIn(0.4f, 2.6f) } ?: (16f / 9f)
+    FullscreenViewer(
+        onDismiss = onDismiss,
+        aspectRatio = ratio,
+        extraControls = {
+            Row(
+                modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                onRotate90?.let { RoundIconButton(Icons.Default.ScreenRotation, "Rotate 90 degrees", it) }
+                onFlipLens?.let { RoundIconButton(Icons.Default.Refresh, "Flip lens", it) }
+                onSnapshot?.let { RoundIconButton(Icons.Default.CameraAlt, "Snapshot", it) }
+                onStopStream?.let { stop -> RoundIconButton(Icons.Default.Stop, "Stop", { stop(); onDismiss() }, style = PillStyle.Danger) }
+            }
+        }
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFF04070D))
-        ) {
-            if (bitmap != null) {
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = title,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable { /* keep interactive */ },
-                    contentScale = ContentScale.Fit
-                )
-            } else {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Videocam,
-                        contentDescription = null,
-                        tint = TextMuted,
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Waiting for live video frame…", color = TextSecondary, fontSize = 14.sp)
-                }
-            }
-
-            // Top Floating HUD Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-                    .padding(16.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(DarkBackground.copy(alpha = 0.82f))
-                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = subtitle,
-                        color = AccentCyan,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(DarkSurfaceVariant)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FullscreenExit,
-                        contentDescription = "Exit Fullscreen",
-                        tint = TextPrimary
-                    )
-                }
-            }
-
-            // Bottom Floating Action Bar
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(16.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(DarkBackground.copy(alpha = 0.85f))
-                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (onRotate90 != null) {
-                    OutlinedButton(
-                        onClick = onRotate90,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentCyan)
-                    ) {
-                        Icon(Icons.Default.ScreenRotation, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Rotate 90°", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                if (onFlipLens != null) {
-                    OutlinedButton(
-                        onClick = onFlipLens,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Flip Lens", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                if (onSnapshot != null) {
-                    Button(
-                        onClick = onSnapshot,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
-                    ) {
-                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Snapshot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                if (onStopStream != null) {
-                    Button(
-                        onClick = {
-                            onStopStream()
-                            onDismiss()
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
-                    ) {
-                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
+        if (bitmap != null) {
+            Image(bitmap = bitmap, contentDescription = title, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        } else {
+            Text("Waiting for the picture…", color = TextSecondary, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center))
         }
     }
 }
@@ -1560,7 +733,7 @@ fun CameraAndRecorderSection(
                                 selectedSnapshot = null
                                 coordinator.deleteSnapshot(currentSnapPath)
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                            colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                         ) {
                             Text("Confirm Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -1589,7 +762,7 @@ fun CameraAndRecorderSection(
                         }
                         Button(
                             onClick = { showSnapshotDeleteConfirm = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                            colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                         ) {
                             Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -1722,39 +895,15 @@ fun CameraAndRecorderSection(
 
                     val currentImageBitmap = imageBitmap
                     if (currentImageBitmap != null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(230.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF050811))
-                                .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
-                                .clickable { showPcCamFullscreen = true }
-                        ) {
-                            Image(
-                                bitmap = currentImageBitmap,
-                                contentDescription = "Webcam frame",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(8.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(DarkBackground.copy(alpha = 0.8f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                IconLabel(
-                                    Icons.Filled.Fullscreen,
-                                    "Tap for fullscreen · ${currentImageBitmap.width}×${currentImageBitmap.height}",
-                                    color = AccentCyan,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    iconSize = 12.dp
-                                )
-                            }
-                        }
+                        ZoomableImage(
+                            bitmap = currentImageBitmap,
+                            contentDescription = "PC webcam",
+                            modifier = Modifier.fillMaxWidth().aspectRatio(
+                                (currentImageBitmap.width.toFloat() / currentImageBitmap.height.coerceAtLeast(1)).coerceIn(0.5f, 2.4f)
+                            ),
+                            onFullscreen = { showPcCamFullscreen = true },
+                            overlay = { LiveBadge(if (cameraRecording) "Recording" else "Live from PC", if (cameraRecording) AccentRose else AccentEmerald) }
+                        )
                     } else {
                         Box(
                             modifier = Modifier
@@ -2067,37 +1216,13 @@ fun PhoneCameraWebcamCard(
 
             // Viewfinder (Uncropped ContentScale.Fit so exact alignment/orientation is visible!)
             if (isStreaming && previewBitmap != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(if (currentOrientation == "portrait") 270.dp else 210.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF050811))
-                        .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
-                        .clickable { showPhoneCamFullscreen = true }
-                ) {
-                    Image(
-                        bitmap = previewBitmap!!,
-                        contentDescription = "Phone camera viewfinder preview",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(8.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(DarkBackground.copy(alpha = 0.82f))
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            "${telemetry.width}×${telemetry.height} ($alignmentDescription) · ${"%.1f".format(telemetry.fps)} FPS · ${"%.0f".format(telemetry.kbps)} kbps",
-                            color = AccentCyan,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
+                ZoomableImage(
+                    bitmap = previewBitmap!!,
+                    contentDescription = "Phone camera, as the PC sees it",
+                    modifier = Modifier.fillMaxWidth().height(if (currentOrientation == "portrait") 300.dp else 210.dp),
+                    onFullscreen = { showPhoneCamFullscreen = true },
+                    overlay = { LiveBadge("Live on PC · ${"%.0f".format(telemetry.fps)} fps", AccentEmerald) }
+                )
             } else {
                 Box(
                     modifier = Modifier
@@ -2323,139 +1448,3 @@ fun PhoneCameraWebcamCard(
     }
 }
 
-@Composable
-fun PowerAndUnlockSection(
-    coordinator: ConnectionCoordinator
-) {
-    var showRestartDialog by remember { mutableStateOf(false) }
-    var showShutdownDialog by remember { mutableStateOf(false) }
-
-    if (showRestartDialog) {
-        AlertDialog(
-            onDismissRequest = { showRestartDialog = false },
-            title = { Text("Restart PC?", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("Are you sure you want to restart your PC? Unsaved work will be lost.", color = TextSecondary) },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        coordinator.systemPower("restart")
-                        showRestartDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
-                ) {
-                    Text("Restart", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestartDialog = false }) {
-                    Text("Cancel", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            containerColor = DarkSurface
-        )
-    }
-
-    if (showShutdownDialog) {
-        AlertDialog(
-            onDismissRequest = { showShutdownDialog = false },
-            title = { Text("Shut Down PC?", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("Are you sure you want to shut down your PC remotely?", color = TextSecondary) },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        coordinator.systemPower("shutdown")
-                        showShutdownDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
-                ) {
-                    Text("Shut Down", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showShutdownDialog = false }) {
-                    Text("Cancel", color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            },
-            containerColor = DarkSurface
-        )
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("Desktop Security & Power", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        Text(
-            "Windows requires sign-in at the PC to unlock its secure desktop. Remote unlock is unavailable.",
-            color = TextMuted,
-            fontSize = 11.sp
-        )
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Lock, contentDescription = null, tint = AccentCyan)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Lock Workstation", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                }
-
-                Button(
-                    onClick = { coordinator.systemPower("lock") },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose.copy(alpha = 0.85f)),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Lock PC", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            shape = RoundedCornerShape(14.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = AccentCyan)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Power State Management", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                }
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { coordinator.systemPower("sleep") },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Sleep", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-
-                    OutlinedButton(
-                        onClick = { showRestartDialog = true },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Restart", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-
-                    OutlinedButton(
-                        onClick = { showShutdownDialog = true },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentRose),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Shutdown", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-            }
-        }
-    }
-}

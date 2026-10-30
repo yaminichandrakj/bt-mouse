@@ -9,6 +9,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,6 +74,7 @@ import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.connection.LinkState
 import com.btmouse.app.data.SettingsRepository
+import com.btmouse.app.ui.theme.Ink
 import com.btmouse.app.ui.theme.AccentAmber
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
@@ -109,6 +111,7 @@ fun ConnectionScreen(
     val activeTransportLabel by coordinator.activeTransportLabel.collectAsState()
     val links by coordinator.linkStates.collectAsState()
     val linkNotice by coordinator.linkNotice.collectAsState()
+    val retrying by coordinator.retryingLinks.collectAsState()
     val pairedDevices by coordinator.bluetoothRfcommManager.pairedDevices.collectAsState()
 
     val pcName by settings.pcName.collectAsState()
@@ -273,10 +276,21 @@ fun ConnectionScreen(
                         }
                     }
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LinkChip("Wi-Fi", Icons.Default.Wifi, links.wifi, Modifier.weight(1f))
-                    LinkChip("Bluetooth", Icons.Default.Bluetooth, links.bluetooth, Modifier.weight(1f))
-                    LinkChip("Internet", Icons.Default.Language, links.internet, Modifier.weight(1f))
+                Column {
+                    LinkRetryRow("Wi-Fi", Icons.Default.Wifi, links.wifi, ConnectionCoordinator.Link.WIFI in retrying,
+                        activeTransportLabel.startsWith("Wi-Fi")) { coordinator.retryLink(ConnectionCoordinator.Link.WIFI) }
+                    LinkRetryRow("Bluetooth", Icons.Default.Bluetooth, links.bluetooth, ConnectionCoordinator.Link.BLUETOOTH in retrying,
+                        activeTransportLabel.startsWith("Bluetooth")) { coordinator.retryLink(ConnectionCoordinator.Link.BLUETOOTH) }
+                    LinkRetryRow("Internet", Icons.Default.Language, links.internet, ConnectionCoordinator.Link.INTERNET in retrying,
+                        activeTransportLabel.startsWith("Remote")) { coordinator.retryLink(ConnectionCoordinator.Link.INTERNET) }
+                }
+                if (links.wifi == LinkState.OFF || links.bluetooth == LinkState.OFF || links.internet == LinkState.OFF) {
+                    com.btmouse.app.ui.components.PillButton(
+                        "Retry all", {
+                            ConnectionCoordinator.Link.values().forEach { coordinator.retryLink(it) }
+                        },
+                        style = com.btmouse.app.ui.components.PillStyle.Selected, height = 42.dp
+                    )
                 }
             }
         }
@@ -402,7 +416,7 @@ fun ConnectionScreen(
                     Button(
                         onClick = { launchQrScanner() },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = DarkBackground)
@@ -579,7 +593,7 @@ fun ConnectionScreen(
                         coordinator.connectSavedPc()
                     },
                     enabled = pinInput.length == 6,
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)
                 ) {
                     Text("Save and connect", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
@@ -646,7 +660,7 @@ fun ConnectionScreen(
                             manualError = "That isn't an IP address or a BT Mouse pairing code."
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)
                 ) {
                     Text("Connect", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
@@ -667,6 +681,44 @@ private fun fieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = TextPrimary,
     unfocusedTextColor = TextPrimary
 )
+
+/** One link with its state; tap it to try that link right now. */
+@Composable
+private fun LinkRetryRow(label: String, icon: ImageVector, state: LinkState, trying: Boolean, inUse: Boolean, onRetry: () -> Unit) {
+    val (sub, subColor) = when {
+        trying -> "Trying to connect…" to TextSecondary
+        state == LinkState.LIVE && inUse -> "Connected · in use" to AccentEmerald
+        state == LinkState.LIVE -> "Ready · takes over if needed" to TextSecondary
+        state == LinkState.WEAK -> "Slow · tap to reconnect" to AccentAmber
+        else -> "Not connected · tap to try now" to TextMuted
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = !trying && !(state == LinkState.LIVE), onClick = onRetry)
+            .padding(horizontal = 6.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(22.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, color = TextPrimary, fontSize = 16.sp)
+            Text(sub, color = subColor, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        when {
+            trying -> androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp, color = TextPrimary, trackColor = DarkBorder
+            )
+            state == LinkState.LIVE -> Box(
+                Modifier.clip(CircleShape).background(Color(0xFF0F3D1E)).padding(horizontal = 12.dp, vertical = 5.dp)
+            ) { Text(if (inUse) "In use" else "Ready", color = Color(0xFFC4EED0), fontSize = 13.sp) }
+            else -> Box(
+                Modifier.clip(CircleShape).border(1.dp, com.btmouse.app.ui.theme.Outline, CircleShape).padding(horizontal = 14.dp, vertical = 6.dp)
+            ) { Text("Retry", color = TextPrimary, fontSize = 14.sp) }
+        }
+    }
+}
 
 @Composable
 private fun LinkChip(label: String, icon: ImageVector, state: LinkState, modifier: Modifier = Modifier) {

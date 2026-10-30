@@ -59,6 +59,7 @@ import com.btmouse.app.data.InAppUpdateManager
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.data.UpdateState
 import com.btmouse.app.sensors.AirMouseManager
+import com.btmouse.app.ui.theme.Ink
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
 import com.btmouse.app.ui.theme.AccentRose
@@ -161,8 +162,8 @@ fun SettingsScreen(
                         onValueChange = { settings.setPointerSpeed(it) },
                         valueRange = 0.4f..3.0f,
                         colors = SliderDefaults.colors(
-                            thumbColor = PrimaryIndigo,
-                            activeTrackColor = PrimaryIndigo
+                            thumbColor = AccentCyan,
+                            activeTrackColor = AccentCyan
                         )
                     )
                 }
@@ -181,8 +182,8 @@ fun SettingsScreen(
                         onValueChange = { settings.setScrollSpeed(it) },
                         valueRange = 0.5f..3.0f,
                         colors = SliderDefaults.colors(
-                            thumbColor = PrimaryIndigo,
-                            activeTrackColor = PrimaryIndigo
+                            thumbColor = AccentCyan,
+                            activeTrackColor = AccentCyan
                         )
                     )
                 }
@@ -200,7 +201,7 @@ fun SettingsScreen(
                     Switch(
                         checked = invertScroll,
                         onCheckedChange = { settings.setInvertScroll(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                        colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = AccentCyan, uncheckedThumbColor = TextMuted, uncheckedTrackColor = DarkSurfaceVariant, uncheckedBorderColor = DarkBorder)
                     )
                 }
 
@@ -217,7 +218,7 @@ fun SettingsScreen(
                     Switch(
                         checked = tapToClick,
                         onCheckedChange = { settings.setTapToClick(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                        colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = AccentCyan, uncheckedThumbColor = TextMuted, uncheckedTrackColor = DarkSurfaceVariant, uncheckedBorderColor = DarkBorder)
                     )
                 }
 
@@ -234,7 +235,7 @@ fun SettingsScreen(
                     Switch(
                         checked = hapticFeedback,
                         onCheckedChange = { settings.setHapticFeedback(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                        colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = AccentCyan, uncheckedThumbColor = TextMuted, uncheckedTrackColor = DarkSurfaceVariant, uncheckedBorderColor = DarkBorder)
                     )
                 }
             }
@@ -263,7 +264,7 @@ fun SettingsScreen(
                     Switch(
                         checked = backgroundSessionEnabled,
                         onCheckedChange = { settings.setBackgroundSessionEnabled(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                        colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = AccentCyan, uncheckedThumbColor = TextMuted, uncheckedTrackColor = DarkSurfaceVariant, uncheckedBorderColor = DarkBorder)
                     )
                 }
 
@@ -280,7 +281,7 @@ fun SettingsScreen(
                     Switch(
                         checked = autoReconnect,
                         onCheckedChange = { settings.setAutoReconnect(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = AccentCyan, checkedTrackColor = PrimaryIndigo)
+                        colors = SwitchDefaults.colors(checkedThumbColor = Ink, checkedTrackColor = AccentCyan, uncheckedThumbColor = TextMuted, uncheckedTrackColor = DarkSurfaceVariant, uncheckedBorderColor = DarkBorder)
                     )
                 }
             }
@@ -429,7 +430,7 @@ fun SettingsScreen(
                                         updateManager.downloadAndInstall(state.release)
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -476,7 +477,7 @@ fun SettingsScreen(
                             Text("Download complete. The Android installer opens after install permission is granted. If it does not, tap Install APK Now.", color = AccentEmerald, fontSize = 12.sp)
                             Button(
                                 onClick = { updateManager.launchApkInstaller(state.apkFile) },
-                                colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald),
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentEmerald, contentColor = Ink),
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
