@@ -313,6 +313,12 @@ class ConnectionCoordinator(
         remoteWanManager.latestCameraFrame
     ).stateIn(scope, SharingStarted.Eagerly, null)
 
+    override val screenFrame: StateFlow<ScreenFrame?> = merge(
+        wifiClientManager.screenFrame,
+        bluetoothRfcommManager.screenFrame,
+        remoteWanManager.screenFrame
+    ).stateIn(scope, SharingStarted.Eagerly, null)
+
     override val cameraSnapshots: StateFlow<List<SnapshotEntry>> = activeCompanionFlow
         .flatMapLatest { it.cameraSnapshots ?: bluetoothRfcommManager.cameraSnapshots }
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -497,47 +503,108 @@ class ConnectionCoordinator(
      * Returns false when nothing is paired yet, so there was nothing to try.
      */
     private suspend fun bringUpAllLinks(): Boolean {
+        if (!isPaired()) return false
+        val bt = bringUpBluetooth()
+        val wifi = bringUpWifi()
+        val net = bringUpInternet()
+        return bt || wifi || net
+    }
+
+    private fun isPaired(): Boolean {
         val pin = settings.serverPin.value.trim()
-        if (pin.length != 6 || !pin.all { it.isDigit() }) return false
-        val pcName = settings.pcName.value.trim()
-        var attempted = false
+        return pin.length == 6 && pin.all { it.isDigit() }
+    }
 
-        // Bluetooth: only the PC we paired with, never just the first bonded device (earbuds, watch...).
-        findPcBluetoothDevice(pcName)?.let { device ->
-            if (!bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager.connectToDevice(device)
-            if (!bluetoothHidManager.isConnected.value) bluetoothHidManager.connectToDevice(device)
-            attempted = true
-        }
+    // Bluetooth: only the PC we paired with, never just the first bonded device (earbuds, watch...).
+    private fun bringUpBluetooth(): Boolean {
+        val device = findPcBluetoothDevice(settings.pcName.value.trim()) ?: return false
+        if (!bluetoothRfcommManager.isConnected.value) bluetoothRfcommManager.connectToDevice(device)
+        if (!bluetoothHidManager.isConnected.value) bluetoothHidManager.connectToDevice(device)
+        return true
+    }
 
-        // Wi-Fi: the fast UDP link when the phone is on the PC's network.
+    // Wi-Fi: the fast UDP link when the phone is on the PC's network.
+    private fun bringUpWifi(): Boolean {
         val host = settings.wifiHost.value.trim()
         val port = settings.wifiPort.value
-        if (host.isNotBlank() && port in 1..65535) {
-            if (!wifiClientManager.isConnected.value) {
-                wifiClientManager.connectManual(host, port, pcName.ifBlank { "PC Server" })
-            }
-            attempted = true
+        if (host.isBlank() || port !in 1..65535) return false
+        if (!wifiClientManager.isConnected.value) {
+            wifiClientManager.connectManual(host, port, settings.pcName.value.trim().ifBlank { "PC Server" })
         }
+        return true
+    }
 
-        // Internet: look up the PC's current tunnel address; fall back to its local WebSocket.
+    // Internet: look up the PC's current tunnel address; fall back to its local WebSocket.
+    private suspend fun bringUpInternet(): Boolean {
         val rv = RemoteRendezvousResolver.fromSettings(settings)
         val fallbackUrl = settings.wanUrl.value.trim()
-        if (rv.isComplete || fallbackUrl.isNotBlank()) {
-            if (!remoteWanManager.isConnected.value) {
-                val url = if (rv.isComplete) {
-                    when (val r = RemoteRendezvousResolver.resolve(rv)) {
-                        is RemoteRendezvousResolver.Result.Ok -> r.url
-                        is RemoteRendezvousResolver.Result.Error -> {
-                            _linkNotice.value = "Internet: ${r.message}"
-                            fallbackUrl
-                        }
+        if (!rv.isComplete && fallbackUrl.isBlank()) return false
+        if (!remoteWanManager.isConnected.value) {
+            val url = if (rv.isComplete) {
+                when (val r = RemoteRendezvousResolver.resolve(rv)) {
+                    is RemoteRendezvousResolver.Result.Ok -> r.url
+                    is RemoteRendezvousResolver.Result.Error -> {
+                        _linkNotice.value = "Internet: ${r.message}"
+                        fallbackUrl
                     }
-                } else fallbackUrl
-                if (url.isNotBlank()) remoteWanManager.connect(url, pin)
-            }
-            attempted = true
+                }
+            } else fallbackUrl
+            if (url.isNotBlank()) remoteWanManager.connect(url, settings.serverPin.value.trim())
         }
-        return attempted
+        return true
+    }
+
+    enum class Link { WIFI, BLUETOOTH, INTERNET }
+
+    private val _retryingLinks = MutableStateFlow<Set<Link>>(emptySet())
+    /** Links the user asked to try now; each clears when it comes up or after a timeout. */
+    val retryingLinks: StateFlow<Set<Link>> = _retryingLinks.asStateFlow()
+
+    /**
+     * Try one link right away, even if auto-reconnect gave up on it or never started it.
+     * Returns false when there is nothing saved for that link, so the screen can say so.
+     */
+    fun retryLink(link: Link): Boolean {
+        if (!isPaired()) {
+            _linkNotice.value = "Scan the QR code on the PC companion first"
+            return false
+        }
+        val canTry = when (link) {
+            Link.WIFI -> settings.wifiHost.value.isNotBlank()
+            Link.BLUETOOTH -> findPcBluetoothDevice(settings.pcName.value.trim()) != null
+            Link.INTERNET -> RemoteRendezvousResolver.fromSettings(settings).isComplete || settings.wanUrl.value.isNotBlank()
+        }
+        if (!canTry) {
+            _linkNotice.value = when (link) {
+                Link.WIFI -> "Wi-Fi: no PC address saved yet. Scan the code on the PC."
+                Link.BLUETOOTH -> "Bluetooth: pair the PC in your phone's Bluetooth settings first"
+                Link.INTERNET -> "Internet: turn on Internet access on the PC, then scan its code"
+            }
+            return false
+        }
+        intentionalDisconnect = false
+        _linkNotice.value = null
+        _retryingLinks.value = _retryingLinks.value + link
+        scope.launch {
+            when (link) {
+                Link.WIFI -> bringUpWifi()
+                Link.BLUETOOTH -> bringUpBluetooth()
+                Link.INTERNET -> bringUpInternet()
+            }
+            var waited = 0L
+            while (waited < 12_000L) {
+                val up = when (link) {
+                    Link.WIFI -> linkStates.value.wifi
+                    Link.BLUETOOTH -> linkStates.value.bluetooth
+                    Link.INTERNET -> linkStates.value.internet
+                } != LinkState.OFF
+                if (up) break
+                delay(250)
+                waited += 250
+            }
+            _retryingLinks.value = _retryingLinks.value - link
+        }
+        return true
     }
 
     @SuppressLint("MissingPermission")
@@ -694,6 +761,20 @@ class ConnectionCoordinator(
 
     override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
         currentCompanionConnection.queryMedia(includePreview, includeVideoPreview)
+    }
+
+    /** Ask for one screen picture sized for the link in use (Bluetooth gets a smaller one). */
+    fun requestScreenFrame(resume: Boolean = false) {
+        when (activeTransport.value) {
+            ActiveTransport.BLUETOOTH_RFCOMM -> bluetoothRfcommManager.queryScreen(640, 22000, resume)
+            ActiveTransport.REMOTE_WAN -> remoteWanManager.queryScreen(1280, 52000, resume)
+            ActiveTransport.WIFI -> wifiClientManager.queryScreen(1280, 52000, resume)
+            else -> currentCompanionConnection.queryScreen(960, 40000, resume)
+        }
+    }
+
+    override fun queryScreen(maxWidth: Int, maxBytes: Int, resume: Boolean) {
+        currentCompanionConnection.queryScreen(maxWidth, maxBytes, resume)
     }
 
     override fun sendMediaSeek(position: Float) {

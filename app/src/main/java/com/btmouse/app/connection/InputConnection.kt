@@ -1,5 +1,7 @@
 package com.btmouse.app.connection
 
+import android.util.Base64
+import com.google.gson.JsonObject
 import kotlinx.coroutines.flow.StateFlow
 
 data class SystemStats(
@@ -44,6 +46,28 @@ data class CustomAppEntry(
     val brandKey: String = ""
 )
 
+/** One picture of the PC screen, or why the PC would not send one. */
+class ScreenFrame(
+    val jpeg: ByteArray?,
+    val width: Int = 0,
+    val height: Int = 0,
+    val error: String? = null,
+    val receivedAt: Long = System.currentTimeMillis()
+) {
+    companion object {
+        fun fromJson(json: JsonObject): ScreenFrame {
+            val error = json.get("error")?.asString
+            val bytes = json.get("frame")?.asString?.let { runCatching { Base64.decode(it, Base64.DEFAULT) }.getOrNull() }
+            return ScreenFrame(
+                jpeg = bytes,
+                width = json.get("width")?.asInt ?: 0,
+                height = json.get("height")?.asInt ?: 0,
+                error = error ?: if (bytes == null) "The PC sent an empty picture" else null
+            )
+        }
+    }
+}
+
 interface InputConnection {
     val isConnected: StateFlow<Boolean>
     val statusMessage: StateFlow<String>
@@ -69,6 +93,11 @@ interface InputConnection {
     fun sendMediaPrev() {}
     fun setVolume(volume: Float) {}
     fun setMute(mute: Boolean) {}
+
+    /** Latest PC screen picture for the screen preview. */
+    val screenFrame: StateFlow<ScreenFrame?>? get() = null
+    /** Ask for one screen picture; resume = true clears a "stop sharing" from the PC. */
+    fun queryScreen(maxWidth: Int, maxBytes: Int, resume: Boolean = false) {}
 
     fun launchApp(appId: String) {}
     fun systemPower(action: String) {}
