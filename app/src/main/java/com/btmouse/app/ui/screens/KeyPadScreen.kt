@@ -95,7 +95,7 @@ private val WIN = HidConstants.MODIFIER_LEFT_GUI
 
 private fun mods(vararg m: Byte): Byte = m.fold(0) { acc, b -> acc or b.toInt() }.toByte()
 
-// Top to bottom: least used first, so copy, paste, cut and undo sit nearest the thumb.
+// Shortcut rows, top to bottom: least used first, so copy, paste, cut and undo end up on the bottom row.
 private val SHORTCUTS = listOf(
     Shortcut("Find", "Ctrl F", HidConstants.KEY_F, CTRL, Icons.Default.Search),
     Shortcut("Save", "Ctrl S", HidConstants.KEY_S, CTRL, Icons.Default.Save),
@@ -180,29 +180,11 @@ fun KeyboardTab(
 
         if (!numpad) {
             // Every row shares the height left on screen, so the keys fill it evenly.
-            // Rarely used keys sit at the top; Enter, Backspace, Space and the arrows sit at the bottom.
+            // Typing keys sit at the top; the shortcuts you tap most sit at the bottom, nearest
+            // the thumb, with copy, paste, cut and undo on the very last row.
             val grid = (if (fn) F_KEYS else SHORTCUTS).let { if (previewOn) it.takeLast(8) else it }
+            val gridRows = grid.chunked(4)
             Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                grid.chunked(4).forEach { row ->
-                    KeyRow {
-                        row.forEach { s ->
-                            PadKey(
-                                label = s.label, icon = s.icon, hint = if (s.icon == null) s.hint else "",
-                                description = if (s.hint.isEmpty()) s.label else "${s.label} (${s.hint})",
-                                onLongPress = { notify(if (s.hint.isEmpty()) s.label else "${s.label} · ${s.hint}") },
-                                height = Dp.Unspecified, haptics = haptics,
-                                modifier = Modifier.weight(1f).fillMaxHeight()
-                            ) { press(s.key, s.mods) }
-                        }
-                    }
-                }
-                KeyRow {
-                    ModKey("Ctrl", ctrl, Modifier.weight(1f)) { ctrl = !ctrl }
-                    ModKey("Alt", alt, Modifier.weight(1f)) { alt = !alt }
-                    ModKey("Shift", shift, Modifier.weight(1f)) { shift = !shift }
-                    ModKey("Win", win, Modifier.weight(1f)) { win = !win }
-                    ModKey("Fn", fn, Modifier.weight(1f)) { fn = !fn }
-                }
                 KeyRow {
                     NavKey("Home", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_HOME) }
                     NavKey("Pg Up", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_PAGE_UP) }
@@ -217,11 +199,32 @@ fun KeyboardTab(
                     NavKey("Right", haptics, Modifier.weight(1f), icon = Icons.Default.KeyboardArrowRight) { press(HidConstants.KEY_RIGHT_ARROW) }
                     NavKey("Del", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_DELETE) }
                 }
-                KeyRow(weight = 1.15f) {
+                KeyRow {
                     NavKey("Esc", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_ESC) }
                     NavKey("Space", haptics, Modifier.weight(2f), icon = Icons.Default.SpaceBar) { press(HidConstants.KEY_SPACE) }
                     NavKey("Backspace", haptics, Modifier.weight(1.2f), icon = Icons.AutoMirrored.Filled.Backspace) { press(HidConstants.KEY_BACKSPACE) }
                     PadKey("Enter", Modifier.weight(1.6f).fillMaxHeight(), height = Dp.Unspecified, strong = true, haptics = haptics) { press(HidConstants.KEY_ENTER) }
+                }
+                // Modifiers sit between the two halves: they combine with keys above and Fn swaps the shortcuts below.
+                KeyRow {
+                    ModKey("Ctrl", ctrl, Modifier.weight(1f)) { ctrl = !ctrl }
+                    ModKey("Alt", alt, Modifier.weight(1f)) { alt = !alt }
+                    ModKey("Shift", shift, Modifier.weight(1f)) { shift = !shift }
+                    ModKey("Win", win, Modifier.weight(1f)) { win = !win }
+                    ModKey("Fn", fn, Modifier.weight(1f)) { fn = !fn }
+                }
+                gridRows.forEachIndexed { index, row ->
+                    KeyRow(weight = if (index == gridRows.lastIndex) 1.15f else 1f) {
+                        row.forEach { s ->
+                            PadKey(
+                                label = s.label, icon = s.icon, hint = if (s.icon == null) s.hint else "",
+                                description = if (s.hint.isEmpty()) s.label else "${s.label} (${s.hint})",
+                                onLongPress = { notify(if (s.hint.isEmpty()) s.label else "${s.label} · ${s.hint}") },
+                                height = Dp.Unspecified, haptics = haptics,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            ) { press(s.key, s.mods) }
+                        }
+                    }
                 }
             }
         } else {
