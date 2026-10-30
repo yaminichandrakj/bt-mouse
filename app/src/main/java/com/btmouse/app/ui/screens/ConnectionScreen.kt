@@ -252,7 +252,7 @@ fun ConnectionScreen(
                             },
                             color = TextPrimary,
                             fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -346,7 +346,7 @@ fun ConnectionScreen(
                             Text(
                                 pcName.ifBlank { wifiHost.ifBlank { "Your PC" } },
                                 color = TextPrimary,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Medium,
                                 fontSize = 15.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -368,7 +368,7 @@ fun ConnectionScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("Connect", color = TextPrimary, fontWeight = FontWeight.Bold, maxLines = 1)
+                            Text("Connect", color = TextPrimary, fontWeight = FontWeight.Medium, maxLines = 1)
                         }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -404,7 +404,7 @@ fun ConnectionScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Pair your PC", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Pair your PC", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 16.sp)
                     Text(
                         "1. Open Lanyard for PC on your computer and go to Connect.\n" +
                             "2. Scan its QR code here.\n\n" +
@@ -421,7 +421,7 @@ fun ConnectionScreen(
                     ) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = DarkBackground)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Scan PC QR code", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Text("Scan PC QR code", color = DarkBackground, fontWeight = FontWeight.Medium, maxLines = 1)
                     }
                     TextButton(onClick = { showManualDialog = true }) {
                         Text("Enter the details by hand instead", color = AccentCyan, fontSize = 12.sp, maxLines = 1)
@@ -452,10 +452,10 @@ fun ConnectionScreen(
                             when {
                                 hasPairedPc && pcBluetoothPaired -> "Connects automatically when the PC is nearby"
                                 hasPairedPc -> "Optional: works with no network once the PC is paired in Bluetooth settings"
-                                else -> "Use as a Bluetooth mouse and keyboard, even without the companion"
+                                else -> "Use as a Bluetooth mouse and keyboard, even without Lanyard for PC"
                             },
                             color = TextSecondary,
-                            fontSize = 11.sp
+                            fontSize = 13.sp
                         )
                     }
                     Icon(
@@ -564,7 +564,7 @@ fun ConnectionScreen(
         AlertDialog(
             onDismissRequest = { showPinDialog = false },
             containerColor = DarkSurface,
-            title = { Text("Enter the PC's PIN", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            title = { Text("Enter the PC's PIN", color = TextPrimary, fontWeight = FontWeight.Medium) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
@@ -595,7 +595,7 @@ fun ConnectionScreen(
                     enabled = pinInput.length == 6,
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)
                 ) {
-                    Text("Save and connect", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text("Save and connect", color = DarkBackground, fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             },
             dismissButton = {
@@ -618,7 +618,7 @@ fun ConnectionScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Computer, contentDescription = null, tint = AccentCyan)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Add your PC by hand", color = TextPrimary, fontWeight = FontWeight.Bold)
+                    Text("Add your PC by hand", color = TextPrimary, fontWeight = FontWeight.Medium)
                 }
             },
             text = {
@@ -662,7 +662,7 @@ fun ConnectionScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)
                 ) {
-                    Text("Connect", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text("Connect", color = DarkBackground, fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             },
             dismissButton = {
@@ -737,8 +737,8 @@ private fun LinkChip(label: String, icon: ImageVector, state: LinkState, modifie
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
         Spacer(modifier = Modifier.width(6.dp))
         Column {
-            Text(label, color = TextPrimary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(stateText, color = color, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(label, color = TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(stateText, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
     }
 }
@@ -772,7 +772,7 @@ private fun DeviceItem(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = devName, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(text = device.address, color = TextMuted, fontSize = 11.sp)
+                Text(text = device.address, color = TextMuted, fontSize = 13.sp)
             }
             Button(
                 onClick = onConnect,
