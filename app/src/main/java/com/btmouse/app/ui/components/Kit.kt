@@ -51,7 +51,7 @@ import com.btmouse.app.ui.theme.Selected
 import com.btmouse.app.ui.theme.SelectedSegment
 
 /** How a button stands out: white for the one main action, grey when on or selected, quiet otherwise. */
-enum class PillStyle { Primary, Selected, Tonal, Outline, Danger, Quiet }
+enum class PillStyle { Primary, Selected, Tonal, Outline, Danger, Success, Quiet }
 
 private fun PillStyle.colors(): Pair<Color, Color> = when (this) {
     PillStyle.Primary -> OnInk to Ink
@@ -59,6 +59,7 @@ private fun PillStyle.colors(): Pair<Color, Color> = when (this) {
     PillStyle.Tonal -> Control to OnInk
     PillStyle.Outline -> Color.Transparent to OnInk
     PillStyle.Danger -> DangerContainer to OnDanger
+    PillStyle.Success -> Color(0xFF0F3D1E) to Color(0xFFC4EED0)
     PillStyle.Quiet -> Color.Transparent to OnInk
 }
 

@@ -269,7 +269,8 @@ class WifiClientManager(
                         }.getOrNull()
                     } ?: emptyList()
                     val npu = json.get("npu")?.asFloat ?: -1f
-                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk, diskActivity, gpus, npu)
+                    val locked = json.get("locked")?.takeIf { !it.isJsonNull }?.asBoolean
+                    _systemStats.value = SystemStats(cpu, ram, battery, powerPlugged, disk, diskActivity, gpus, npu, locked)
                 }
                 "process_list_response" -> {
                     val array = json.getAsJsonArray("processes") ?: JsonArray()

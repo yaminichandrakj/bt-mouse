@@ -200,7 +200,6 @@ fun MainScreen(
                         Tab.Control -> ControlTab(
                             coordinator, airMouseManager, settings, previewOn, screenZoom,
                             onScreenFullscreen = { screenFullscreen = true },
-                            onOpenKeyboard = { tab = Tab.Keyboard.ordinal },
                             notify = notify
                         )
                         Tab.Keyboard -> KeyboardTab(coordinator, settings, previewOn, screenZoom, { screenFullscreen = true }, notify)

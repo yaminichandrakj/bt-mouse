@@ -111,6 +111,30 @@ def installed_apps_payloads(apps, loading=False, message=""):
 SCREEN_FRAME_MAX_BASE64 = 56000
 
 
+def is_workstation_locked():
+    """True when Windows shows the lock screen, False when unlocked, None when unknown."""
+    if not IS_WINDOWS:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.OpenInputDesktop.restype = wintypes.HANDLE
+        desktop = user32.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
+        if not desktop:
+            return True  # The lock screen's secure desktop refuses ordinary processes.
+        try:
+            name = ctypes.create_unicode_buffer(256)
+            needed = wintypes.DWORD()
+            if not user32.GetUserObjectInformationW(desktop, 2, name, ctypes.sizeof(name), ctypes.byref(needed)):
+                return None
+            return name.value.lower() != "default"
+        finally:
+            user32.CloseDesktop(desktop)
+    except Exception:
+        return None
+
+
 def load_screen_preview_allowed():
     """Whether a paired phone may view this PC's screen. On unless the user turned it off."""
     try:
@@ -4692,6 +4716,9 @@ class Server:
 
     def _get_system_stats(self):
         stats = {"cpu": 0.0, "ram": 0.0, "battery": -1, "power_plugged": True, "disk": 0.0}
+        locked = is_workstation_locked()
+        if locked is not None:
+            stats["locked"] = locked
         try:
             import psutil
             # Measure a short interval so the first sample after app startup or

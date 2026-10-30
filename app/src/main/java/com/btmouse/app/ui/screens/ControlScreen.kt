@@ -12,8 +12,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -56,7 +62,6 @@ fun ControlTab(
     previewOn: Boolean,
     screenZoom: ZoomState,
     onScreenFullscreen: () -> Unit,
-    onOpenKeyboard: () -> Unit,
     notify: (String) -> Unit
 ) {
     val pointerSpeed by settings.pointerSpeed.collectAsState()
@@ -67,6 +72,29 @@ fun ControlTab(
     val airOn by airMouseManager.isAirMouseEnabled.collectAsState()
     val airSupported by airMouseManager.isSupported.collectAsState()
     val media by coordinator.mediaStatus.collectAsState()
+    val stats by coordinator.systemStats.collectAsState()
+    val connected by coordinator.isConnected.collectAsState()
+    var lockedPending by remember { mutableStateOf(false) }
+
+    // Keep the play, mute and lock buttons true to the PC while this tab is open.
+    LaunchedEffect(connected) {
+        var tick = 0
+        while (connected) {
+            coordinator.queryMedia()
+            if (tick % 2 == 0) coordinator.querySystemStats()
+            tick++
+            delay(2000)
+        }
+    }
+    LaunchedEffect(stats?.locked) {
+        if (stats?.locked != null) lockedPending = false
+    }
+    LaunchedEffect(lockedPending) {
+        if (lockedPending) {
+            delay(8000)
+            lockedPending = false
+        }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 4.dp),
@@ -129,19 +157,43 @@ fun ControlTab(
 
         MouseButtonsBar(hapticsEnabled = haptics, onButtonChange = { coordinator.sendMouseButton(it) })
 
-        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            ActionTile(Icons.Default.Keyboard, "Type", onOpenKeyboard, Modifier.weight(1f))
-            ActionTile(Icons.Default.PlayArrow, "Play/Pause", { coordinator.sendMediaToggle() }, Modifier.weight(1f))
+        // Each action shows what the PC is doing now and lights up when it is on.
+        val playing = media.status.equals("Playing", ignoreCase = true)
+        val locked = lockedPending || stats?.locked == true
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ActionTile(
-                if (media.isMuted) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-                if (media.isMuted) "Unmute PC" else "Mute PC",
-                { coordinator.setMute(!media.isMuted) },
-                Modifier.weight(1f)
+                if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                when {
+                    playing -> "Pause"
+                    media.hasMedia -> "Play"
+                    else -> "Play/Pause"
+                },
+                { coordinator.sendMediaToggle() },
+                Modifier.weight(1f),
+                style = if (playing) PillStyle.Selected else PillStyle.Quiet
             )
-            ActionTile(Icons.Default.Lock, "Lock PC", {
-                coordinator.systemPower("lock")
-                notify("Locking your PC")
-            }, Modifier.weight(1f))
+            ActionTile(
+                if (media.isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                if (media.isMuted) "Muted" else "Mute PC",
+                { coordinator.setMute(!media.isMuted) },
+                Modifier.weight(1f),
+                style = if (media.isMuted) PillStyle.Danger else PillStyle.Quiet
+            )
+            ActionTile(
+                if (locked) Icons.Default.Lock else Icons.Default.LockOpen,
+                if (locked) "Locked" else "Lock PC",
+                {
+                    if (locked) {
+                        notify("Unlock it on the PC itself")
+                    } else {
+                        coordinator.systemPower("lock")
+                        lockedPending = true
+                        notify("Locking your PC")
+                    }
+                },
+                Modifier.weight(1f),
+                style = if (locked) PillStyle.Success else PillStyle.Quiet
+            )
         }
     }
 }

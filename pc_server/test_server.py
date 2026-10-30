@@ -1120,6 +1120,22 @@ class CompanionLayoutTests(unittest.TestCase):
             self.assertIn(f"fonts/{name}", spec)
 
 
+class LockStateTests(unittest.TestCase):
+    def test_lock_state_is_unknown_off_windows(self):
+        with patch.object(server, "IS_WINDOWS", False):
+            self.assertIsNone(server.is_workstation_locked())
+
+    def test_stats_carry_lock_state_when_known(self):
+        instance = object.__new__(server.Server)
+        instance._hardware_metrics_lock = threading.Lock()
+        instance._hardware_metrics = {"disk_activity": -1.0, "gpus": [], "npu": -1.0}
+        instance._performance_sampler_running = True
+        with patch.object(server, "is_workstation_locked", return_value=True):
+            self.assertTrue(instance._get_system_stats()["locked"])
+        with patch.object(server, "is_workstation_locked", return_value=None):
+            self.assertNotIn("locked", instance._get_system_stats())
+
+
 class InstalledAppsPartsTests(unittest.TestCase):
     def test_long_app_list_is_split_into_datagram_sized_parts(self):
         apps = [{"name": f"App {i}", "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\"
