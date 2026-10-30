@@ -3364,7 +3364,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.4.4"
+                    "version": "1.5.0"
                 }
             else:
                 self._record_auth_failure(addr)
