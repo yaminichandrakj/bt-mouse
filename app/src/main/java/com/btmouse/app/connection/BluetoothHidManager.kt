@@ -152,9 +152,9 @@ class BluetoothHidManager(
     private fun registerHidApp() {
         val hid = hidDevice ?: return
         val sdp = BluetoothHidDeviceAppSdpSettings(
-            "BT Mouse & Keyboard",
-            "Universal Remote HID Device",
-            "Android BT Mouse",
+            "Lanyard",
+            "Mouse and keyboard",
+            "Lanyard",
             0xC0.toByte(), // Combo Keyboard/Mouse subclass
             HidConstants.HID_REPORT_DESCRIPTOR
         )

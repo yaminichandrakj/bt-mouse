@@ -295,17 +295,29 @@ class ConnectionCoordinator(
         .flatMapLatest { it.installedApps ?: bluetoothRfcommManager.installedApps }
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** Icons saved on the phone from earlier sessions, so apps show their icons straight away. */
+    private val iconStore = com.btmouse.app.data.AppIconStore(context.applicationContext, scope)
+
     override val appIcons: StateFlow<Map<String, String>> = combine(
+        iconStore.icons,
         wifiClientManager.appIcons,
         bluetoothRfcommManager.appIcons,
         remoteWanManager.appIcons
-    ) { w, b, r ->
+    ) { saved, w, b, r ->
         val merged = mutableMapOf<String, String>()
+        merged.putAll(saved)
         merged.putAll(r)
         merged.putAll(b)
         merged.putAll(w)
         merged
     }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    init {
+        scope.launch {
+            merge(wifiClientManager.appIcons, bluetoothRfcommManager.appIcons, remoteWanManager.appIcons)
+                .collect { iconStore.remember(it) }
+        }
+    }
 
     override val latestCameraFrame: StateFlow<ByteArray?> = merge(
         wifiClientManager.latestCameraFrame,
@@ -493,7 +505,7 @@ class ConnectionCoordinator(
         _linkNotice.value = null
         scope.launch {
             if (!bringUpAllLinks()) {
-                _linkNotice.value = "Scan the QR code on the Pair a device page of the PC companion first"
+                _linkNotice.value = "Scan the QR code on the Connect page of Lanyard for PC first"
             }
         }
     }
@@ -566,7 +578,7 @@ class ConnectionCoordinator(
      */
     fun retryLink(link: Link): Boolean {
         if (!isPaired()) {
-            _linkNotice.value = "Scan the QR code on the PC companion first"
+            _linkNotice.value = "Scan the QR code in Lanyard for PC first"
             return false
         }
         val canTry = when (link) {
@@ -843,8 +855,10 @@ class ConnectionCoordinator(
         currentCompanionConnection.queryInstalledApps()
     }
 
+    /** Ask for icons in small batches; the PC answers up to 60 per request. */
     override fun queryAppIcons(items: List<String>) {
-        currentCompanionConnection.queryAppIcons(items)
+        val missing = items.filter { it.isNotBlank() && appIcons.value[it].isNullOrBlank() }.distinct()
+        missing.chunked(40).forEach { currentCompanionConnection.queryAppIcons(it) }
     }
 
     override fun updateQuickApps(paths: List<String>) {

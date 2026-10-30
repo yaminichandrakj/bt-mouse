@@ -1,9 +1,17 @@
+<!-- Lanyard mark for the status bar. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.9"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M6,2.5 L12,13 L18,2.5"/>
+    <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M12,2C8.7,2 6,4.7 6,8v8c0,3.3 2.7,6 6,6s6,-2.7 6,-6V8c0,-3.3 -2.7,-6 -6,-6zM11,6h2v4h-2V6zM16,16c0,2.2 -1.8,4 -4,4s-4,-1.8 -4,-4v-4h8v4z"/>
+        android:fillType="evenOdd"
+        android:pathData="M10,13 h4 a2,2 0 0 1 2,2 v5 a2,2 0 0 1 -2,2 h-4 a2,2 0 0 1 -2,-2 v-5 a2,2 0 0 1 2,-2z M10.9,15 h2.2 a0.6,0.6 0 0 1 0,1.2 h-2.2 a0.6,0.6 0 0 1 0,-1.2z"/>
 </vector>

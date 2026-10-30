@@ -874,7 +874,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.5.0")
+        self.assertEqual(app_gui.APP_VERSION, "1.5.1")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -1118,6 +1118,42 @@ class CompanionLayoutTests(unittest.TestCase):
         for name in ("inter_regular.ttf", "inter_medium.ttf", "inter_semibold.ttf"):
             self.assertTrue((here / "fonts" / name).is_file(), name)
             self.assertIn(f"fonts/{name}", spec)
+
+
+class LockStateTests(unittest.TestCase):
+    def test_lock_state_is_unknown_off_windows(self):
+        with patch.object(server, "IS_WINDOWS", False):
+            self.assertIsNone(server.is_workstation_locked())
+
+    def test_stats_carry_lock_state_when_known(self):
+        instance = object.__new__(server.Server)
+        instance._hardware_metrics_lock = threading.Lock()
+        instance._hardware_metrics = {"disk_activity": -1.0, "gpus": [], "npu": -1.0}
+        instance._performance_sampler_running = True
+        with patch.object(server, "is_workstation_locked", return_value=True):
+            self.assertTrue(instance._get_system_stats()["locked"])
+        with patch.object(server, "is_workstation_locked", return_value=None):
+            self.assertNotIn("locked", instance._get_system_stats())
+
+
+class InstalledAppsPartsTests(unittest.TestCase):
+    def test_long_app_list_is_split_into_datagram_sized_parts(self):
+        apps = [{"name": f"App {i}", "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\"
+                 + f"Vendor {i}\\App {i} long shortcut name.lnk", "is_quick": i % 7 == 0} for i in range(600)]
+        payloads = server.installed_apps_payloads(apps, loading=False)
+        self.assertGreater(len(payloads), 1)
+        self.assertEqual([p["part"] for p in payloads], list(range(len(payloads))))
+        self.assertTrue(all(p["parts"] == len(payloads) for p in payloads))
+        self.assertEqual(sum(len(p["apps"]) for p in payloads), 600)
+        for payload in payloads:
+            self.assertLess(len(json.dumps(payload).encode("utf-8")), 60000)
+
+    def test_empty_list_still_sends_one_part(self):
+        payloads = server.installed_apps_payloads([], loading=True, message="busy")
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["apps"], [])
+        self.assertTrue(payloads[0]["loading"])
+        self.assertEqual(payloads[0]["message"], "busy")
 
 
 class ScreenPreviewTests(unittest.TestCase):

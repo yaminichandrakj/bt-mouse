@@ -12,7 +12,9 @@ data class SystemStats(
     val disk: Float = 0f,
     val diskActivity: Float = -1f,
     val gpus: List<GpuStat> = emptyList(),
-    val npu: Float = -1f
+    val npu: Float = -1f,
+    /** Whether Windows shows the lock screen; null when the PC cannot tell. */
+    val locked: Boolean? = null
 )
 
 data class GpuStat(

@@ -37,6 +37,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.btmouse.app.ui.components.CardHeader
 import com.btmouse.app.ui.components.FullscreenViewer
 import com.btmouse.app.ui.components.LiveBadge
 import com.btmouse.app.ui.components.PillStyle
@@ -210,7 +211,7 @@ fun QuickAppsSection(
                 }
             }
             if (showBrowseDialog) {
-                installedApps.take(35).forEach { ia ->
+                installedApps.forEach { ia ->
                     if (ia.iconBase64.isBlank() && appIcons[ia.path].isNullOrBlank()) {
                         needed.add(ia.path)
                     }
@@ -231,7 +232,7 @@ fun QuickAppsSection(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.DesktopWindows, contentDescription = null, tint = AccentCyan)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Installed PC Apps", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Apps on your PC", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 16.sp)
                 }
             },
             text = {
@@ -239,7 +240,7 @@ fun QuickAppsSection(
                     OutlinedTextField(
                         value = appSearchQuery,
                         onValueChange = { appSearchQuery = it },
-                        placeholder = { Text("Filter installed apps...", color = TextMuted, fontSize = 12.sp) },
+                        placeholder = { Text("Search apps", color = TextMuted, fontSize = 12.sp) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AccentCyan,
@@ -250,14 +251,18 @@ fun QuickAppsSection(
                         singleLine = true
                     )
 
-                    val filteredApps = installedApps.filter {
-                        it.name.contains(appSearchQuery, ignoreCase = true) || it.path.contains(appSearchQuery, ignoreCase = true)
-                    }
+                    val filteredApps = installedApps
+                        .filter { it.name.contains(appSearchQuery, ignoreCase = true) || it.path.contains(appSearchQuery, ignoreCase = true) }
+                        .sortedWith(compareByDescending<AppInfo> { it.isQuick }.thenBy { it.name.lowercase() })
+                    Text(
+                        if (appSearchQuery.isBlank()) "${installedApps.size} apps on your PC" else "${filteredApps.size} of ${installedApps.size} apps",
+                        color = TextMuted, fontSize = 13.sp
+                    )
 
                     if (filteredApps.isEmpty()) {
                         Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                             Text(
-                                if (installedApps.isEmpty()) "Scanning PC apps or waiting for response..."
+                                if (installedApps.isEmpty()) "Loading the apps on your PC…"
                                 else "No matching apps found.",
                                 color = TextMuted,
                                 fontSize = 12.sp
@@ -265,7 +270,7 @@ fun QuickAppsSection(
                         }
                     } else {
                         LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             items(filteredApps) { app ->
@@ -297,7 +302,7 @@ fun QuickAppsSection(
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(app.name, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1)
-                                                Text(app.path, color = TextMuted, fontSize = 10.sp, maxLines = 1)
+                                                Text(app.path, color = TextMuted, fontSize = 12.sp, maxLines = 1)
                                             }
                                         }
                                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -314,7 +319,7 @@ fun QuickAppsSection(
                                                     if (app.isQuick) Icons.Filled.Check else Icons.Filled.Add,
                                                     "PC",
                                                     color = if (app.isQuick) AccentEmerald else AccentCyan,
-                                                    fontSize = 10.sp,
+                                                    fontSize = 12.sp,
                                                     iconSize = 12.dp
                                                 )
                                             }
@@ -354,7 +359,7 @@ fun QuickAppsSection(
                 }) {
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp), tint = AccentCyan)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Refresh List", color = AccentCyan)
+                    Text("Refresh list", color = AccentCyan)
                 }
             },
             dismissButton = {
@@ -370,13 +375,13 @@ fun QuickAppsSection(
         AlertDialog(
             onDismissRequest = { showAddCustomDialog = false },
             containerColor = DarkSurface,
-            title = { Text("Add Quick App Shortcut", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            title = { Text("Add a quick app", color = TextPrimary, fontWeight = FontWeight.Medium) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = newCustomName,
                         onValueChange = { newCustomName = it },
-                        label = { Text("App Name (e.g. Steam, Blender)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        label = { Text("App name (for example Steam or Blender)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         modifier = Modifier.fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AccentCyan,
@@ -415,7 +420,7 @@ fun QuickAppsSection(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)
                 ) {
-                    Text("Add Shortcut", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("Add", color = DarkBackground, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             },
             dismissButton = {
@@ -433,8 +438,8 @@ fun QuickAppsSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Quick Launch & Desktop Control", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Text("Launch apps on your PC instantly with 1 tap.", color = TextSecondary, fontSize = 12.sp)
+                Text("Quick apps", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 15.sp)
+                Text("Open apps on your PC with one tap.", color = TextSecondary, fontSize = 12.sp)
             }
         }
 
@@ -454,7 +459,7 @@ fun QuickAppsSection(
             ) {
                 Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Browse PC Apps", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Browse PC apps", fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
 
             Button(
@@ -465,7 +470,7 @@ fun QuickAppsSection(
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("+ Custom App", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Custom app", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
 
@@ -478,7 +483,7 @@ fun QuickAppsSection(
                 value = customCommand,
                 onValueChange = { customCommand = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Run custom app, path or URL...", fontSize = 12.sp, color = TextMuted) },
+                placeholder = { Text("Run an app, path or web address", fontSize = 12.sp, color = TextMuted) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = AccentCyan,
                     unfocusedBorderColor = DarkBorder,
@@ -501,13 +506,13 @@ fun QuickAppsSection(
                 colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Run", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Run", color = DarkBackground, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
         // Custom Pinned Apps Section
         if (customApps.isNotEmpty()) {
-            IconLabel(Icons.Filled.PushPin, "Pinned quick apps", color = AccentEmerald, fontWeight = FontWeight.Bold, fontSize = 13.sp, iconSize = 16.dp)
+            IconLabel(Icons.Filled.PushPin, "Pinned quick apps", color = AccentEmerald, fontWeight = FontWeight.Medium, fontSize = 13.sp, iconSize = 16.dp)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 customApps.chunked(2).forEach { rowApps ->
                     Row(
@@ -548,7 +553,7 @@ fun QuickAppsSection(
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column(modifier = Modifier.weight(1f)) {
-                                            Text(app.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
+                                            Text(app.name, color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 12.sp, maxLines = 1)
                                             Text(app.cmd, color = TextSecondary, fontSize = 9.sp, maxLines = 1)
                                         }
                                     }
@@ -572,15 +577,15 @@ fun QuickAppsSection(
             }
         }
 
-        Text("Quick Apps from PC Companion", color = AccentEmerald, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+        Text("Quick apps on your PC", color = TextSecondary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
         if (connectionMessage.startsWith("Loading installed PC apps")) {
-            Text(connectionMessage, color = TextMuted, fontSize = 11.sp)
+            Text(connectionMessage, color = TextMuted, fontSize = 13.sp)
         } else if (connectionMessage.startsWith("Saved ") || connectionMessage.startsWith("Could not update PC Quick Apps")) {
-            Text(connectionMessage, color = if (connectionMessage.startsWith("Saved ")) AccentEmerald else AccentRose, fontSize = 11.sp)
+            Text(connectionMessage, color = if (connectionMessage.startsWith("Saved ")) AccentEmerald else AccentRose, fontSize = 13.sp)
         }
         if (quickApps.isEmpty()) {
-            Text("Add installed apps to Quick Apps in the PC companion. Only apps present on this PC are shown here.",
-                color = TextMuted, fontSize = 11.sp)
+            Text("Add apps here or in Lanyard for PC. Only apps installed on that PC are shown.",
+                color = TextMuted, fontSize = 13.sp)
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 quickApps.chunked(2).forEach { rowApps ->
@@ -614,8 +619,8 @@ fun QuickAppsSection(
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text(app.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
-                                    Text("Open on PC", color = TextSecondary, fontSize = 10.sp)
+                                    Text(app.name, color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                    Text("Open on PC", color = TextSecondary, fontSize = 12.sp)
                                 }
                             }
                         }
@@ -703,7 +708,7 @@ fun CameraAndRecorderSection(
                 showSnapshotDeleteConfirm = false
             },
             title = {
-                Text(snapName, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(snapName, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -713,13 +718,13 @@ fun CameraAndRecorderSection(
                         modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
                         contentScale = ContentScale.Fit
                     )
-                    Text("Saved in phone Snapshots/ folder", color = AccentCyan, fontSize = 11.sp)
+                    Text("Saved in phone Snapshots/ folder", color = AccentCyan, fontSize = 13.sp)
                     if (showSnapshotDeleteConfirm) {
                         Text(
                             "Permanently delete this snapshot from this phone?",
                             color = AccentRose,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
@@ -735,13 +740,13 @@ fun CameraAndRecorderSection(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                         ) {
-                            Text("Confirm Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Delete", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { showSnapshotDeleteConfirm = false },
                             colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
                         ) {
-                            Text("Cancel", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Cancel", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     } else {
                         Button(
@@ -758,19 +763,19 @@ fun CameraAndRecorderSection(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                         ) {
-                            Text("Open", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Open", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { showSnapshotDeleteConfirm = true },
                             colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                         ) {
-                            Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Delete", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Button(
                             onClick = { selectedSnapshot = null },
                             colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant)
                         ) {
-                            Text("Close", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Close", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -826,12 +831,12 @@ fun CameraAndRecorderSection(
                     connectionStatus.contains("stopped", ignoreCase = true) ||
                     connectionStatus.contains("unavailable", ignoreCase = true)
                 ) AccentRose else AccentEmerald,
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold
             )
         }
         if (cameraStreamMessage.isNotBlank()) {
-            Text(cameraStreamMessage, color = AccentRose, fontSize = 11.sp)
+            Text(cameraStreamMessage, color = AccentRose, fontSize = 13.sp)
         }
 
         if (initialTab == "all" || initialTab == "phone_cam") {
@@ -843,55 +848,21 @@ fun CameraAndRecorderSection(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentCyan else DarkBorder)
+                shape = RoundedCornerShape(24.dp),
+                border = null
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Videocam, contentDescription = null, tint = AccentCyan)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text("PC Webcam Viewfinder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text("Saves combined video+audio to PC Videos/ folder", color = TextMuted, fontSize = 10.sp)
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    if (isStreaming) if (cameraRecording) "● LIVE · REC (A+V)" else "● LIVE" else "STANDBY",
-                                    color = if (isStreaming) AccentEmerald else TextMuted,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { showPcCamFullscreen = true },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(DarkSurfaceVariant)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Fullscreen,
-                                    contentDescription = "Fullscreen PC Webcam",
-                                    tint = AccentCyan,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
+                    CardHeader(
+                        title = "PC webcam",
+                        detail = "Recordings save video and sound to Videos on the PC",
+                        status = when {
+                            cameraRecording -> "Recording"
+                            isStreaming -> "Live"
+                            else -> "Off"
+                        },
+                        live = isStreaming,
+                        dot = if (cameraRecording) AccentRose else null
+                    )
 
                     val currentImageBitmap = imageBitmap
                     if (currentImageBitmap != null) {
@@ -924,7 +895,7 @@ fun CameraAndRecorderSection(
                                 Text(
                                     "Tap 'Snapshot' or 'Start Live' below",
                                     color = TextMuted,
-                                    fontSize = 10.sp
+                                    fontSize = 12.sp
                                 )
                             }
                         }
@@ -939,7 +910,7 @@ fun CameraAndRecorderSection(
                         ) {
                             Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Snapshot", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Snapshot", fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         }
 
                         Button(
@@ -965,7 +936,7 @@ fun CameraAndRecorderSection(
                                 if (isStreaming) "Stop Live" else "Start Live",
                                 color = if (isStreaming) TextPrimary else DarkBackground,
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -976,7 +947,7 @@ fun CameraAndRecorderSection(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(24.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -985,11 +956,11 @@ fun CameraAndRecorderSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Phone Snapshots · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        IconLabel(Icons.Filled.Folder, "Snapshots/", color = AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, iconSize = 14.dp)
+                        Text("Snapshots on this phone · ${snapshotEntries.size}", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        IconLabel(Icons.Filled.Folder, "Snapshots/", color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, iconSize = 14.dp)
                     }
                     if (snapshotEntries.isEmpty()) {
-                        Text("Snapshots captured from the PC are saved to your phone's Snapshots/ folder and PC Snapshots/ folder.", color = TextSecondary, fontSize = 11.sp)
+                        Text("Snapshots captured from the PC are saved to your phone's Snapshots/ folder and PC Snapshots/ folder.", color = TextSecondary, fontSize = 13.sp)
                     } else {
                         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             snapshotEntries.forEach { entry ->
@@ -1022,7 +993,7 @@ fun CameraAndRecorderSection(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(24.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1035,8 +1006,8 @@ fun CameraAndRecorderSection(
                             Icon(Icons.Default.Mic, contentDescription = null, tint = AccentRose)
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
-                                Text("PC Microphone Recorder", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text("Saves WAV recordings to PC Audios/ folder", color = TextMuted, fontSize = 10.sp)
+                                Text("PC Microphone Recorder", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                                Text("Saved as WAV in the PC's Audios folder", color = TextMuted, fontSize = 12.sp)
                             }
                         }
 
@@ -1047,15 +1018,15 @@ fun CameraAndRecorderSection(
                                     .background(AccentRose.copy(alpha = 0.2f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("● RECORDING TO AUDIOS/", color = AccentRose, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text("Recording to Audios", color = AccentRose, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
 
                     Text(
-                        "Record standalone audio from your PC's microphone directly into your PC's BTMouse/Audios folder.",
+                        "Record the PC microphone into the Audios folder on your PC.",
                         color = TextSecondary,
-                        fontSize = 11.sp
+                        fontSize = 13.sp
                     )
 
                     Button(
@@ -1075,7 +1046,7 @@ fun CameraAndRecorderSection(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             if (isRecording) "Stop Microphone Recording" else "Start Microphone Recording",
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Medium,
                             fontSize = 13.sp
                         )
                     }
@@ -1129,10 +1100,10 @@ fun PhoneCameraWebcamCard(
     }
 
     val alignmentDescription = if (currentOrientation == "portrait") {
-        "PORTRAIT 9:16 (Vertical)"
+        "Portrait 9:16"
     } else {
-        "LANDSCAPE 16:9 (Horizontal)"
-    } + if (currentRotation != 0) " · Rot ${currentRotation}°" else ""
+        "Landscape 16:9"
+    } + if (currentRotation != 0) " · rotated ${currentRotation}°" else ""
 
     if (showPhoneCamFullscreen) {
         FullscreenVideoModal(
@@ -1149,70 +1120,16 @@ fun PhoneCameraWebcamCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(14.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentEmerald else DarkBorder)
+        shape = RoundedCornerShape(24.dp),
+        border = null
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Header with Live Badge & Fullscreen Button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Default.Videocam,
-                        contentDescription = null,
-                        tint = if (isStreaming) AccentEmerald else AccentCyan
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            "Phone as PC Webcam",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
-                        )
-                        Text(
-                            "Alignment: $alignmentDescription",
-                            color = AccentCyan,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            if (isStreaming) "● LIVE TO PC" else "STANDBY",
-                            color = if (isStreaming) AccentEmerald else TextMuted,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { showPhoneCamFullscreen = true },
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DarkSurfaceVariant)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Fullscreen,
-                            contentDescription = "Fullscreen Phone Camera",
-                            tint = AccentCyan,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
+            CardHeader(
+                title = "Phone camera",
+                detail = alignmentDescription,
+                status = if (isStreaming) "Live on PC" else "Off",
+                live = isStreaming
+            )
 
             // Viewfinder (Uncropped ContentScale.Fit so exact alignment/orientation is visible!)
             if (isStreaming && previewBitmap != null) {
@@ -1248,7 +1165,7 @@ fun PhoneCameraWebcamCard(
                         Text(
                             "Choose Landscape (16:9) or Portrait (9:16) below, then tap Start",
                             color = TextMuted,
-                            fontSize = 10.sp
+                            fontSize = 12.sp
                         )
                     }
                 }
@@ -1263,7 +1180,7 @@ fun PhoneCameraWebcamCard(
                 FilterChip(
                     selected = currentOrientation == "landscape",
                     onClick = { coordinator.setPhoneCameraOrientation("landscape") },
-                    label = { Text("↔ Landscape 16:9", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Landscape 16:9", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -1274,7 +1191,7 @@ fun PhoneCameraWebcamCard(
                 FilterChip(
                     selected = currentOrientation == "portrait",
                     onClick = { coordinator.setPhoneCameraOrientation("portrait") },
-                    label = { Text("↕ Portrait 9:16", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Portrait 9:16", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -1285,7 +1202,7 @@ fun PhoneCameraWebcamCard(
                 FilterChip(
                     selected = currentRotation != 0,
                     onClick = { coordinator.rotatePhoneCamera90() },
-                    label = { Text("↻ Rotate 90° (${currentRotation}°)", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Rotate 90° · ${currentRotation}°", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -1306,7 +1223,7 @@ fun PhoneCameraWebcamCard(
                     onClick = {
                         if (currentLens != "back") coordinator.switchPhoneCameraLens()
                     },
-                    label = { Text("Rear lens", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Rear lens", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { ChipIcon(Icons.Filled.CameraRear) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
@@ -1320,7 +1237,7 @@ fun PhoneCameraWebcamCard(
                     onClick = {
                         if (currentLens != "front") coordinator.switchPhoneCameraLens()
                     },
-                    label = { Text("Front lens", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text("Front lens", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { ChipIcon(Icons.Filled.CameraFront) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
@@ -1338,7 +1255,7 @@ fun PhoneCameraWebcamCard(
                     FilterChip(
                         selected = currentRes == res,
                         onClick = { coordinator.setPhoneCameraResolution(res.first, res.second) },
-                        label = { Text(label, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        label = { Text(label, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                             selectedLabelColor = AccentCyan,
@@ -1352,7 +1269,7 @@ fun PhoneCameraWebcamCard(
                     FilterChip(
                         selected = currentFps == fps,
                         onClick = { coordinator.setPhoneCameraFps(fps) },
-                        label = { Text("${fps}fps", fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        label = { Text("${fps}fps", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                             selectedLabelColor = AccentCyan,
@@ -1406,7 +1323,7 @@ fun PhoneCameraWebcamCard(
                         if (isStreaming) "Stop Streaming to PC" else "Start Phone Webcam",
                         color = if (isStreaming) TextPrimary else DarkBackground,
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Medium
                     )
                 }
 
@@ -1437,12 +1354,12 @@ fun PhoneCameraWebcamCard(
 
             if (isStreaming) {
                 Text(
-                    "Streaming to PC Companion ('Phone as Webcam' tab & http://127.0.0.1:8766/phone_cam/mjpeg)",
+                    "Streaming to Lanyard for PC (Phone camera page)",
                     color = AccentCyan,
-                    fontSize = 10.sp
+                    fontSize = 12.sp
                 )
             } else if (statusMsg.isNotBlank()) {
-                Text(statusMsg, color = TextSecondary, fontSize = 10.sp)
+                Text(statusMsg, color = TextSecondary, fontSize = 12.sp)
             }
         }
     }

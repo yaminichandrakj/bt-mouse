@@ -114,7 +114,7 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(24.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -123,22 +123,22 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Live Two-Way Audio Relay", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                IconLabel(Icons.Filled.Folder, "Audios/", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, iconSize = 12.dp)
+                Text("Live audio", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                IconLabel(Icons.Filled.Folder, "Audios/", color = AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, iconSize = 12.dp)
             }
             Text(
                 "Stream the PC microphone to this phone or speak from your phone through the PC speakers. Survives Wi-Fi / Bluetooth failover automatically.",
                 color = TextSecondary,
-                fontSize = 11.sp
+                fontSize = 13.sp
             )
             Text(
                 when {
-                    pcToPhoneActive && pcRecording || phoneToPcActive && phoneRecording -> "● Live audio active & saving to PC Audios/ folder"
-                    pcToPhoneActive || phoneToPcActive -> "● Live audio active (not recording)"
+                    pcToPhoneActive && pcRecording || phoneToPcActive && phoneRecording -> "Live audio on · saving to the PC's Audios folder"
+                    pcToPhoneActive || phoneToPcActive -> "Live audio on · not recording"
                     else -> "Live audio standby"
                 },
                 color = if (pcToPhoneActive || phoneToPcActive) AccentEmerald else TextMuted,
-                fontSize = 11.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -157,7 +157,7 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
                     shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (pcToPhoneActive) AccentRose else PrimaryIndigo)
                 ) {
-                    Text(if (pcToPhoneActive) "Stop PC Mic" else "Listen to PC Mic", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(if (pcToPhoneActive) "Stop PC Mic" else "Listen to PC Mic", fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Button(
                     onClick = {
@@ -178,15 +178,15 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
                     Text(
                         if (phoneToPcActive) "Stop Phone Mic" else "Speak to PC",
                         color = if (phoneToPcActive) TextPrimary else com.btmouse.app.ui.theme.DarkBackground,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
             if (!connected) {
-                Text("Connect to the PC to start live audio.", color = TextMuted, fontSize = 11.sp)
+                Text("Connect to the PC to start live audio.", color = TextMuted, fontSize = 13.sp)
             } else if (connectionMessage.contains("audio", ignoreCase = true) || connectionMessage.contains("microphone", ignoreCase = true)) {
-                Text(connectionMessage, color = AccentCyan, fontSize = 11.sp)
+                Text(connectionMessage, color = AccentCyan, fontSize = 13.sp)
             }
         }
     }
@@ -262,13 +262,13 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Fullscreen Playback", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("Full screen", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Button(
                         onClick = { isFullscreenPlayer = false },
                         colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("Exit Fullscreen", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Exit full screen", fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -285,7 +285,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             }
             Card(
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(24.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, AccentCyan)
             ) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -294,14 +294,14 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconLabel(Icons.Filled.PlayArrow, "Now playing on phone", color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold, iconSize = 18.dp)
+                        IconLabel(Icons.Filled.PlayArrow, "Now playing on phone", color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Medium, iconSize = 18.dp)
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Button(
                                 onClick = { isFullscreenPlayer = true },
                                 shape = RoundedCornerShape(8.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                             ) {
-                                IconLabel(Icons.Filled.Fullscreen, "Fullscreen", fontWeight = FontWeight.Bold, iconSize = 16.dp)
+                                IconLabel(Icons.Filled.Fullscreen, "Fullscreen", fontWeight = FontWeight.Medium, iconSize = 16.dp)
                             }
                             Button(
                                 onClick = {
@@ -312,7 +312,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                                 shape = RoundedCornerShape(8.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                             ) {
-                                IconLabel(Icons.Filled.Close, "Close", fontWeight = FontWeight.Bold, iconSize = 16.dp)
+                                IconLabel(Icons.Filled.Close, "Close", fontWeight = FontWeight.Medium, iconSize = 16.dp)
                             }
                         }
                     }
@@ -356,7 +356,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                         )
                     }
                     if (playerErrorText != null) {
-                        Text(playerErrorText!!, color = AccentAmber, fontSize = 11.sp)
+                        Text(playerErrorText!!, color = AccentAmber, fontSize = 13.sp)
                     }
                 }
             }
@@ -368,8 +368,8 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Organized Media Folders", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text("Saved separately in Videos/, Audios/, and Snapshots/ on Phone & PC", color = TextMuted, fontSize = 10.sp)
+                Text("Where files are saved", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text("Saved separately in Videos/, Audios/, and Snapshots/ on Phone & PC", color = TextMuted, fontSize = 12.sp)
             }
             Button(
                 onClick = { coordinator.queryRecordings() },
@@ -377,7 +377,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
             ) {
-                Text("Refresh", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Refresh", fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
 
@@ -396,7 +396,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                     selected = selectedCategory == key,
                     onClick = { selectedCategory = key },
                     leadingIcon = { ChipIcon(icon) },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = PrimaryIndigo.copy(alpha = 0.4f),
                         selectedLabelColor = AccentCyan,
@@ -407,13 +407,13 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             }
         }
 
-        if (status.isNotBlank()) Text(status, color = AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        if (status.isNotBlank()) Text(status, color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Medium)
 
         if (filteredRecordings.isEmpty()) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(24.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(18.dp)) {
@@ -427,7 +427,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                     Text(
                         "• Videos are saved to BTMouse/Videos\n• Audio recordings are saved to BTMouse/Audios\n• Camera snapshots are saved to BTMouse/Snapshots",
                         color = TextMuted,
-                        fontSize = 11.sp
+                        fontSize = 13.sp
                     )
                 }
             }
@@ -467,7 +467,7 @@ private fun RecordingRow(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete ${recording.name}?", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            title = { Text("Delete ${recording.name}?", color = TextPrimary, fontWeight = FontWeight.Medium) },
             text = { Text("This will remove ${recording.name} from the ${recording.folder}/ folder.", color = TextSecondary) },
             confirmButton = {
                 Button(
@@ -528,14 +528,14 @@ private fun RecordingRow(
                         .background(DarkSurfaceVariant)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
-                    IconLabel(Icons.Filled.Folder, "${recording.folder}/", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold, iconSize = 12.dp)
+                    IconLabel(Icons.Filled.Folder, "${recording.folder}/", color = AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.Medium, iconSize = 12.dp)
                 }
             }
 
             Text(
                 "${recording.mediaType.replaceFirstChar { it.uppercase() }}  ·  $sizeText  ·  ${if (recording.localPath != null) "Saved on Phone (${recording.folder}/)" else "Stored on PC (${recording.folder}/)"}",
                 color = TextMuted,
-                fontSize = 11.sp
+                fontSize = 13.sp
             )
 
             if (recording.localPath != null) {
@@ -546,7 +546,7 @@ private fun RecordingRow(
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                         ) {
-                            IconLabel(Icons.Filled.PlayArrow, "Play here", fontWeight = FontWeight.Bold, iconSize = 16.dp)
+                            IconLabel(Icons.Filled.PlayArrow, "Play here", fontWeight = FontWeight.Medium, iconSize = 16.dp)
                         }
                     }
                     Button(
@@ -561,7 +561,7 @@ private fun RecordingRow(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                     ) {
-                        Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Delete", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             } else {
@@ -572,7 +572,7 @@ private fun RecordingRow(
                             enabled = connected,
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
-                        ) { IconLabel(Icons.Filled.PlayArrow, "Play on phone", fontWeight = FontWeight.Bold, iconSize = 16.dp) }
+                        ) { IconLabel(Icons.Filled.PlayArrow, "Play on phone", fontWeight = FontWeight.Medium, iconSize = 16.dp) }
                     }
                     Button(
                         onClick = { coordinator.downloadRecording(recording.id) },
@@ -586,7 +586,7 @@ private fun RecordingRow(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                     ) {
-                        Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Delete", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

@@ -132,11 +132,11 @@ fun SettingsScreen(
             ) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = AccentCyan)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Back to Controls", color = AccentCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text("Back to Controls", color = AccentCyan, fontWeight = FontWeight.Medium, fontSize = 13.sp)
             }
         }
 
-        Text("Preferences & Tuning", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text("Preferences", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Medium)
 
         // Mouse & Touchpad Card
         Card(
@@ -146,7 +146,7 @@ fun SettingsScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Touchpad & Pointer", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Touchpad and pointer", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
 
                 // Pointer Speed Slider
                 Column {
@@ -154,7 +154,7 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Pointer Speed", color = TextPrimary, fontSize = 14.sp)
+                        Text("Pointer speed", color = TextPrimary, fontSize = 14.sp)
                         Text(String.format(Locale.US, "%.1fx", pointerSpeed), color = TextSecondary, fontSize = 14.sp)
                     }
                     Slider(
@@ -174,7 +174,7 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Scroll Speed", color = TextPrimary, fontSize = 14.sp)
+                        Text("Scroll speed", color = TextPrimary, fontSize = 14.sp)
                         Text(String.format(Locale.US, "%.1fx", scrollSpeed), color = TextSecondary, fontSize = 14.sp)
                     }
                     Slider(
@@ -196,7 +196,7 @@ fun SettingsScreen(
                 ) {
                     Column {
                         Text("Natural / Invert Scroll", color = TextPrimary, fontSize = 14.sp)
-                        Text("Reverse vertical scroll direction", color = TextSecondary, fontSize = 11.sp)
+                        Text("Reverse vertical scroll direction", color = TextSecondary, fontSize = 13.sp)
                     }
                     Switch(
                         checked = invertScroll,
@@ -213,7 +213,7 @@ fun SettingsScreen(
                 ) {
                     Column {
                         Text("Tap to Click", color = TextPrimary, fontSize = 14.sp)
-                        Text("Single tap = Left Click, Double tap = Drag", color = TextSecondary, fontSize = 11.sp)
+                        Text("Single tap = Left Click, Double tap = Drag", color = TextSecondary, fontSize = 13.sp)
                     }
                     Switch(
                         checked = tapToClick,
@@ -229,8 +229,8 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("Haptic Feedback", color = TextPrimary, fontSize = 14.sp)
-                        Text("Vibrate on taps and button presses", color = TextSecondary, fontSize = 11.sp)
+                        Text("Vibrate on clicks", color = TextPrimary, fontSize = 14.sp)
+                        Text("Vibrate on taps and button presses", color = TextSecondary, fontSize = 13.sp)
                     }
                     Switch(
                         checked = hapticFeedback,
@@ -249,7 +249,7 @@ fun SettingsScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Connection & Background Sessions", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Connection", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
 
                 // Background Companion Session Switch
                 Row(
@@ -258,8 +258,8 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
-                        Text("Background Companion Session", color = TextPrimary, fontSize = 14.sp)
-                        Text("Keep live audio and camera streams connected when switching apps using a foreground notification", color = TextSecondary, fontSize = 11.sp)
+                        Text("Stay connected in the background", color = TextPrimary, fontSize = 14.sp)
+                        Text("Keep live audio and camera streams connected when switching apps using a foreground notification", color = TextSecondary, fontSize = 13.sp)
                     }
                     Switch(
                         checked = backgroundSessionEnabled,
@@ -275,8 +275,8 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
-                        Text("Automatic Reconnect", color = TextPrimary, fontSize = 14.sp)
-                        Text("Bring Wi-Fi, Bluetooth and internet links back by themselves when they drop", color = TextSecondary, fontSize = 11.sp)
+                        Text("Reconnect automatically", color = TextPrimary, fontSize = 14.sp)
+                        Text("Bring Wi-Fi, Bluetooth and internet links back by themselves when they drop", color = TextSecondary, fontSize = 13.sp)
                     }
                     Switch(
                         checked = autoReconnect,
@@ -295,7 +295,7 @@ fun SettingsScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Gyroscopic Air Mouse", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Air mouse", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
 
                 if (isGyroSupported) {
                     Column {
@@ -303,7 +303,7 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Gyro Sensitivity", color = TextPrimary, fontSize = 14.sp)
+                            Text("Air mouse sensitivity", color = TextPrimary, fontSize = 14.sp)
                             Text(String.format(Locale.US, "%.0f", airMouseSensitivity), color = TextSecondary, fontSize = 14.sp)
                         }
                         Slider(
@@ -342,9 +342,9 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Software Updates", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Text("Updates", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     }
-                    Text("v${updateManager.currentVersion}", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("v${updateManager.currentVersion}", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
 
                 Text(
@@ -380,7 +380,7 @@ fun SettingsScreen(
                         ) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), color = AccentCyan, strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text("Checking GitHub Releases...", color = TextPrimary, fontSize = 13.sp)
+                            Text("Checking for updates…", color = TextPrimary, fontSize = 13.sp)
                         }
                     }
 
@@ -397,7 +397,7 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Check Again", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Check again", color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
 
@@ -413,14 +413,14 @@ fun SettingsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("New Version: ${state.release.tagName}", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Text("New version: ${state.release.tagName}", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             }
 
                             if (state.release.releaseNotes.isNotEmpty()) {
                                 Text(
                                     state.release.releaseNotes.take(200) + if (state.release.releaseNotes.length > 200) "..." else "",
                                     color = TextSecondary,
-                                    fontSize = 11.sp
+                                    fontSize = 13.sp
                                 )
                             }
 
@@ -436,7 +436,7 @@ fun SettingsScreen(
                             ) {
                                 Icon(Icons.Default.CloudDownload, contentDescription = null, tint = DarkBackground, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Download & Install Update", color = DarkBackground, fontWeight = FontWeight.Bold)
+                                Text("Download and install", color = DarkBackground, fontWeight = FontWeight.Medium)
                             }
 
                             OutlinedButton(
@@ -446,7 +446,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Download APK in Browser", color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Download in browser", color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -457,7 +457,7 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Downloading APK Update...", color = TextPrimary, fontSize = 12.sp)
+                                Text("Downloading update…", color = TextPrimary, fontSize = 12.sp)
                                 Text(String.format(Locale.US, "%.1f / %.1f MB", state.downloadedMb, state.totalMb), color = AccentCyan, fontSize = 12.sp)
                             }
                             LinearProgressIndicator(
@@ -481,7 +481,7 @@ fun SettingsScreen(
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Install APK Now", color = DarkBackground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Install now", color = DarkBackground, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -516,11 +516,11 @@ fun SettingsScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("System Compatibility", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("About this phone", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Text("Android Version: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})", color = TextPrimary, fontSize = 12.sp)
-                Text("Device Model: ${Build.MANUFACTURER} ${Build.MODEL}", color = TextPrimary, fontSize = 12.sp)
-                Text("Bluetooth HID API: Supported (API 28+)", color = TextPrimary, fontSize = 12.sp)
-                Text("Gyroscope Sensor: ${if (isGyroSupported) "Present" else "Unavailable"}", color = TextPrimary, fontSize = 12.sp)
+                Text("Model: ${Build.MANUFACTURER} ${Build.MODEL}", color = TextPrimary, fontSize = 12.sp)
+                Text("Bluetooth mouse and keyboard: supported", color = TextPrimary, fontSize = 12.sp)
+                Text("Gyroscope: ${if (isGyroSupported) "Present" else "Unavailable"}", color = TextPrimary, fontSize = 12.sp)
             }
         }
 

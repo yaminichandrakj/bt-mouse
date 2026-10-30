@@ -181,7 +181,7 @@ fun PcTab(
         Column(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(Panel).padding(vertical = 4.dp)
         ) {
-            Row(Modifier.padding(start = 20.dp, end = 10.dp)) {
+            Row(Modifier.padding(start = 16.dp, end = 10.dp)) {
                 SectionHeader("Using the most CPU", action = "All tasks", onAction = onOpenTasks)
             }
             val top = processes.sortedByDescending { it.cpu }.take(2)
