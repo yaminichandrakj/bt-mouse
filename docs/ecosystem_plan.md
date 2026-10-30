@@ -59,9 +59,40 @@ It is **always available but never stealing input**. Input goes to exactly **one
 
 While the phone is the target, the laptop **captures** keyboard and mouse with low-level Windows hooks (`WH_KEYBOARD_LL`/`WH_MOUSE_LL` via `pynput` with suppression), so your keystrokes don't also land in laptop apps. The phone shows a coloured border and cursor, and the laptop shows a small "→ Phone" pill, so you always know which device has input. If the link drops for more than 1.5 s, control **automatically snaps back** to the laptop.
 
-Settings: turn edge-crossing on or off, choose edges and layout, choose hotkeys, pointer speed on the phone, and "lock cursor to current device".
+### Device layout editor (laptop, drag and drop)
+A **Layout** page in the companion works like Windows *Settings → Display → Arrange displays*:
+- Each laptop monitor appears as a rectangle at its real size and position, read from Qt `QScreen` geometry. Monitors are fixed and shown for reference only.
+- Each paired phone or tab appears as a rectangle at its **real aspect ratio**, which the device reports with its screen size and rotation. You **drag it so it touches any edge of any monitor**: left, right, top or bottom, at any position along that edge. It snaps to the edge when you drop it.
+- Only the shared part of the edge crosses over. For example, a phone placed against the lower half of the right edge only takes the cursor from that lower half, and the cursor's height is mapped proportionally.
+- Devices can also be docked to each other (tab to the right of the phone), so the cursor can keep going laptop → phone → tab.
+- When a phone rotates, its rectangle rotates live and the crossing maps update.
+- Other controls: a per-device "edge crossing on/off" toggle, drag a device back to the tray area to un-place it (hotkey-only), **Identify** (flashes the device's screen), and **Reset**.
+- The layout is saved per device ID in `%LOCALAPPDATA%\BTMouse\layout.json`, so it survives restarts and reconnects.
+
+Other settings: hotkeys, pointer speed on the phone, and "lock cursor to current device".
 
 ---
+
+## Always on, always connected (every device)
+
+**Today:**
+- **Laptop:** the companion starts at Windows sign-in (the self-healing `Run` entry) and keeps listening. It doesn't actively search; it waits for the phone to find it.
+- **Android:** the app only reconnects while it is open or while a stream is running (`CompanionSessionService` stops itself otherwise). Nothing restarts it after a reboot.
+
+**Planned — "Stay connected" (Android, on by default, can be turned off):**
+- `CompanionSessionService` becomes a **permanent foreground service** with a quiet, low-priority notification: "Connected to Laptop · Wi-Fi" plus Disconnect and Release-control buttons. This is the only way Android allows an app to stay alive; Android requires the notification to be shown.
+- It **starts on boot** (`RECEIVE_BOOT_COMPLETED`) and **after app updates** (`MY_PACKAGE_REPLACED`).
+- It **reconnects on its own**:
+  - listens for network changes (`ConnectivityManager.NetworkCallback`), and when Wi-Fi comes up, discovers the laptop and connects within a few seconds;
+  - when Wi-Fi drops, fails over to WAN or Bluetooth (the existing supervisor);
+  - when nothing is reachable, backs off to a probe every 60 s so it doesn't drain the battery;
+  - also reconnects when a paired Bluetooth device comes into range (`ACTION_ACL_CONNECTED`).
+- The node server (needed for laptop → phone control) lives in this same service, so the phone is always ready to be controlled.
+- **Battery:** idle is just a heartbeat every 15 s. Screen and camera streams run only on demand. A first-run card asks you to set the app's battery use to "Unrestricted" (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`), because otherwise Xiaomi, Oppo, Vivo and Samsung kill background apps. The card includes brand-specific instructions for those phones.
+
+**Laptop side — searches actively too:**
+- Besides listening, the companion **announces itself** every 5 s on the LAN (UDP and mDNS) and **connects outward** to known Android nodes it discovers. Whichever device comes up first, they find each other.
+- It keeps starting at sign-in, minimised to the tray. A **Windows service** variant (works before sign-in) is not planned, because input capture and the clipboard need a signed-in desktop.
 
 ## Item 2 — One ecosystem: any device controls any device
 
@@ -149,7 +180,7 @@ Ordered so each release is useful on its own, with the riskiest Android pieces f
 
 | Release | Contents | Main files |
 |---|---|---|
-| **v1.6 — Laptop → phone control** | Android AccessibilityService (cursor overlay and gestures) and input method; PC input capture with hooks; edge crossing, hotkeys, panic key, tray toggle; auto-return on disconnect; setup guide card. | New `control/BtMouseControlService.kt`, `control/BtMouseImeService.kt`, `control/RemoteInputInjector.kt`; PC new `input_share.py`; `server.py` dispatch; `app_gui.py` Connect page and tray. |
+| **v1.6 — Laptop → phone control + always connected** | Android AccessibilityService (cursor overlay and gestures) and input method; PC input capture with hooks; **drag-and-drop layout editor**, edge crossing, hotkeys, panic key, tray toggle; auto-return on disconnect; **"Stay connected" service with start on boot, network-change reconnect and battery card; PC announce + outward connect**; setup guide card. | New `control/BtMouseControlService.kt`, `control/BtMouseImeService.kt`, `control/RemoteInputInjector.kt`; PC new `input_share.py`; `server.py` dispatch; `app_gui.py` Layout page, Connect page and tray; `CompanionSessionService.kt`, new `BootReceiver.kt`. |
 | **v1.7 — Clipboard and files** | Clipboard sync (auto laptop → phone; tile, share and foreground for phone → laptop); file send and receive with resume; Android share target; Explorer SendTo; transfers page on both sides. | New `sync/ClipboardSync.kt`, `sync/FileTransfer.kt`, `ShareReceiverActivity`; PC new `clipboard_sync.py`, `file_transfer.py`. |
 | **v1.8 — Nodes and identity** | Stable device ID, names, capability announce, mDNS; Android node server; session registry and per-device permissions; `from`/`to` routing and relay; Android "Show pairing QR"; Phone ↔ Tab control, clipboard and files without a laptop. | New `node/NodeServer.kt`, `node/NodeRegistry.kt`, `node/Discovery.kt`; PC `node_registry.py`; `ConnectionCoordinator.kt` target picker. |
 | **v1.9 — Streams hub** | Publish/subscribe for camera, screen and mic on every node; Android screen capture; multi-viewer fan-out; Live page; record any stream. | `PhoneCameraStreamer.kt` → `streams/StreamPublisher.kt`; new `streams/ScreenCaptureSource.kt`; PC `streams.py`. |
