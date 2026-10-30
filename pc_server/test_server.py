@@ -1094,5 +1094,72 @@ class WanQrWiringTests(unittest.TestCase):
         self.assertIn("QTimer.singleShot(1500, self._restore_tunnel)", gui)
 
 
+class ScreenPreviewTests(unittest.TestCase):
+    TOKEN = "123456"
+
+    def make_server(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = self.TOKEN
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._camera_stream_owner_lock = threading.Lock()
+        instance.live_audio_manager = Mock()
+        instance.mouse = SimpleNamespace(position=(40, 30))
+        return instance
+
+    def query(self, instance, **extra):
+        responses = []
+        with patch.object(server, "capture_screen_preview", return_value=("QUJD", 960, 540)) as capture, \
+                patch.object(server.threading, "Thread", side_effect=lambda target, **_: SimpleNamespace(start=target)):
+            instance.handle_packet(dict({"type": "screen_query", "token": self.TOKEN}, **extra),
+                                   ("127.0.0.1", 9999), responses.append)
+        return responses, capture
+
+    def test_screen_query_returns_frame_with_pointer_position(self):
+        instance = self.make_server()
+        responses, capture = self.query(instance, max_width=640, max_bytes=30000)
+        self.assertEqual(responses, [{"type": "screen_frame", "frame": "QUJD", "width": 960, "height": 540}])
+        capture.assert_called_once_with((40, 30), 640, 30000)
+        self.assertTrue(instance.screen_viewer_active())
+
+    def test_screen_query_refused_when_preview_is_off(self):
+        instance = self.make_server()
+        instance.screen_preview_allowed = False
+        responses, capture = self.query(instance)
+        capture.assert_not_called()
+        self.assertIn("turned off", responses[0]["error"])
+
+    def test_stop_sharing_holds_until_phone_resumes(self):
+        instance = self.make_server()
+        instance.stop_screen_sharing()
+        self.assertFalse(instance.screen_viewer_active())
+        responses, capture = self.query(instance)
+        capture.assert_not_called()
+        self.assertIn("stopped", responses[0]["error"])
+        responses, capture = self.query(instance, resume=True)
+        self.assertEqual(responses[0]["frame"], "QUJD")
+
+    def test_unauthorized_screen_query_captures_nothing(self):
+        instance = self.make_server()
+        responses = []
+        with patch.object(server, "capture_screen_preview") as capture:
+            instance.handle_packet({"type": "screen_query", "token": "000000"}, ("127.0.0.1", 9999), responses.append)
+        capture.assert_not_called()
+
+    def test_encoded_frame_fits_one_datagram(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        noisy = Image.effect_noise((1920, 1080), 90).convert("RGB")
+        frame, width, height = server.encode_screen_preview(noisy, cursor=(100, 100), max_width=1920, max_base64=20000)
+        self.assertLessEqual(len(frame), 20000)
+        self.assertLessEqual(width, 1920)
+        self.assertEqual(round(width * 1080 / 1920), height)
+        payload = json.dumps({"type": "screen_frame", "frame": "x" * server.SCREEN_FRAME_MAX_BASE64, "width": 9999, "height": 9999})
+        self.assertLess(len(payload), 60000)
+
+
 if __name__ == "__main__":
     unittest.main()
