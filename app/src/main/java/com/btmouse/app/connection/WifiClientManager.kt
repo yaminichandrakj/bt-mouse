@@ -59,6 +59,8 @@ class WifiClientManager(
     var nextSeqSupplier: (() -> Long)? = null
 
     private val _mediaStatus = MutableStateFlow(MediaStatus())
+    private val _screenFrame = MutableStateFlow<ScreenFrame?>(null)
+    override val screenFrame: StateFlow<ScreenFrame?> = _screenFrame.asStateFlow()
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
 
     private val _systemStats = MutableStateFlow<SystemStats?>(null)
@@ -219,6 +221,7 @@ class WifiClientManager(
                 "error" -> {
                     _statusMessage.value = json.get("message")?.asString ?: "PC server could not complete the request"
                 }
+                "screen_frame" -> { _screenFrame.value = ScreenFrame.fromJson(json) }
                 "media_status" -> {
                     val hasMedia = json.get("has_media")?.asBoolean ?: false
                     val title = json.get("title")?.asString ?: ""
@@ -798,6 +801,13 @@ class WifiClientManager(
     override fun queryMedia(includePreview: Boolean, includeVideoPreview: Boolean) {
         sendPacket(
             mapOf("type" to "media_query", "include_preview" to includePreview, "include_video_preview" to includeVideoPreview),
+            includeSeq = false
+        )
+    }
+
+    override fun queryScreen(maxWidth: Int, maxBytes: Int, resume: Boolean) {
+        sendPacket(
+            mapOf("type" to "screen_query", "max_width" to maxWidth, "max_bytes" to maxBytes, "resume" to resume),
             includeSeq = false
         )
     }

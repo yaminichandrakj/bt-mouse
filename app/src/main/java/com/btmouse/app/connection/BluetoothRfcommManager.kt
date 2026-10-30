@@ -70,6 +70,8 @@ class BluetoothRfcommManager(
         private set
 
     private val _mediaStatus = MutableStateFlow(MediaStatus())
+    private val _screenFrame = MutableStateFlow<ScreenFrame?>(null)
+    override val screenFrame: StateFlow<ScreenFrame?> = _screenFrame.asStateFlow()
     override val mediaStatus: StateFlow<MediaStatus> = _mediaStatus.asStateFlow()
 
     private val _systemStats = MutableStateFlow<SystemStats?>(null)
@@ -283,6 +285,7 @@ class BluetoothRfcommManager(
                         _isConnectionHealthy.value = true
                     }
                 }
+                "screen_frame" -> { _screenFrame.value = ScreenFrame.fromJson(root) }
                 "media_status" -> {
                     val hasMedia = root.get("has_media")?.asBoolean ?: false
                     val title = root.get("title")?.asString ?: ""
@@ -597,6 +600,16 @@ class BluetoothRfcommManager(
             addProperty("type", "media_query")
             addProperty("include_preview", includePreview)
             addProperty("include_video_preview", includeVideoPreview)
+        }
+        sendJson(obj, includeSeq = false)
+    }
+
+    override fun queryScreen(maxWidth: Int, maxBytes: Int, resume: Boolean) {
+        val obj = JsonObject().apply {
+            addProperty("type", "screen_query")
+            addProperty("max_width", maxWidth)
+            addProperty("max_bytes", maxBytes)
+            addProperty("resume", resume)
         }
         sendJson(obj, includeSeq = false)
     }

@@ -82,6 +82,69 @@ def capture_selected_media_preview():
         return ""
 
 
+SCREEN_PREVIEW_SETTINGS_PATH = PAIRING_PIN_PATH.with_name("screen_preview.json")
+# A screen frame must fit one UDP datagram (60000 bytes) once wrapped in JSON.
+SCREEN_FRAME_MAX_BASE64 = 56000
+
+
+def load_screen_preview_allowed():
+    """Whether a paired phone may view this PC's screen. On unless the user turned it off."""
+    try:
+        return bool(json.loads(SCREEN_PREVIEW_SETTINGS_PATH.read_text(encoding="utf-8")).get("allowed", True))
+    except Exception:
+        return True
+
+
+def save_screen_preview_allowed(allowed):
+    SCREEN_PREVIEW_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SCREEN_PREVIEW_SETTINGS_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"allowed": bool(allowed)}), encoding="utf-8")
+    os.replace(temporary, SCREEN_PREVIEW_SETTINGS_PATH)
+
+
+def _draw_cursor(image, x, y):
+    """Screen grabs omit the pointer, so draw an arrow where it is."""
+    from PIL import ImageDraw
+    size = max(14, image.width // 60)
+    points = [(0, 0), (0, 1.0), (0.28, 0.76), (0.46, 1.12), (0.6, 1.05), (0.42, 0.7), (0.75, 0.7)]
+    shape = [(x + px * size, y + py * size) for px, py in points]
+    ImageDraw.Draw(image).polygon(shape, fill=(255, 255, 255), outline=(0, 0, 0))
+
+
+def encode_screen_preview(image, cursor=None, max_width=960, max_base64=48000):
+    """Scale and JPEG-encode a screen image, lowering quality and size until it fits max_base64."""
+    from PIL import Image
+    from io import BytesIO
+    image = image.convert("RGB")
+    if cursor is not None:
+        _draw_cursor(image, int(cursor[0]), int(cursor[1]))
+    width = max(160, min(int(max_width), image.width))
+    max_base64 = max(4000, min(int(max_base64), SCREEN_FRAME_MAX_BASE64))
+    while True:
+        scaled = image
+        if image.width > width:
+            scaled = image.resize((width, max(1, round(image.height * width / image.width))), Image.Resampling.LANCZOS)
+        for quality in (62, 50, 40, 32, 25):
+            stream = BytesIO()
+            scaled.save(stream, format="JPEG", quality=quality, optimize=True)
+            encoded = base64.b64encode(stream.getvalue()).decode("ascii")
+            if len(encoded) <= max_base64:
+                return encoded, scaled.width, scaled.height
+        if width <= 240:
+            return encoded, scaled.width, scaled.height
+        width = int(width * 0.75)
+
+
+def capture_screen_preview(cursor=None, max_width=960, max_base64=48000):
+    """Capture the primary screen with the pointer drawn in, sized to fit one response."""
+    try:
+        from PIL import ImageGrab
+        return encode_screen_preview(ImageGrab.grab(), cursor, max_width, max_base64)
+    except Exception as exc:
+        print(f"[-] Screen preview capture failed: {exc}")
+        return "", 0, 0
+
+
 def prepare_recording_storage(directory, retention_days=0, max_storage_mb=0, min_free_mb=512,
                               protected_paths=()):
     """Apply user-selected retention without touching active files; reject new capture below free-space floor."""
@@ -2865,6 +2928,10 @@ class Server:
         self._camera_stream_owner = None
         self._camera_stream_owner_lock = threading.Lock()
         self._media_operation_lock = threading.Lock()
+        self._screen_capture_lock = threading.Lock()
+        self._last_screen_query_at = 0.0
+        self._screen_sharing_stopped = False
+        self.screen_preview_allowed = load_screen_preview_allowed()
         self.auto_record_audio_with_video = True
         self._camera_auto_audio_recording = False
         self.on_pc_cam_frame_callback = None
@@ -3297,7 +3364,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.4.4"
+                    "version": "1.5.0"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -3511,6 +3578,17 @@ class Server:
                 include_preview=bool(data.get("include_preview", False)),
                 include_video_preview=bool(data.get("include_video_preview", False)),
             )
+
+        elif cmd_type == "screen_query":
+            self._last_screen_query_at = time.time()
+            if data.get("resume"):
+                self._screen_sharing_stopped = False
+            if not getattr(self, "screen_preview_allowed", True):
+                respond({"type": "screen_frame", "error": "Screen preview is turned off on the PC"})
+            elif getattr(self, "_screen_sharing_stopped", False):
+                respond({"type": "screen_frame", "error": "Sharing was stopped on the PC"})
+            else:
+                self._respond_screen_frame(data, respond)
 
         elif cmd_type == "media_seek":
             pos = float(data.get("position", 0.0))
@@ -3828,6 +3906,48 @@ class Server:
         elif cmd_type == "media":
             code = data.get("code")
             self._execute_media(code)
+
+    def _respond_screen_frame(self, data, respond):
+        """Capture off the input loop; drop the request if a capture is already running."""
+        lock = getattr(self, "_screen_capture_lock", None)
+        if lock is None:
+            lock = self._screen_capture_lock = threading.Lock()
+        if not lock.acquire(blocking=False):
+            return
+        max_width = int(data.get("max_width", 960) or 960)
+        max_base64 = int(data.get("max_bytes", 48000) or 48000)
+
+        def _run():
+            try:
+                cursor = None
+                mouse = getattr(self, "mouse", None)
+                if mouse is not None:
+                    try:
+                        cursor = mouse.position
+                    except Exception:
+                        cursor = None
+                frame, width, height = capture_screen_preview(cursor, max_width, max_base64)
+                if frame:
+                    respond({"type": "screen_frame", "frame": frame, "width": width, "height": height})
+                else:
+                    respond({"type": "screen_frame", "error": "Could not capture the screen"})
+            finally:
+                lock.release()
+
+        threading.Thread(target=_run, name="ScreenPreview", daemon=True).start()
+
+    def screen_viewer_active(self, within_seconds=4.0):
+        """True while a phone is polling for screen frames."""
+        return (not getattr(self, "_screen_sharing_stopped", False)
+                and time.time() - getattr(self, "_last_screen_query_at", 0.0) < within_seconds)
+
+    def stop_screen_sharing(self):
+        """Refuse frames until the phone turns its screen view off and on again."""
+        self._screen_sharing_stopped = True
+
+    def set_screen_preview_allowed(self, allowed):
+        self.screen_preview_allowed = bool(allowed)
+        save_screen_preview_allowed(allowed)
 
     def _send_udp_json(self, resp_dict, addr):
         try:

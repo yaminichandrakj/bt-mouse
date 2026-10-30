@@ -2,26 +2,47 @@ package com.btmouse.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Unified Windows 11 Fluent & Material 3 Obsidian Dark Palette
-val DarkBackground = Color(0xFF0B0F17)
-val DarkSurface = Color(0xFF151C28)
-val DarkSurfaceVariant = Color(0xFF1C2536)
-val DarkHeaderSurface = Color(0xFF111622)
-val DarkBorder = Color(0xFF263248)
+// Dark monochrome palette shared with the desktop companion: black ground, tonal greys,
+// white for what is selected or primary, and colour only for status.
+val Ink = Color(0xFF000000)
+val Raised = Color(0xFF0E0E0F)
+val Panel = Color(0xFF141415)
+val Control = Color(0xFF1B1B1C)
+val ControlHigh = Color(0xFF1F1F21)
+val Selected = Color(0xFF2E2E30)
+val SelectedSegment = Color(0xFF333436)
+val Hairline = Color(0xFF2A2B2D)
+val Outline = Color(0xFF3C3D3F)
+val OnInk = Color(0xFFE8E8E8)
+val OnInkSoft = Color(0xFFC8C8C8)
+val OnInkMuted = Color(0xFFABABAB)
+val OnInkFaint = Color(0xFF8E8E8E)
+val StatusGreen = Color(0xFF6DD58C)
+val StatusRed = Color(0xFFE46962)
+val StatusRedText = Color(0xFFF2B8B5)
+val DangerContainer = Color(0xFF8C1D18)
+val OnDanger = Color(0xFFF9DEDC)
 
-val PrimaryIndigo = Color(0xFF6366F1)
-val PrimaryIndigoVariant = Color(0xFF4F46E5)
-val AccentCyan = Color(0xFF38BDF8)
-val AccentTeal = Color(0xFF14B8A6)
-val AccentEmerald = Color(0xFF10B981)
-val AccentRose = Color(0xFFF43F5E)
-val AccentAmber = Color(0xFFF59E0B)
+// Older names, kept so every screen picks up the new palette.
+val DarkBackground = Ink
+val DarkSurface = Panel
+val DarkSurfaceVariant = Control
+val DarkHeaderSurface = Raised
+val DarkBorder = Hairline
 
-val TextPrimary = Color(0xFFF8FAFC)
-val TextSecondary = Color(0xFFCBD5E1)
-val TextMuted = Color(0xFF94A3B8)
+val PrimaryIndigo = Selected
+val PrimaryIndigoVariant = SelectedSegment
+val AccentCyan = OnInk
+val AccentTeal = OnInkSoft
+val AccentEmerald = StatusGreen
+val AccentRose = StatusRed
+val AccentAmber = Color(0xFFF2C46D)
 
-val TrackpadBackground = Color(0xFF0E1420)
-val TrackpadBorder = Color(0xFF263248)
-val ButtonDark = Color(0xFF1E293B)
-val ButtonPressed = Color(0xFF2B3A55)
+val TextPrimary = OnInk
+val TextSecondary = OnInkSoft
+val TextMuted = OnInkMuted
+
+val TrackpadBackground = Panel
+val TrackpadBorder = Hairline
+val ButtonDark = Control
+val ButtonPressed = Selected

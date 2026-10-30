@@ -79,6 +79,8 @@ import com.btmouse.app.connection.RecordingEntry
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.ChipIcon
 import com.btmouse.app.ui.components.IconLabel
+import com.btmouse.app.ui.theme.OnDanger
+import com.btmouse.app.ui.theme.DangerContainer
 import com.btmouse.app.ui.theme.AccentAmber
 import com.btmouse.app.ui.theme.AccentCyan
 import com.btmouse.app.ui.theme.AccentEmerald
@@ -92,97 +94,6 @@ import com.btmouse.app.ui.theme.TextMuted
 import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 import java.io.File
-
-/**
- * Dedicated top-level Cameras & Live Audio Studio screen so users don't have to hunt
- * inside utilities to broadcast their phone camera or view the PC webcam.
- */
-@Composable
-fun CamerasAndAudioScreen(coordinator: ConnectionCoordinator) {
-    var activeTab by remember { mutableStateOf("phone_cam") }
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(DarkSurface)
-                .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
-                .padding(6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(
-                Triple("phone_cam", "Phone webcam", Icons.Filled.PhoneAndroid),
-                Triple("pc_cam", "PC webcam", Icons.Filled.Computer),
-                Triple("audio", "Live audio", Icons.Filled.Mic),
-                Triple("all", "All", Icons.Filled.Tune)
-            ).forEach { (key, label, icon) ->
-                val selected = activeTab == key
-                FilterChip(
-                    selected = selected,
-                    onClick = { activeTab = key },
-                    leadingIcon = { ChipIcon(icon) },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.38f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurfaceVariant,
-                        labelColor = TextPrimary
-                    )
-                )
-            }
-        }
-
-        CameraAndRecorderSection(coordinator = coordinator, initialTab = activeTab)
-    }
-}
-
-@Composable
-fun UtilitiesScreen(coordinator: ConnectionCoordinator, settings: SettingsRepository) {
-    var activeSection by remember { mutableStateOf("recordings") }
-    val hapticsEnabled by settings.hapticFeedback.collectAsState()
-    Column(
-        modifier = Modifier.fillMaxSize().padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            listOf(
-                Triple("recordings", "Media library", Icons.Filled.VideoLibrary),
-                Triple("apps", "Quick apps", Icons.Filled.Apps),
-                Triple("tasks", "Tasks & stats", Icons.Filled.Insights),
-                Triple("power", "Power & lock", Icons.Filled.PowerSettingsNew)
-            ).forEach { (key, label, icon) ->
-                val selected = activeSection == key
-                FilterChip(
-                    selected = selected,
-                    onClick = { activeSection = key },
-                    leadingIcon = { ChipIcon(icon) },
-                    label = { Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = PrimaryIndigo.copy(alpha = 0.35f),
-                        selectedLabelColor = AccentCyan,
-                        containerColor = DarkSurface,
-                        labelColor = TextPrimary
-                    )
-                )
-            }
-        }
-        when (activeSection) {
-            "tasks" -> TasksAndHardwareSection(coordinator)
-            "recordings" -> RecordingLibrarySection(coordinator)
-            "power" -> PowerAndUnlockSection(coordinator)
-            else -> QuickAppsSection(coordinator, settings, hapticsEnabled)
-        }
-    }
-}
 
 @Composable
 fun LiveAudioSection(coordinator: ConnectionCoordinator) {
@@ -282,7 +193,7 @@ fun LiveAudioSection(coordinator: ConnectionCoordinator) {
 }
 
 @Composable
-private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
+internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
     val context = LocalContext.current
     val recordings = coordinator.recordings.collectAsState().value
     val status = coordinator.recordingTransferStatus.collectAsState().value
@@ -354,7 +265,7 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                     Text("Fullscreen Playback", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                     Button(
                         onClick = { isFullscreenPlayer = false },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose),
+                        colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text("Exit Fullscreen", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -399,7 +310,7 @@ private fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                                     coordinator.stopRecordingStream()
                                 },
                                 shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                                colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                             ) {
                                 IconLabel(Icons.Filled.Close, "Close", fontWeight = FontWeight.Bold, iconSize = 16.dp)
                             }
@@ -564,7 +475,7 @@ private fun RecordingRow(
                         showDeleteConfirm = false
                         coordinator.deleteRecording(recording.id)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                    colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                 ) { Text("Delete", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             },
             dismissButton = {
@@ -648,7 +559,7 @@ private fun RecordingRow(
                     Button(
                         onClick = { showDeleteConfirm = true },
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                        colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                     ) {
                         Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
@@ -673,7 +584,7 @@ private fun RecordingRow(
                         onClick = { showDeleteConfirm = true },
                         enabled = connected,
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentRose)
+                        colors = ButtonDefaults.buttonColors(containerColor = DangerContainer, contentColor = OnDanger)
                     ) {
                         Text("Delete", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }

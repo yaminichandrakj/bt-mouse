@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ import com.btmouse.app.ui.theme.TextSecondary
 fun MouseButton(
     modifier: Modifier = Modifier,
     label: String,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(14.dp),
     buttonMask: Int,
     hapticsEnabled: Boolean = true,
     isAccent: Boolean = false,
@@ -49,20 +51,13 @@ fun MouseButton(
     val view = LocalView.current
     var isPressed by remember { mutableStateOf(false) }
 
-    val bgColor = if (isPressed) {
-        if (isAccent) PrimaryIndigo else ButtonPressed
-    } else {
-        ButtonDark
-    }
-
-    val borderColor = if (isPressed) AccentCyan else DarkBorder
+    val bgColor = if (isPressed) ButtonPressed else ButtonDark
 
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(shape)
             .background(bgColor)
-            .border(1.2.dp, borderColor, RoundedCornerShape(14.dp))
             .pointerInteropFilter { event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
@@ -83,9 +78,9 @@ fun MouseButton(
     ) {
         Text(
             text = label,
-            color = if (isPressed) TextPrimary else TextSecondary,
-            fontWeight = if (isPressed) FontWeight.Bold else FontWeight.SemiBold,
-            fontSize = 14.sp,
+            color = TextPrimary,
+            fontWeight = FontWeight.Normal,
+            fontSize = 16.sp,
             maxLines = 1,
             softWrap = false
         )
@@ -101,32 +96,29 @@ fun MouseButtonsBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp),
+            .height(60.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Left Click
         MouseButton(
-            modifier = Modifier.weight(1.3f),
+            modifier = Modifier.weight(1f),
             label = "Left",
+            shape = RoundedCornerShape(topStart = 26.dp, bottomStart = 26.dp, topEnd = 10.dp, bottomEnd = 10.dp),
             buttonMask = HidConstants.MOUSE_BUTTON_LEFT,
             hapticsEnabled = hapticsEnabled,
-            isAccent = true,
             onButtonChange = onButtonChange
         )
-
-        // Middle Click
         MouseButton(
-            modifier = Modifier.weight(0.9f),
-            label = "Middle",
+            modifier = Modifier.width(60.dp),
+            label = "•",
+            shape = RoundedCornerShape(10.dp),
             buttonMask = HidConstants.MOUSE_BUTTON_MIDDLE,
             hapticsEnabled = hapticsEnabled,
             onButtonChange = onButtonChange
         )
-
-        // Right Click
         MouseButton(
-            modifier = Modifier.weight(1.3f),
+            modifier = Modifier.weight(1f),
             label = "Right",
+            shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp, topEnd = 26.dp, bottomEnd = 26.dp),
             buttonMask = HidConstants.MOUSE_BUTTON_RIGHT,
             hapticsEnabled = hapticsEnabled,
             onButtonChange = onButtonChange

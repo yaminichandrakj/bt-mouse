@@ -874,7 +874,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.4.4")
+        self.assertEqual(app_gui.APP_VERSION, "1.5.0")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -1088,10 +1088,103 @@ class WanQrWiringTests(unittest.TestCase):
 
     def test_one_pair_page_replaces_separate_connection_pages(self):
         gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertIn('("Pair a device", "link", self._create_pair_page)', gui)
+        self.assertIn('("Connect", "link", self._create_pair_page)', gui)
         for removed in ("_create_wifi_page", "_create_bt_page", "_create_wan_page", "wan_qr_label"):
             self.assertNotIn(removed, gui)
         self.assertIn("QTimer.singleShot(1500, self._restore_tunnel)", gui)
+
+
+class CompanionLayoutTests(unittest.TestCase):
+    def test_sidebar_pages_and_no_drawing_slate(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        for page in ('("Phone camera", "camera", self._create_phone_cam_page)',
+                     '("Webcam && apps", "video", self._create_desktop_page)',
+                     '("Library", "library", self._create_recordings_page)',
+                     '("Activity", "pulse", self._create_logs_page)',
+                     '("Settings", "settings", self._create_settings_page)'):
+            self.assertIn(page, gui)
+        for removed in ("_create_tablet_page", "Drawing slate", "open_paint"):
+            self.assertNotIn(removed, gui)
+
+    def test_screen_sharing_banner_and_setting_are_wired(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("self.server.stop_screen_sharing()", gui)
+        self.assertIn("self.server.set_screen_preview_allowed(allowed)", gui)
+        self.assertIn("self._refresh_screen_banner()", gui)
+
+    def test_bundled_inter_fonts_ship_with_the_companion(self):
+        here = Path(__file__).parent
+        spec = (here / "BT-Mouse-Companion.spec").read_text(encoding="utf-8")
+        for name in ("inter_regular.ttf", "inter_medium.ttf", "inter_semibold.ttf"):
+            self.assertTrue((here / "fonts" / name).is_file(), name)
+            self.assertIn(f"fonts/{name}", spec)
+
+
+class ScreenPreviewTests(unittest.TestCase):
+    TOKEN = "123456"
+
+    def make_server(self):
+        instance = object.__new__(server.Server)
+        instance.auth_token = self.TOKEN
+        instance.auth_failures = {}
+        instance.connected_client = None
+        instance.on_packet_callback = None
+        instance._camera_stream_owner_lock = threading.Lock()
+        instance.live_audio_manager = Mock()
+        instance.mouse = SimpleNamespace(position=(40, 30))
+        return instance
+
+    def query(self, instance, **extra):
+        responses = []
+        with patch.object(server, "capture_screen_preview", return_value=("QUJD", 960, 540)) as capture, \
+                patch.object(server.threading, "Thread", side_effect=lambda target, **_: SimpleNamespace(start=target)):
+            instance.handle_packet(dict({"type": "screen_query", "token": self.TOKEN}, **extra),
+                                   ("127.0.0.1", 9999), responses.append)
+        return responses, capture
+
+    def test_screen_query_returns_frame_with_pointer_position(self):
+        instance = self.make_server()
+        responses, capture = self.query(instance, max_width=640, max_bytes=30000)
+        self.assertEqual(responses, [{"type": "screen_frame", "frame": "QUJD", "width": 960, "height": 540}])
+        capture.assert_called_once_with((40, 30), 640, 30000)
+        self.assertTrue(instance.screen_viewer_active())
+
+    def test_screen_query_refused_when_preview_is_off(self):
+        instance = self.make_server()
+        instance.screen_preview_allowed = False
+        responses, capture = self.query(instance)
+        capture.assert_not_called()
+        self.assertIn("turned off", responses[0]["error"])
+
+    def test_stop_sharing_holds_until_phone_resumes(self):
+        instance = self.make_server()
+        instance.stop_screen_sharing()
+        self.assertFalse(instance.screen_viewer_active())
+        responses, capture = self.query(instance)
+        capture.assert_not_called()
+        self.assertIn("stopped", responses[0]["error"])
+        responses, capture = self.query(instance, resume=True)
+        self.assertEqual(responses[0]["frame"], "QUJD")
+
+    def test_unauthorized_screen_query_captures_nothing(self):
+        instance = self.make_server()
+        responses = []
+        with patch.object(server, "capture_screen_preview") as capture:
+            instance.handle_packet({"type": "screen_query", "token": "000000"}, ("127.0.0.1", 9999), responses.append)
+        capture.assert_not_called()
+
+    def test_encoded_frame_fits_one_datagram(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        noisy = Image.effect_noise((1920, 1080), 90).convert("RGB")
+        frame, width, height = server.encode_screen_preview(noisy, cursor=(100, 100), max_width=1920, max_base64=20000)
+        self.assertLessEqual(len(frame), 20000)
+        self.assertLessEqual(width, 1920)
+        self.assertEqual(round(width * 1080 / 1920), height)
+        payload = json.dumps({"type": "screen_frame", "frame": "x" * server.SCREEN_FRAME_MAX_BASE64, "width": 9999, "height": 9999})
+        self.assertLess(len(payload), 60000)
 
 
 if __name__ == "__main__":

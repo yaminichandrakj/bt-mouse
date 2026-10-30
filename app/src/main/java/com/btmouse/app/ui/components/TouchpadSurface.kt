@@ -52,6 +52,7 @@ fun TouchpadSurface(
     invertScroll: Boolean = false,
     tapToClick: Boolean = true,
     hapticsEnabled: Boolean = true,
+    hint: String = "Move with one finger · tap to click\nTwo fingers to scroll · double-tap and hold to drag",
     onMouseMove: (dx: Int, dy: Int, buttons: Int, vScroll: Int, hScroll: Int) -> Unit,
     onMouseButton: (buttons: Int) -> Unit
 ) {
@@ -83,14 +84,14 @@ fun TouchpadSurface(
     val activeBorderColor = when {
         isDraggingSelection -> AccentCyan
         touchPoints.isNotEmpty() -> PrimaryIndigo.copy(alpha = 0.85f)
-        else -> DarkBorder
+        else -> TrackpadBackground
     }
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(28.dp))
             .background(TrackpadBackground)
-            .border(1.5.dp, activeBorderColor, RoundedCornerShape(22.dp))
+            .border(1.dp, activeBorderColor, RoundedCornerShape(28.dp))
             .pointerInteropFilter { motionEvent ->
                 val pointerCount = motionEvent.pointerCount
                 if (pointerCount > maxPointerCount) {
@@ -283,13 +284,15 @@ fun TouchpadSurface(
         // Subtle Gesture Legend at Bottom of Trackpad
         Text(
             text = if (isDraggingSelection) {
-                "● DRAG LOCK ACTIVE — Lift finger to release"
+                "Dragging · lift your finger to let go"
             } else {
-                "1-Tap: Left  ·  2-Tap: Right  ·  2-Finger Slide: Scroll  ·  Double-Tap Hold: Drag"
+                hint
             },
-            color = if (isDraggingSelection) AccentCyan else TextMuted.copy(alpha = 0.65f),
-            fontSize = 10.sp,
-            fontWeight = if (isDraggingSelection) FontWeight.Bold else FontWeight.Medium,
+            color = if (isDraggingSelection) AccentCyan else TextMuted.copy(alpha = 0.8f),
+            fontSize = 13.sp,
+            lineHeight = 20.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            fontWeight = if (isDraggingSelection) FontWeight.Medium else FontWeight.Normal,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 14.dp, vertical = 10.dp)

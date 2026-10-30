@@ -50,11 +50,11 @@ fun VirtualScrollWheel(
 
     Box(
         modifier = modifier
-            .width(46.dp)
+            .width(40.dp)
             .fillMaxHeight()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(DarkSurface)
-            .border(1.5.dp, if (isTouching) AccentCyan else DarkBorder, RoundedCornerShape(18.dp))
+            .border(1.dp, if (isTouching) com.btmouse.app.ui.theme.Outline else DarkSurface, RoundedCornerShape(20.dp))
             .pointerInteropFilter { motionEvent ->
                 when (motionEvent.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
