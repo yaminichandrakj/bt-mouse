@@ -1088,10 +1088,36 @@ class WanQrWiringTests(unittest.TestCase):
 
     def test_one_pair_page_replaces_separate_connection_pages(self):
         gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertIn('("Pair a device", "link", self._create_pair_page)', gui)
+        self.assertIn('("Connect", "link", self._create_pair_page)', gui)
         for removed in ("_create_wifi_page", "_create_bt_page", "_create_wan_page", "wan_qr_label"):
             self.assertNotIn(removed, gui)
         self.assertIn("QTimer.singleShot(1500, self._restore_tunnel)", gui)
+
+
+class CompanionLayoutTests(unittest.TestCase):
+    def test_sidebar_pages_and_no_drawing_slate(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        for page in ('("Phone camera", "camera", self._create_phone_cam_page)',
+                     '("Webcam && apps", "video", self._create_desktop_page)',
+                     '("Library", "library", self._create_recordings_page)',
+                     '("Activity", "pulse", self._create_logs_page)',
+                     '("Settings", "settings", self._create_settings_page)'):
+            self.assertIn(page, gui)
+        for removed in ("_create_tablet_page", "Drawing slate", "open_paint"):
+            self.assertNotIn(removed, gui)
+
+    def test_screen_sharing_banner_and_setting_are_wired(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("self.server.stop_screen_sharing()", gui)
+        self.assertIn("self.server.set_screen_preview_allowed(allowed)", gui)
+        self.assertIn("self._refresh_screen_banner()", gui)
+
+    def test_bundled_inter_fonts_ship_with_the_companion(self):
+        here = Path(__file__).parent
+        spec = (here / "BT-Mouse-Companion.spec").read_text(encoding="utf-8")
+        for name in ("inter_regular.ttf", "inter_medium.ttf", "inter_semibold.ttf"):
+            self.assertTrue((here / "fonts" / name).is_file(), name)
+            self.assertIn(f"fonts/{name}", spec)
 
 
 class ScreenPreviewTests(unittest.TestCase):

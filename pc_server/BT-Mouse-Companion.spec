@@ -2,7 +2,7 @@
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('icon.ico', '.'), ('icon.png', '.')]
+datas = [('icon.ico', '.'), ('icon.png', '.'), ('fonts/inter_regular.ttf', 'fonts'), ('fonts/inter_medium.ttf', 'fonts'), ('fonts/inter_semibold.ttf', 'fonts')]
 binaries = []
 hiddenimports = []
 
