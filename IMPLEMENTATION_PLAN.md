@@ -38,6 +38,10 @@ Source status below distinguishes CI/build verification from physical-device ver
 - Android camera/microphone use is user-started and permission-aware. Background/locked-screen operation is subject to Android foreground-service and permission rules.
 - Do not bump versions or publish until the release gates pass.
 
+## Next: device ecosystem (v1.6 → v2.0)
+
+Laptop → phone control, laptop + tab + phone as equal nodes, synced clipboard and file transfer, Android-only mode, any-to-any A/V streams, and one shared recordings library. Full plan: [`docs/ecosystem_plan.md`](docs/ecosystem_plan.md).
+
 ## Phased implementation plan
 
 ### Phase 1 - Dedicated media directories (`Videos`, `Audios`, `Snapshots`), recordings manager, muxed MP4 recording, and deletion (Completed in v1.3.11, Upgraded in v1.4.0)
