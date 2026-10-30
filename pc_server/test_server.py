@@ -1120,6 +1120,26 @@ class CompanionLayoutTests(unittest.TestCase):
             self.assertIn(f"fonts/{name}", spec)
 
 
+class InstalledAppsPartsTests(unittest.TestCase):
+    def test_long_app_list_is_split_into_datagram_sized_parts(self):
+        apps = [{"name": f"App {i}", "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\"
+                 + f"Vendor {i}\\App {i} long shortcut name.lnk", "is_quick": i % 7 == 0} for i in range(600)]
+        payloads = server.installed_apps_payloads(apps, loading=False)
+        self.assertGreater(len(payloads), 1)
+        self.assertEqual([p["part"] for p in payloads], list(range(len(payloads))))
+        self.assertTrue(all(p["parts"] == len(payloads) for p in payloads))
+        self.assertEqual(sum(len(p["apps"]) for p in payloads), 600)
+        for payload in payloads:
+            self.assertLess(len(json.dumps(payload).encode("utf-8")), 60000)
+
+    def test_empty_list_still_sends_one_part(self):
+        payloads = server.installed_apps_payloads([], loading=True, message="busy")
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["apps"], [])
+        self.assertTrue(payloads[0]["loading"])
+        self.assertEqual(payloads[0]["message"], "busy")
+
+
 class ScreenPreviewTests(unittest.TestCase):
     TOKEN = "123456"
 

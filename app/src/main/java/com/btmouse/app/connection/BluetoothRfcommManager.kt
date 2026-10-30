@@ -379,7 +379,9 @@ class BluetoothRfcommManager(
                         )
                     }
                     _appIcons.value = iconMap
-                    _installedApps.value = list
+                    // Long app lists arrive in parts; part 0 starts a fresh list.
+                    val part = root.get("part")?.asInt ?: 0
+                    _installedApps.value = if (part > 0) (_installedApps.value + list).distinctBy { it.path.lowercase() } else list
                     val loading = root.get("loading")?.asBoolean ?: false
                     val message = root.get("message")?.asString.orEmpty()
                     _statusMessage.value = when {

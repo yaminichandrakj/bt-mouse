@@ -273,3 +273,34 @@ fun Caption(text: String, modifier: Modifier = Modifier, color: Color = OnInkMut
 fun FaintNote(text: String, modifier: Modifier = Modifier) {
     Text(text, color = OnInkFaint, fontSize = 13.sp, lineHeight = 18.sp, textAlign = TextAlign.Center, modifier = modifier.fillMaxWidth())
 }
+
+/** Rounded status pill with a dot, e.g. "Live on PC" or "Off". Never wraps. */
+@Composable
+fun StatusPill(text: String, live: Boolean, modifier: Modifier = Modifier, dot: Color? = null) {
+    Row(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Control)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        StatusDot(dot ?: if (live) com.btmouse.app.ui.theme.StatusGreen else OnInkFaint, size = 7.dp)
+        Text(text, color = if (live) OnInk else OnInkMuted, fontSize = 13.sp, maxLines = 1, softWrap = false)
+    }
+}
+
+/** Card title with one line of detail on the left and a status pill on the right. */
+@Composable
+fun CardHeader(title: String, detail: String, status: String, live: Boolean, modifier: Modifier = Modifier, dot: Color? = null) {
+    Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = OnInk, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (detail.isNotEmpty()) {
+                Text(detail, color = OnInkMuted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        StatusPill(status, live, dot = dot)
+    }
+}

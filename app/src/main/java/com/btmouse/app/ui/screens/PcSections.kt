@@ -37,6 +37,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import com.btmouse.app.ui.components.CardHeader
 import com.btmouse.app.ui.components.FullscreenViewer
 import com.btmouse.app.ui.components.LiveBadge
 import com.btmouse.app.ui.components.PillStyle
@@ -210,7 +211,7 @@ fun QuickAppsSection(
                 }
             }
             if (showBrowseDialog) {
-                installedApps.take(35).forEach { ia ->
+                installedApps.forEach { ia ->
                     if (ia.iconBase64.isBlank() && appIcons[ia.path].isNullOrBlank()) {
                         needed.add(ia.path)
                     }
@@ -250,14 +251,18 @@ fun QuickAppsSection(
                         singleLine = true
                     )
 
-                    val filteredApps = installedApps.filter {
-                        it.name.contains(appSearchQuery, ignoreCase = true) || it.path.contains(appSearchQuery, ignoreCase = true)
-                    }
+                    val filteredApps = installedApps
+                        .filter { it.name.contains(appSearchQuery, ignoreCase = true) || it.path.contains(appSearchQuery, ignoreCase = true) }
+                        .sortedWith(compareByDescending<AppInfo> { it.isQuick }.thenBy { it.name.lowercase() })
+                    Text(
+                        if (appSearchQuery.isBlank()) "${installedApps.size} apps on your PC" else "${filteredApps.size} of ${installedApps.size} apps",
+                        color = TextMuted, fontSize = 13.sp
+                    )
 
                     if (filteredApps.isEmpty()) {
                         Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                             Text(
-                                if (installedApps.isEmpty()) "Scanning PC apps or waiting for response..."
+                                if (installedApps.isEmpty()) "Loading the apps on your PC…"
                                 else "No matching apps found.",
                                 color = TextMuted,
                                 fontSize = 12.sp
@@ -265,7 +270,7 @@ fun QuickAppsSection(
                         }
                     } else {
                         LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 350.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             items(filteredApps) { app ->
@@ -843,55 +848,21 @@ fun CameraAndRecorderSection(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentCyan else DarkBorder)
+                shape = RoundedCornerShape(24.dp),
+                border = null
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Videocam, contentDescription = null, tint = AccentCyan)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text("PC Webcam Viewfinder", color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                                Text("Saves combined video+audio to PC Videos/ folder", color = TextMuted, fontSize = 12.sp)
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    if (isStreaming) if (cameraRecording) "Live · recording" else "Live" else "Standby",
-                                    color = if (isStreaming) AccentEmerald else TextMuted,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { showPcCamFullscreen = true },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(DarkSurfaceVariant)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Fullscreen,
-                                    contentDescription = "Fullscreen PC Webcam",
-                                    tint = AccentCyan,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
+                    CardHeader(
+                        title = "PC webcam",
+                        detail = "Recordings save video and sound to Videos on the PC",
+                        status = when {
+                            cameraRecording -> "Recording"
+                            isStreaming -> "Live"
+                            else -> "Off"
+                        },
+                        live = isStreaming,
+                        dot = if (cameraRecording) AccentRose else null
+                    )
 
                     val currentImageBitmap = imageBitmap
                     if (currentImageBitmap != null) {
@@ -976,7 +947,7 @@ fun CameraAndRecorderSection(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(24.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1022,7 +993,7 @@ fun CameraAndRecorderSection(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(24.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1132,7 +1103,7 @@ fun PhoneCameraWebcamCard(
         "Portrait 9:16"
     } else {
         "Landscape 16:9"
-    } + if (currentRotation != 0) " · Rot ${currentRotation}°" else ""
+    } + if (currentRotation != 0) " · rotated ${currentRotation}°" else ""
 
     if (showPhoneCamFullscreen) {
         FullscreenVideoModal(
@@ -1149,70 +1120,16 @@ fun PhoneCameraWebcamCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(14.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (isStreaming) AccentEmerald else DarkBorder)
+        shape = RoundedCornerShape(24.dp),
+        border = null
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Header with Live Badge & Fullscreen Button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Default.Videocam,
-                        contentDescription = null,
-                        tint = if (isStreaming) AccentEmerald else AccentCyan
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            "Phone as PC Webcam",
-                            color = TextPrimary,
-                            fontWeight = FontWeight.Medium,
-                            fontSize = 14.sp
-                        )
-                        Text(
-                            "Alignment: $alignmentDescription",
-                            color = AccentCyan,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isStreaming) AccentEmerald.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            if (isStreaming) "Live on PC" else "Standby",
-                            color = if (isStreaming) AccentEmerald else TextMuted,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-
-                    IconButton(
-                        onClick = { showPhoneCamFullscreen = true },
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DarkSurfaceVariant)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Fullscreen,
-                            contentDescription = "Fullscreen Phone Camera",
-                            tint = AccentCyan,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
+            CardHeader(
+                title = "Phone camera",
+                detail = alignmentDescription,
+                status = if (isStreaming) "Live on PC" else "Off",
+                live = isStreaming
+            )
 
             // Viewfinder (Uncropped ContentScale.Fit so exact alignment/orientation is visible!)
             if (isStreaming && previewBitmap != null) {

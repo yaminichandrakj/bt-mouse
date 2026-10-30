@@ -83,6 +83,30 @@ def capture_selected_media_preview():
 
 
 SCREEN_PREVIEW_SETTINGS_PATH = PAIRING_PIN_PATH.with_name("screen_preview.json")
+INSTALLED_APPS_LIMIT = 1000
+# Keep each app-list message well inside one UDP datagram (60000 bytes).
+APP_LIST_PART_BYTES = 42000
+
+
+def installed_apps_payloads(apps, loading=False, message=""):
+    """Split the app list into numbered parts small enough for one datagram each."""
+    parts, current, size = [], [], 0
+    for app in apps or []:
+        entry_size = len(json.dumps(app)) + 2
+        if current and size + entry_size > APP_LIST_PART_BYTES:
+            parts.append(current)
+            current, size = [], 0
+        current.append(app)
+        size += entry_size
+    parts.append(current)
+    payloads = []
+    for index, chunk in enumerate(parts):
+        payload = {"type": "installed_apps_response", "apps": chunk, "loading": loading,
+                   "part": index, "parts": len(parts)}
+        if message:
+            payload["message"] = message
+        payloads.append(payload)
+    return payloads
 # A screen frame must fit one UDP datagram (60000 bytes) once wrapped in JSON.
 SCREEN_FRAME_MAX_BASE64 = 56000
 
@@ -4513,7 +4537,8 @@ class Server:
                 fresh_apps = cached[1]
             fallback_apps = cached[1] if cached else None
         if fresh_apps is not None:
-            send({"type": "installed_apps_response", "apps": fresh_apps, "loading": False})
+            for payload in installed_apps_payloads(fresh_apps):
+                send(payload)
             return
         if fallback_apps is None:
             try:
@@ -4529,7 +4554,8 @@ class Server:
 
         # Send existing quick apps or stale data right away; never hold the UDP
         # input loop, RFCOMM reader, or WebSocket command worker for disk scans.
-        send({"type": "installed_apps_response", "apps": fallback_apps, "loading": True})
+        for payload in installed_apps_payloads(fallback_apps, loading=True):
+            send(payload)
         if start_refresh:
             threading.Thread(
                 target=self._refresh_installed_apps_for_waiters,
@@ -4553,12 +4579,12 @@ class Server:
             with self._query_cache_lock:
                 cached = self._query_cache.get("apps")
                 apps = cached[1] if cached else []
-        payload = {"type": "installed_apps_response", "apps": apps, "loading": False}
-        if error:
-            payload["message"] = f"Could not refresh installed apps: {error[:160]}"
+        message = f"Could not refresh installed apps: {error[:160]}" if error else ""
+        payloads = installed_apps_payloads(apps, message=message)
         for send in waiters:
             try:
-                send(payload)
+                for payload in payloads:
+                    send(payload)
             except Exception as exc:
                 print(f"[-] Could not deliver installed-app refresh: {exc}")
 
@@ -4605,7 +4631,7 @@ class Server:
                             path = os.path.realpath(os.path.join(root, f))
                             apps.append({"name": name, "path": path, "is_quick": path.lower() in quick_paths})
         apps.sort(key=lambda x: x["name"].lower())
-        apps = apps[:150]
+        apps = apps[:INSTALLED_APPS_LIMIT]
         if not QUICK_APPS_PATH.exists():
             seeded = load_quick_apps(apps)
             for app in seeded:

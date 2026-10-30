@@ -315,7 +315,9 @@ class WifiClientManager(
                         )
                     }
                     _appIcons.value = iconMap
-                    _installedApps.value = list
+                    // Long app lists arrive in parts; part 0 starts a fresh list.
+                    val part = json.get("part")?.asInt ?: 0
+                    _installedApps.value = if (part > 0) (_installedApps.value + list).distinctBy { it.path.lowercase() } else list
                     val loading = json.get("loading")?.asBoolean ?: false
                     val message = json.get("message")?.asString.orEmpty()
                     _statusMessage.value = when {

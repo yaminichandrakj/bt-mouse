@@ -2,7 +2,9 @@ package com.btmouse.app.ui.screens
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +27,18 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.FilterNone
+import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.ScreenshotMonitor
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -68,7 +82,7 @@ import com.btmouse.app.ui.theme.Raised
 import com.btmouse.app.ui.theme.Selected
 import com.btmouse.app.ui.theme.Ink
 
-private data class Shortcut(val label: String, val hint: String, val key: Byte, val mods: Byte)
+private data class Shortcut(val label: String, val hint: String, val key: Byte, val mods: Byte, val icon: ImageVector? = null)
 
 private val CTRL = HidConstants.MODIFIER_LEFT_CTRL
 private val ALT = HidConstants.MODIFIER_LEFT_ALT
@@ -78,18 +92,18 @@ private val WIN = HidConstants.MODIFIER_LEFT_GUI
 private fun mods(vararg m: Byte): Byte = m.fold(0) { acc, b -> acc or b.toInt() }.toByte()
 
 private val SHORTCUTS = listOf(
-    Shortcut("Copy", "Ctrl C", HidConstants.KEY_C, CTRL),
-    Shortcut("Paste", "Ctrl V", HidConstants.KEY_V, CTRL),
-    Shortcut("Cut", "Ctrl X", HidConstants.KEY_X, CTRL),
-    Shortcut("Undo", "Ctrl Z", HidConstants.KEY_Z, CTRL),
-    Shortcut("Redo", "Ctrl Y", HidConstants.KEY_Y, CTRL),
-    Shortcut("Select all", "Ctrl A", HidConstants.KEY_A, CTRL),
-    Shortcut("Switch app", "Alt Tab", HidConstants.KEY_TAB, ALT),
-    Shortcut("Desktop", "Win D", HidConstants.KEY_D, WIN),
-    Shortcut("Find", "Ctrl F", HidConstants.KEY_F, CTRL),
-    Shortcut("Save", "Ctrl S", HidConstants.KEY_S, CTRL),
-    Shortcut("Task Mgr", "Ctrl ⇧ Esc", HidConstants.KEY_ESC, mods(CTRL, SHIFT)),
-    Shortcut("Screenshot", "Win ⇧ S", HidConstants.KEY_S, mods(WIN, SHIFT))
+    Shortcut("Copy", "Ctrl C", HidConstants.KEY_C, CTRL, Icons.Default.ContentCopy),
+    Shortcut("Paste", "Ctrl V", HidConstants.KEY_V, CTRL, Icons.Default.ContentPaste),
+    Shortcut("Cut", "Ctrl X", HidConstants.KEY_X, CTRL, Icons.Default.ContentCut),
+    Shortcut("Undo", "Ctrl Z", HidConstants.KEY_Z, CTRL, Icons.AutoMirrored.Filled.Undo),
+    Shortcut("Redo", "Ctrl Y", HidConstants.KEY_Y, CTRL, Icons.AutoMirrored.Filled.Redo),
+    Shortcut("Select all", "Ctrl A", HidConstants.KEY_A, CTRL, Icons.Default.SelectAll),
+    Shortcut("Switch app", "Alt Tab", HidConstants.KEY_TAB, ALT, Icons.Default.FilterNone),
+    Shortcut("Desktop", "Win D", HidConstants.KEY_D, WIN, Icons.Default.DesktopWindows),
+    Shortcut("Find", "Ctrl F", HidConstants.KEY_F, CTRL, Icons.Default.Search),
+    Shortcut("Save", "Ctrl S", HidConstants.KEY_S, CTRL, Icons.Default.Save),
+    Shortcut("Task Manager", "Ctrl ⇧ Esc", HidConstants.KEY_ESC, mods(CTRL, SHIFT), Icons.Default.MonitorHeart),
+    Shortcut("Screenshot", "Win ⇧ S", HidConstants.KEY_S, mods(WIN, SHIFT), Icons.Default.ScreenshotMonitor)
 )
 
 private val F_KEYS = listOf(
@@ -109,7 +123,8 @@ fun KeyboardTab(
     settings: SettingsRepository,
     previewOn: Boolean,
     screenZoom: ZoomState,
-    onScreenFullscreen: () -> Unit
+    onScreenFullscreen: () -> Unit,
+    notify: (String) -> Unit = {}
 ) {
     val haptics by settings.hapticFeedback.collectAsState()
     var numpad by rememberSaveable { mutableStateOf(false) }
@@ -175,7 +190,10 @@ fun KeyboardTab(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     row.forEach { s ->
                         PadKey(
-                            label = s.label, hint = s.hint, height = keyHeight, haptics = haptics,
+                            label = s.label, icon = s.icon, hint = if (s.icon == null) s.hint else "",
+                            description = if (s.hint.isEmpty()) s.label else "${s.label} (${s.hint})",
+                            onLongPress = { notify(if (s.hint.isEmpty()) s.label else "${s.label} · ${s.hint}") },
+                            height = keyHeight, haptics = haptics,
                             modifier = Modifier.weight(1f)
                         ) { press(s.key, s.mods) }
                     }
@@ -271,7 +289,8 @@ private fun ModKey(label: String, on: Boolean, modifier: Modifier, onToggle: () 
     }
 }
 
-/** One key. Brightens while pressed and gives a tick if haptics are on. */
+/** One key. Brightens while pressed and gives a tick if haptics are on; long-press can explain it. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PadKey(
     label: String,
@@ -283,6 +302,8 @@ fun PadKey(
     quiet: Boolean = false,
     strong: Boolean = false,
     haptics: Boolean = true,
+    description: String = label,
+    onLongPress: (() -> Unit)? = null,
     onPress: () -> Unit
 ) {
     val view = LocalView.current
@@ -298,15 +319,22 @@ fun PadKey(
             .height(height)
             .clip(RoundedCornerShape(16.dp))
             .background(if (pressed) Selected else base)
-            .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = label) {
-                if (haptics) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                onPress()
-            },
+            .combinedClickable(
+                interactionSource = source,
+                indication = null,
+                role = Role.Button,
+                onClickLabel = description,
+                onLongClick = onLongPress,
+                onClick = {
+                    if (haptics) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    onPress()
+                }
+            ),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = label, tint = OnInk, modifier = Modifier.size(22.dp))
+            Icon(icon, contentDescription = description, tint = OnInk, modifier = Modifier.size(22.dp))
         } else {
             Text(label, color = if (strong) Color.White else OnInk, fontSize = fontSize, maxLines = 1,
                 fontWeight = if (strong) FontWeight.Medium else FontWeight.Normal)
