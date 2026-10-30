@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.SpaceBar
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ContentCut
@@ -91,19 +95,20 @@ private val WIN = HidConstants.MODIFIER_LEFT_GUI
 
 private fun mods(vararg m: Byte): Byte = m.fold(0) { acc, b -> acc or b.toInt() }.toByte()
 
+// Top to bottom: least used first, so copy, paste, cut and undo sit nearest the thumb.
 private val SHORTCUTS = listOf(
-    Shortcut("Copy", "Ctrl C", HidConstants.KEY_C, CTRL, Icons.Default.ContentCopy),
-    Shortcut("Paste", "Ctrl V", HidConstants.KEY_V, CTRL, Icons.Default.ContentPaste),
-    Shortcut("Cut", "Ctrl X", HidConstants.KEY_X, CTRL, Icons.Default.ContentCut),
-    Shortcut("Undo", "Ctrl Z", HidConstants.KEY_Z, CTRL, Icons.AutoMirrored.Filled.Undo),
+    Shortcut("Find", "Ctrl F", HidConstants.KEY_F, CTRL, Icons.Default.Search),
+    Shortcut("Save", "Ctrl S", HidConstants.KEY_S, CTRL, Icons.Default.Save),
+    Shortcut("Task Manager", "Ctrl ⇧ Esc", HidConstants.KEY_ESC, mods(CTRL, SHIFT), Icons.Default.MonitorHeart),
+    Shortcut("Screenshot", "Win ⇧ S", HidConstants.KEY_S, mods(WIN, SHIFT), Icons.Default.ScreenshotMonitor),
     Shortcut("Redo", "Ctrl Y", HidConstants.KEY_Y, CTRL, Icons.AutoMirrored.Filled.Redo),
     Shortcut("Select all", "Ctrl A", HidConstants.KEY_A, CTRL, Icons.Default.SelectAll),
     Shortcut("Switch app", "Alt Tab", HidConstants.KEY_TAB, ALT, Icons.Default.FilterNone),
     Shortcut("Desktop", "Win D", HidConstants.KEY_D, WIN, Icons.Default.DesktopWindows),
-    Shortcut("Find", "Ctrl F", HidConstants.KEY_F, CTRL, Icons.Default.Search),
-    Shortcut("Save", "Ctrl S", HidConstants.KEY_S, CTRL, Icons.Default.Save),
-    Shortcut("Task Manager", "Ctrl ⇧ Esc", HidConstants.KEY_ESC, mods(CTRL, SHIFT), Icons.Default.MonitorHeart),
-    Shortcut("Screenshot", "Win ⇧ S", HidConstants.KEY_S, mods(WIN, SHIFT), Icons.Default.ScreenshotMonitor)
+    Shortcut("Copy", "Ctrl C", HidConstants.KEY_C, CTRL, Icons.Default.ContentCopy),
+    Shortcut("Paste", "Ctrl V", HidConstants.KEY_V, CTRL, Icons.Default.ContentPaste),
+    Shortcut("Cut", "Ctrl X", HidConstants.KEY_X, CTRL, Icons.Default.ContentCut),
+    Shortcut("Undo", "Ctrl Z", HidConstants.KEY_Z, CTRL, Icons.AutoMirrored.Filled.Undo)
 )
 
 private val F_KEYS = listOf(
@@ -152,9 +157,6 @@ fun KeyboardTab(
         }
     }
 
-    val keyHeight = if (previewOn) 46.dp else 52.dp
-    val arrowHeight = if (previewOn) 42.dp else 48.dp
-
     Column(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -177,60 +179,50 @@ fun KeyboardTab(
         )
 
         if (!numpad) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ModKey("Ctrl", ctrl, Modifier.weight(1f)) { ctrl = !ctrl }
-                ModKey("Alt", alt, Modifier.weight(1f)) { alt = !alt }
-                ModKey("Shift", shift, Modifier.weight(1f)) { shift = !shift }
-                ModKey("Win", win, Modifier.weight(1f)) { win = !win }
-                ModKey("Fn", fn, Modifier.weight(1f)) { fn = !fn }
-            }
-
-            val grid = (if (fn) F_KEYS else SHORTCUTS).let { if (previewOn) it.take(8) else it }
-            grid.chunked(4).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    row.forEach { s ->
-                        PadKey(
-                            label = s.label, icon = s.icon, hint = if (s.icon == null) s.hint else "",
-                            description = if (s.hint.isEmpty()) s.label else "${s.label} (${s.hint})",
-                            onLongPress = { notify(if (s.hint.isEmpty()) s.label else "${s.label} · ${s.hint}") },
-                            height = keyHeight, haptics = haptics,
-                            modifier = Modifier.weight(1f)
-                        ) { press(s.key, s.mods) }
+            // Every row shares the height left on screen, so the keys fill it evenly.
+            // Rarely used keys sit at the top; Enter, Backspace, Space and the arrows sit at the bottom.
+            val grid = (if (fn) F_KEYS else SHORTCUTS).let { if (previewOn) it.takeLast(8) else it }
+            Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                grid.chunked(4).forEach { row ->
+                    KeyRow {
+                        row.forEach { s ->
+                            PadKey(
+                                label = s.label, icon = s.icon, hint = if (s.icon == null) s.hint else "",
+                                description = if (s.hint.isEmpty()) s.label else "${s.label} (${s.hint})",
+                                onLongPress = { notify(if (s.hint.isEmpty()) s.label else "${s.label} · ${s.hint}") },
+                                height = Dp.Unspecified, haptics = haptics,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            ) { press(s.key, s.mods) }
+                        }
                     }
                 }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PadKey("Home", height = arrowHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_HOME) }
-                        PadKey("End", height = arrowHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_END) }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PadKey("Pg Up", height = arrowHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_PAGE_UP) }
-                        PadKey("Pg Dn", height = arrowHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_PAGE_DOWN) }
-                    }
+                KeyRow {
+                    ModKey("Ctrl", ctrl, Modifier.weight(1f)) { ctrl = !ctrl }
+                    ModKey("Alt", alt, Modifier.weight(1f)) { alt = !alt }
+                    ModKey("Shift", shift, Modifier.weight(1f)) { shift = !shift }
+                    ModKey("Win", win, Modifier.weight(1f)) { win = !win }
+                    ModKey("Fn", fn, Modifier.weight(1f)) { fn = !fn }
                 }
-                Column(Modifier.width(160.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Spacer(Modifier.weight(1f))
-                        PadKey(icon = Icons.Default.KeyboardArrowUp, label = "Up", height = arrowHeight, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_UP_ARROW) }
-                        Spacer(Modifier.weight(1f))
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PadKey(icon = Icons.Default.KeyboardArrowLeft, label = "Left", height = arrowHeight, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_LEFT_ARROW) }
-                        PadKey(icon = Icons.Default.KeyboardArrowDown, label = "Down", height = arrowHeight, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_DOWN_ARROW) }
-                        PadKey(icon = Icons.Default.KeyboardArrowRight, label = "Right", height = arrowHeight, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_RIGHT_ARROW) }
-                    }
+                KeyRow {
+                    NavKey("Home", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_HOME) }
+                    NavKey("Pg Up", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_PAGE_UP) }
+                    NavKey("Up", haptics, Modifier.weight(1f), icon = Icons.Default.KeyboardArrowUp) { press(HidConstants.KEY_UP_ARROW) }
+                    NavKey("Pg Dn", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_PAGE_DOWN) }
+                    NavKey("End", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_END) }
                 }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                PadKey("Esc", height = keyHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_ESC) }
-                PadKey("Tab", height = keyHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_TAB) }
-                PadKey("Del", height = keyHeight, quiet = true, haptics = haptics, modifier = Modifier.weight(1f)) { press(HidConstants.KEY_DELETE) }
-                PadKey(icon = Icons.AutoMirrored.Filled.Backspace, label = "Backspace", height = keyHeight, haptics = haptics, modifier = Modifier.weight(1.4f)) { press(HidConstants.KEY_BACKSPACE) }
-                PadKey("Enter", height = keyHeight, strong = true, haptics = haptics, modifier = Modifier.weight(1.6f)) { press(HidConstants.KEY_ENTER) }
+                KeyRow {
+                    NavKey("Tab", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_TAB) }
+                    NavKey("Left", haptics, Modifier.weight(1f), icon = Icons.Default.KeyboardArrowLeft) { press(HidConstants.KEY_LEFT_ARROW) }
+                    NavKey("Down", haptics, Modifier.weight(1f), icon = Icons.Default.KeyboardArrowDown) { press(HidConstants.KEY_DOWN_ARROW) }
+                    NavKey("Right", haptics, Modifier.weight(1f), icon = Icons.Default.KeyboardArrowRight) { press(HidConstants.KEY_RIGHT_ARROW) }
+                    NavKey("Del", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_DELETE) }
+                }
+                KeyRow(weight = 1.15f) {
+                    NavKey("Esc", haptics, Modifier.weight(1f), quiet = true) { press(HidConstants.KEY_ESC) }
+                    NavKey("Space", haptics, Modifier.weight(2f), icon = Icons.Default.SpaceBar) { press(HidConstants.KEY_SPACE) }
+                    NavKey("Backspace", haptics, Modifier.weight(1.2f), icon = Icons.AutoMirrored.Filled.Backspace) { press(HidConstants.KEY_BACKSPACE) }
+                    PadKey("Enter", Modifier.weight(1.6f).fillMaxHeight(), height = Dp.Unspecified, strong = true, haptics = haptics) { press(HidConstants.KEY_ENTER) }
+                }
             }
         } else {
             NumberPad(Modifier.weight(1f).fillMaxWidth(), haptics) { key -> coordinator.sendKeyStroke(key, 0) }
@@ -275,11 +267,31 @@ private fun SendBox(text: String, onTextChange: (String) -> Unit, onSend: () -> 
     }
 }
 
+/** One row of keys that takes its share of the free height, never shorter than a finger. */
+@Composable
+private fun ColumnScope.KeyRow(weight: Float = 1f, content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.weight(weight).fillMaxWidth().heightIn(min = 40.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        content = content
+    )
+}
+
+@Composable
+private fun NavKey(
+    label: String,
+    haptics: Boolean,
+    modifier: Modifier,
+    icon: ImageVector? = null,
+    quiet: Boolean = false,
+    onPress: () -> Unit
+) = PadKey(label, modifier.fillMaxHeight(), icon = icon, height = Dp.Unspecified, quiet = quiet, haptics = haptics, onPress = onPress)
+
 @Composable
 private fun ModKey(label: String, on: Boolean, modifier: Modifier, onToggle: () -> Unit) {
     Box(
         modifier = modifier
-            .height(44.dp)
+            .fillMaxHeight()
             .clip(RoundedCornerShape(16.dp))
             .background(if (on) Selected else Raised)
             .clickable(role = Role.Switch, onClick = onToggle),
