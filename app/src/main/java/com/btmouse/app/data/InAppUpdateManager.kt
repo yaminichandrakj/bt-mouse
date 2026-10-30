@@ -245,7 +245,7 @@ class InAppUpdateManager(private val context: Context) {
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(apkUri, "application/vnd.android.package-archive")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                clipData = ClipData.newRawUri("BT Mouse update", apkUri)
+                clipData = ClipData.newRawUri("Lanyard update", apkUri)
             }
 
             context.startActivity(installIntent)
@@ -278,7 +278,7 @@ class InAppUpdateManager(private val context: Context) {
         } ?: throw IllegalStateException("The downloaded file is not a readable Android APK.")
 
         if (packageInfo.packageName != context.packageName) {
-            throw IllegalStateException("This release APK belongs to a different app and cannot update BT Mouse.")
+            throw IllegalStateException("This release APK belongs to a different app and cannot update Lanyard.")
         }
         val apkVersion = packageInfo.versionName?.removeSuffix("-debug")
             ?: throw IllegalStateException("The APK does not contain a version name.")

@@ -1,6 +1,8 @@
-# BT Mouse & Keyboard - Universal Remote for Android & PC
+<img src="pc_server/icon.png" width="96" alt="Lanyard icon">
 
-Transform any Android phone into a high-precision, low-latency **Wireless Mouse, Trackpad, Full PC Keyboard, Numpad, Media Remote, and Gyroscopic Air Mouse** for any PC (Windows, macOS, Linux, ChromeOS, and Smart TVs).
+# Lanyard: your PC, on a cord from your phone
+
+*Formerly BT Mouse.* Lanyard turns any Android phone into a high-precision, low-latency **Wireless Mouse, Trackpad, Full PC Keyboard, Numpad, Media Remote, and Gyroscopic Air Mouse** for any PC (Windows, macOS, Linux, ChromeOS, and Smart TVs).
 
 ![Platform](https://img.shields.io/badge/Platform-Android_9.0+_(API_28+)-green.svg)
 ![Kotlin](https://img.shields.io/badge/Language-Kotlin_2.0-blue.svg)

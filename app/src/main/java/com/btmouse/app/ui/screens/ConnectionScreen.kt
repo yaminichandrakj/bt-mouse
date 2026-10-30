@@ -205,7 +205,7 @@ fun ConnectionScreen(
                         if (pairFromCode(raw)) {
                             Toast.makeText(context, "PC paired; connecting over every available link…", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(context, "That QR code isn't from the BT Mouse companion", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "That QR code isn't from Lanyard for PC", Toast.LENGTH_LONG).show()
                         }
                     }
                 }
@@ -406,7 +406,7 @@ fun ConnectionScreen(
                 Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Pair your PC", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Text(
-                        "1. Open the BT Mouse companion on your PC and go to Pair a device.\n" +
+                        "1. Open Lanyard for PC on your computer and go to Connect.\n" +
                             "2. Scan its QR code here.\n\n" +
                             "That's it: the app saves the PC and connects over Wi-Fi, Bluetooth and the " +
                             "internet by itself. Later you only need to change the PIN.",
@@ -568,7 +568,7 @@ fun ConnectionScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Type the 6-digit PIN shown on the companion's Pair a device page. Changing it there only needs this, not a new scan.",
+                        "Type the 6-digit PIN shown on the Connect page of Lanyard for PC. Changing it there only needs this, not a new scan.",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
@@ -624,7 +624,7 @@ fun ConnectionScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Type the IP address shown on the companion's Pair a device page, or paste a copied pairing code.",
+                        "Type the IP address shown on the Connect page of Lanyard for PC, or paste a copied pairing code.",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
@@ -657,7 +657,7 @@ fun ConnectionScreen(
                             showManualDialog = false
                             manualError = null
                         } else {
-                            manualError = "That isn't an IP address or a BT Mouse pairing code."
+                            manualError = "That isn't an IP address or a Lanyard pairing code."
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Ink)

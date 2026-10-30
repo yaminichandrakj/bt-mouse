@@ -493,7 +493,7 @@ class ConnectionCoordinator(
         _linkNotice.value = null
         scope.launch {
             if (!bringUpAllLinks()) {
-                _linkNotice.value = "Scan the QR code on the Pair a device page of the PC companion first"
+                _linkNotice.value = "Scan the QR code on the Connect page of Lanyard for PC first"
             }
         }
     }
@@ -566,7 +566,7 @@ class ConnectionCoordinator(
      */
     fun retryLink(link: Link): Boolean {
         if (!isPaired()) {
-            _linkNotice.value = "Scan the QR code on the PC companion first"
+            _linkNotice.value = "Scan the QR code in Lanyard for PC first"
             return false
         }
         val canTry = when (link) {

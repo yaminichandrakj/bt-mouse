@@ -1,5 +1,5 @@
 """
-BT Mouse & Keyboard - PC Companion Server
+Lanyard for PC - companion server
 Ultra-low latency UDP input receiver with auto-discovery beacon and tablet writing pad support.
 Works on Windows, macOS, and Linux.
 """
@@ -782,7 +782,7 @@ if IS_WINDOWS:
             now = time.monotonic()
             if now - _last_uipi_warning_at > 10.0:
                 _last_uipi_warning_at = now
-                print("[!] Windows UIPI blocked input injection into an elevated window. Run BT Mouse Companion as Administrator to control elevated apps.")
+                print("[!] Windows UIPI blocked input injection into an elevated window. Run Lanyard for PC as Administrator to control elevated apps.")
         return inserted == 1
 
 try:
@@ -3364,7 +3364,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.5.0"
+                    "version": "1.5.1"
                 }
             else:
                 self._record_auth_failure(addr)

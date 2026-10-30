@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="256" height="256">
+  <!-- Lanyard: a cord meeting at a tag, white on a black rounded square. -->
+  <rect x="0" y="0" width="48" height="48" rx="10.5" fill="#000000"/>
+  <path d="M13 7.5l11 19 11-19" fill="none" stroke="#FFFFFF" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path fill="#FFFFFF" fill-rule="evenodd" d="M20 26.5h8a4 4 0 0 1 4 4v9.5a4 4 0 0 1-4 4h-8a4 4 0 0 1-4-4v-9.5a4 4 0 0 1 4-4z M21.9 30.6h4.2a1.2 1.2 0 0 1 0 2.4h-4.2a1.2 1.2 0 0 1 0-2.4z"/>
+</svg>

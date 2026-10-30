@@ -1,5 +1,5 @@
 """
-BT Mouse & Keyboard - Windows 11 Native Qt6 Desktop Companion Application
+Lanyard for PC - Windows desktop companion for the Lanyard phone app
 Built on PySide6 (Qt for Python, LGPL; Qt6 hardware-accelerated rendering) with Windows 11 DWM
 Dark Titlebar, DPI-independent Fluent Sidebar Navigation, Fullscreen Video
 Monitor for both Phone & PC Webcams, and separated Videos / Audios / Snapshots folders.
@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -868,7 +868,7 @@ class CompanionApp(QMainWindow):
         self._init_server()
 
         executable_path = Path(sys.executable).resolve()
-        self.setWindowTitle(f"BT Mouse Companion v{APP_VERSION} — {executable_path}")
+        self.setWindowTitle(f"Lanyard for PC v{APP_VERSION} — {executable_path}")
         self.setMinimumSize(1000, 680)
         self.resize(1240, 800)
 
@@ -1103,7 +1103,7 @@ class CompanionApp(QMainWindow):
                 QPixmap(logo_path).scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             )
             brand.addWidget(lbl_logo)
-        lbl_title = QLabel("BT Mouse")
+        lbl_title = QLabel("Lanyard")
         lbl_title.setStyleSheet("font-size: 16px; font-weight: 600;")
         brand.addWidget(lbl_title)
         brand.addStretch()
@@ -1246,7 +1246,7 @@ class CompanionApp(QMainWindow):
 
     def _build_statusbar(self, root_layout):
         """Kept for callers that update the footer text; the footer itself is no longer shown."""
-        self.lbl_footer_left = QLabel(f"BT Mouse Companion v{APP_VERSION}")
+        self.lbl_footer_left = QLabel(f"Lanyard for PC v{APP_VERSION}")
 
     # ------------------------------------------------------------------
     # Page 1: Pair a device (one QR for Wi-Fi, Bluetooth and internet)
@@ -1300,7 +1300,7 @@ class CompanionApp(QMainWindow):
     def _create_pair_page(self):
         page, layout = self._page(
             "Connect your phone",
-            "Open BT Mouse on your phone and scan this code. It pairs once, then reconnects on its own "
+            "Open Lanyard on your phone and scan this code. It pairs once, then reconnects on its own "
             "over whichever link is fastest.",
         )
 
@@ -1915,7 +1915,7 @@ class CompanionApp(QMainWindow):
         menu.addAction(act_quit)
 
         self.tray_icon.setContextMenu(menu)
-        self.tray_icon.setToolTip(f"BT Mouse Companion v{APP_VERSION}")
+        self.tray_icon.setToolTip(f"Lanyard for PC v{APP_VERSION}")
         self.tray_icon.activated.connect(
             lambda reason: self.show_from_tray() if reason == QSystemTrayIcon.ActivationReason.Trigger else None
         )
@@ -1929,7 +1929,7 @@ class CompanionApp(QMainWindow):
         self.hide()
         if self.tray_icon:
             self.tray_icon.showMessage(
-                "BT Mouse Companion",
+                "Lanyard for PC",
                 "Still running in your system tray.",
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,
@@ -2811,7 +2811,7 @@ class CompanionApp(QMainWindow):
         self.btn_update.setText("Downloading…")
         self._update_cancel = threading.Event()
         dlg = QProgressDialog(f"Downloading {tag_name}…", "Cancel", 0, 100, self)
-        dlg.setWindowTitle("Updating BT Mouse Companion")
+        dlg.setWindowTitle("Updating Lanyard for PC")
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
         dlg.setAutoReset(False)
