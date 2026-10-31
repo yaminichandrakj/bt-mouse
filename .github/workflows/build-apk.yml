@@ -32,8 +32,8 @@ jobs:
       - name: Run companion regression checks
         working-directory: pc_server
         run: |
-          python -m py_compile server.py app_gui.py
-          python -m unittest -v test_server.py
+          python -m py_compile server.py app_gui.py ecosystem.py sync.py
+          python -m unittest -v test_server.py test_ecosystem.py
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

@@ -24,6 +24,8 @@ import datetime
 from contextlib import contextmanager
 from pathlib import Path
 
+from ecosystem import Ecosystem
+
 
 def _pairing_pin_config_path():
     """Return the per-user path used to keep the PC pairing PIN stable."""
@@ -2918,6 +2920,8 @@ class PhoneCameraHttpServer:
 
 
 class Server:
+    ecosystem = None
+
     def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token=None):
         ensure_interactive_desktop()
         self.port = port
@@ -3002,6 +3006,9 @@ class Server:
             self.phone_camera_http.start()
         except Exception as e:
             print(f"[!] Could not start phone camera HTTP server: {e}")
+
+        # Phones and tablets this PC's keyboard and mouse can move to
+        self.ecosystem = Ecosystem(pc_name=socket.gethostname())
 
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
@@ -3431,6 +3438,15 @@ class Server:
 
         self._refresh_camera_stream_lease(addr, data, respond)
         self._note_client_activity(addr, alive=cmd_type != "disconnect")
+        eco = self.ecosystem
+        if eco:
+            eco.registry.note_packet(data, respond)
+            if cmd_type == "device_hello":
+                eco.handle_hello(data, respond)
+                return
+            if cmd_type == "control_release":
+                eco.handle_release_request(data)
+                return
 
         if cmd_type == "ping":
             client_time = data.get("client_time")
@@ -3447,6 +3463,9 @@ class Server:
                 return
             if hasattr(self, "phone_camera_receiver") and self.phone_camera_receiver:
                 self.phone_camera_receiver.stop()
+            if self.ecosystem:
+                self.ecosystem.handle_release_request(data)
+                self.ecosystem.registry.forget_session(data)
             owner_key = self._camera_client_key(addr)
             self._stop_camera_stream_for_client(owner_key)
             self.live_audio_manager.stop_pc_to_phone(owner_key)
@@ -3476,6 +3495,9 @@ class Server:
                 last_seq = self._last_cmd_seq.get(client_session, 0)
                 if seq > last_seq or (last_seq - seq) >= 100_000:
                     self._last_cmd_seq[client_session] = seq
+
+        if eco and eco.sync.handle(cmd_type, data, respond):
+            return
 
         if self.on_packet_callback:
             try:
@@ -5029,6 +5051,11 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
             except Exception:
                 pass
         self._release_mouse_buttons()
+        try:
+            if self.ecosystem:
+                self.ecosystem.stop()
+        except Exception:
+            pass
         if hasattr(self, "bt_server") and self.bt_server:
             try:
                 self.bt_server.stop()
@@ -5101,6 +5128,11 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
             self.on_status_callback(True)
 
         self.start_discovery_responder()
+        try:
+            if self.ecosystem and self.ecosystem.start():
+                print("[*] Keyboard & mouse sharing: Ctrl+Alt+Right/Left switches device, Ctrl+Alt+Home returns")
+        except Exception as e:
+            print(f"[!] Keyboard & mouse sharing unavailable: {e}")
         if hasattr(self, "bt_server") and self.bt_server:
             try:
                 self.bt_server.start()
