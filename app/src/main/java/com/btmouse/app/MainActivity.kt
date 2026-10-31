@@ -116,4 +116,10 @@ class MainActivity : ComponentActivity() {
             connectionCoordinator.cleanup()
         }
     }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Android only allows reading the clipboard while this app has focus.
+        if (hasFocus) com.btmouse.app.ecosystem.Ecosystem.pushClipboardIfNew()
+    }
 }

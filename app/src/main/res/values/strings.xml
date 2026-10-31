@@ -11,4 +11,10 @@
     <string name="bluetooth_mode">Bluetooth HID</string>
     <string name="wifi_mode">Wi-Fi Network</string>
     <string name="air_mouse">Air Mouse</string>
+    <string name="remote_control_label">Lanyard control</string>
+    <string name="remote_control_description">Lets your laptop or another of your devices move a pointer, tap, scroll and type on this device while you choose to let it. Nothing is read or sent anywhere else.</string>
+    <string name="remote_keyboard_label">Lanyard keyboard</string>
+    <string name="remote_keyboard_subtype">Keys from your other device</string>
+    <string name="clipboard_tile_label">Send clipboard</string>
+    <string name="share_target_label">Send with Lanyard</string>
 </resources>

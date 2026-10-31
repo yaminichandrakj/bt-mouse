@@ -182,6 +182,7 @@ class WifiClientManager(
     private fun handleIncomingPacket(jsonStr: String, sourceAddress: InetAddress, sourcePort: Int) {
         try {
             val json = gson.fromJson(jsonStr, JsonObject::class.java)
+            if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(json)) return
             recordingTransfer.handleMessage(json) { ack ->
                 sendPacket(mapOf(
                     "type" to ack.get("type").asString,
@@ -706,6 +707,28 @@ class WifiClientManager(
     override fun notifyPathSwitch() {
         sendMouseButton(0)
         sendPacket(mapOf("type" to "path_switch"), includeSeq = false)
+    }
+
+    override fun sendJsonObject(obj: JsonObject) {
+        if (!_isConnected.value) return
+        val targetHost = settings.wifiHost.value
+        val targetPort = settings.wifiPort.value
+        if (targetHost.isEmpty() || targetPort <= 0) return
+        try {
+            val out = obj.deepCopy()
+            out.addProperty("token", settings.serverPin.value.trim())
+            if (clientSessionId.isNotEmpty()) out.addProperty("client_session", clientSessionId)
+            nextSeqSupplier?.invoke()?.let { seq -> if (seq > 0) out.addProperty("seq", seq) }
+            val bytes = out.toString().toByteArray()
+            if (bytes.size > 65000) {
+                Log.w(tag, "Skipping oversized UDP datagram (${bytes.size} bytes)")
+                return
+            }
+            val packet = DatagramPacket(bytes, bytes.size, InetAddress.getByName(targetHost), targetPort)
+            if (sendQueue.trySend(packet).isFailure) Log.w(tag, "Dropped UDP packet because the send queue is full")
+        } catch (e: Exception) {
+            Log.e(tag, "Error enqueuing UDP packet", e)
+        }
     }
 
     private fun sendPacket(

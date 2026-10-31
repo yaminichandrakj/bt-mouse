@@ -21,12 +21,11 @@ import com.btmouse.app.R
 import com.btmouse.app.connection.ConnectionCoordinator
 
 /**
- * Foreground service that keeps explicitly user-started live camera or audio
- * companion streams running while the Android app is backgrounded.
+ * Foreground service that keeps the phone connected to the PC in the background
+ * ("Stay connected"), and keeps user-started camera or audio streams running.
  *
- * In accordance with Android 14+ foreground service guidelines, this service
- * displays a persistent, user-visible notification with explicit stop and
- * disconnect controls, and never auto-starts without user action.
+ * Android requires a visible notification for this; it carries Disconnect,
+ * Reconnect now, Stop Stream and Release (hand keyboard and mouse back) actions.
  */
 class CompanionSessionService : Service() {
 
@@ -51,6 +50,16 @@ class CompanionSessionService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_RELEASE_CONTROL -> {
+                com.btmouse.app.ecosystem.Ecosystem.releaseControl()
+                updateNotification()
+                return START_STICKY
+            }
+            ACTION_RECONNECT -> {
+                ConnectionCoordinator.activeInstance?.reconnectNow()
+                startForegroundWithSession()
+                return START_STICKY
+            }
             ACTION_STOP_MEDIA -> {
                 ConnectionCoordinator.activeInstance?.let {
                     it.stopPcLiveAudio()
@@ -69,7 +78,7 @@ class CompanionSessionService : Service() {
                         it.isCameraStreaming.value ||
                         it.isPhoneCameraStreaming.value
                 } ?: false
-                if (!hasActiveMedia && coord?.isConnected?.value != true) {
+                if (!hasActiveMedia && coord?.isConnected?.value != true && coord?.shouldStayConnected() != true) {
                     stopForegroundSafely()
                     stopSelf()
                     return START_NOT_STICKY
@@ -155,6 +164,16 @@ class CompanionSessionService : Service() {
     }
 
     private fun acquireWakeLockIfNeeded() {
+        // Staying connected needs no wake lock; only live camera/audio keep the CPU awake.
+        val coord = ConnectionCoordinator.activeInstance
+        val hasActiveMedia = coord?.let {
+            it.isPcLiveAudioActive.value || it.isPhoneLiveAudioActive.value ||
+                it.isCameraStreaming.value || it.isPhoneCameraStreaming.value
+        } ?: false
+        if (!hasActiveMedia) {
+            releaseWakeLock()
+            return
+        }
         if (wakeLock == null) {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTMouse:SessionWakeLock").apply {
@@ -223,25 +242,45 @@ class CompanionSessionService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val controller = com.btmouse.app.ecosystem.Ecosystem.controlledBy.value
+        val connected = coord?.isConnected?.value == true
         val statusText = when {
+            controller != null -> "$controller is using its keyboard and mouse here"
             isPhoneCameraActive -> "Phone Camera as Webcam streaming to PC"
             isAudioActive && isPcCameraActive -> "PC Camera feed & Live Audio active"
             isAudioActive -> "Live Audio active"
             isPcCameraActive -> "PC Camera stream active"
-            else -> "Companion connection active"
+            connected -> "Connected · clipboard and files ready"
+            else -> "Waiting for your PC · reconnects on its own"
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_companion)
-            .setContentTitle("Connected to $deviceName")
+            .setContentTitle(if (connected) "Connected to $deviceName" else "Staying connected to ${coord?.settings?.pcName?.value?.ifBlank { null } ?: "your PC"}")
             .setContentText(statusText)
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
 
+        if (controller != null) {
+            val releaseIntent = PendingIntent.getService(
+                this, 3,
+                Intent(this, CompanionSessionService::class.java).apply { action = ACTION_RELEASE_CONTROL },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(0, "Release", releaseIntent)
+        }
         if (isAnyMediaActive) {
             builder.addAction(0, "Stop Stream", stopMediaIntent)
+        }
+        if (!connected) {
+            val reconnectIntent = PendingIntent.getService(
+                this, 4,
+                Intent(this, CompanionSessionService::class.java).apply { action = ACTION_RECONNECT },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(0, "Reconnect now", reconnectIntent)
         }
         builder.addAction(0, "Disconnect", disconnectIntent)
 
@@ -272,6 +311,8 @@ class CompanionSessionService : Service() {
         const val ACTION_STOP_SERVICE = "com.btmouse.app.action.STOP_SESSION_SERVICE"
         const val ACTION_STOP_MEDIA = "com.btmouse.app.action.STOP_MEDIA"
         const val ACTION_DISCONNECT = "com.btmouse.app.action.DISCONNECT"
+        const val ACTION_RELEASE_CONTROL = "com.btmouse.app.action.RELEASE_CONTROL"
+        const val ACTION_RECONNECT = "com.btmouse.app.action.RECONNECT"
 
         fun start(context: Context) {
             try {

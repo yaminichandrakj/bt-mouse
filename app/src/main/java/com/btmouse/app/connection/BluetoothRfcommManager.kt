@@ -268,6 +268,7 @@ class BluetoothRfcommManager(
     private fun processIncomingPacket(line: String) {
         try {
             val root = gson.fromJson(line, JsonObject::class.java) ?: return
+            if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
             recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
             val type = root.get("type")?.asString ?: ""
             when (type) {
@@ -507,6 +508,10 @@ class BluetoothRfcommManager(
         } catch (e: Exception) {
             Log.e(tag, "Error parsing incoming packet", e)
         }
+    }
+
+    override fun sendJsonObject(obj: JsonObject) {
+        if (_isConnected.value) sendJson(obj.deepCopy())
     }
 
     private fun sendJson(obj: JsonObject, includeSeq: Boolean = true) {

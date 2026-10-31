@@ -397,6 +397,8 @@ class ConnectionCoordinator(
     private var supervisionJob: Job? = null
     private var linkTopUpJob: Job? = null
     private var transportTransitionJob: Job? = null
+    private var stayConnectedJob: Job? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private var lastObservedTransport: ActiveTransport = ActiveTransport.NONE
     @Volatile private var wasConnected: Boolean = false
     @Volatile private var intentionalDisconnect: Boolean = false
@@ -417,13 +419,73 @@ class ConnectionCoordinator(
 
         onPermissionsUpdated()
 
+        com.btmouse.app.ecosystem.Ecosystem.init(context, this, settings, scope)
+
         if (!isInitialized) {
             isInitialized = true
             monitorTransportTransitions()
             monitorSessionAndMedia()
             monitorConnectionSupervision()
             monitorLinkTopUp()
+            monitorStayConnected()
         }
+    }
+
+    /** True when the phone should keep itself connected in the background. */
+    fun shouldStayConnected(): Boolean = settings.stayConnected.value && isPaired() && !intentionalDisconnect
+
+    /**
+     * "Stay connected": connect at start, reconnect whenever a network comes back, and
+     * keep trying once a minute when the PC is unreachable, instead of giving up.
+     */
+    private fun monitorStayConnected() {
+        stayConnectedJob?.cancel()
+        stayConnectedJob = scope.launch {
+            delay(1500)
+            if (shouldStayConnected() && !isConnected.value) connectSavedPc()
+            while (true) {
+                delay(60_000)
+                if (shouldStayConnected() && !isConnected.value && reconnectJob?.isActive != true) {
+                    bringUpAllLinks()
+                }
+            }
+        }
+        registerNetworkCallback()
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) {
+                scope.launch {
+                    // Give DHCP and routes a moment before probing the PC.
+                    delay(2000)
+                    if (!shouldStayConnected()) return@launch
+                    val links = linkStates.value
+                    if (!isConnected.value || links.wifi == LinkState.OFF) bringUpAllLinks()
+                }
+            }
+        }
+        runCatching {
+            cm.registerNetworkCallback(
+                android.net.NetworkRequest.Builder()
+                    .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build(),
+                callback
+            )
+            networkCallback = callback
+        }
+    }
+
+    /** The notification's Reconnect button: undo a manual disconnect and connect again. */
+    fun reconnectNow() {
+        intentionalDisconnect = false
+        connectSavedPc()
+    }
+
+    override fun sendJsonObject(obj: com.google.gson.JsonObject) {
+        currentCompanionConnection.sendJsonObject(obj)
     }
 
     /**
@@ -665,11 +727,14 @@ class ConnectionCoordinator(
             combine(
                 hasActiveMediaFlow,
                 isConnected,
-                settings.backgroundSessionEnabled
-            ) { hasActiveMedia, connected, bgEnabled ->
-                Triple(hasActiveMedia, connected, bgEnabled)
-            }.collect { (hasActiveMedia, connected, bgEnabled) ->
-                if (bgEnabled && hasActiveMedia) {
+                settings.backgroundSessionEnabled,
+                settings.stayConnected,
+                com.btmouse.app.ecosystem.Ecosystem.controlledBy
+            ) { hasActiveMedia, connected, bgEnabled, stay, _ ->
+                listOf(hasActiveMedia, connected, bgEnabled, stay)
+            }.collect { (hasActiveMedia, connected, bgEnabled, stay) ->
+                val keepAlive = stay && isPaired() && !intentionalDisconnect
+                if ((bgEnabled && hasActiveMedia) || keepAlive) {
                     CompanionSessionService.start(context)
                 } else if (!hasActiveMedia && !connected) {
                     CompanionSessionService.stop(context)
@@ -735,7 +800,11 @@ class ConnectionCoordinator(
                     return@launch
                 }
             }
-            _reconnectStatus.value = "Reconnect timed out. Tap to retry."
+            _reconnectStatus.value = if (shouldStayConnected()) {
+                "PC not reachable. Still trying every minute."
+            } else {
+                "Reconnect timed out. Tap to retry."
+            }
         }
     }
 

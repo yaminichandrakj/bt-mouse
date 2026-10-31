@@ -218,6 +218,7 @@ class RemoteWanManager(
     private fun handleIncomingMessage(text: String, source: WebSocket) {
         try {
             val root = gson.fromJson(text, JsonObject::class.java) ?: return
+            if (_isConnected.value && com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
             val type = root.get("type")?.asString ?: ""
             if (_isConnected.value) recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
 
@@ -501,6 +502,10 @@ class RemoteWanManager(
                 delay(3000L)
             }
         }
+    }
+
+    override fun sendJsonObject(obj: JsonObject) {
+        sendJson(obj.deepCopy())
     }
 
     private fun sendJson(obj: JsonObject, includeSeq: Boolean = true) {

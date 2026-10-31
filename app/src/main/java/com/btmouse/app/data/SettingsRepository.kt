@@ -102,6 +102,31 @@ class SettingsRepository(context: Context) {
     private val _failoverEnabled = MutableStateFlow(prefs.getBoolean(KEY_FAILOVER_ENABLED, true))
     val failoverEnabled: StateFlow<Boolean> = _failoverEnabled.asStateFlow()
 
+    // Ecosystem: stay connected in the background, let other devices drive this one, share the clipboard.
+    private val _stayConnected = MutableStateFlow(prefs.getBoolean(KEY_STAY_CONNECTED, true))
+    val stayConnected: StateFlow<Boolean> = _stayConnected.asStateFlow()
+
+    private val _allowRemoteControl = MutableStateFlow(prefs.getBoolean(KEY_ALLOW_REMOTE_CONTROL, true))
+    val allowRemoteControl: StateFlow<Boolean> = _allowRemoteControl.asStateFlow()
+
+    private val _clipboardSync = MutableStateFlow(prefs.getBoolean(KEY_CLIPBOARD_SYNC, true))
+    val clipboardSync: StateFlow<Boolean> = _clipboardSync.asStateFlow()
+
+    fun setStayConnected(enabled: Boolean) {
+        _stayConnected.value = enabled
+        prefs.edit().putBoolean(KEY_STAY_CONNECTED, enabled).apply()
+    }
+
+    fun setAllowRemoteControl(enabled: Boolean) {
+        _allowRemoteControl.value = enabled
+        prefs.edit().putBoolean(KEY_ALLOW_REMOTE_CONTROL, enabled).apply()
+    }
+
+    fun setClipboardSync(enabled: Boolean) {
+        _clipboardSync.value = enabled
+        prefs.edit().putBoolean(KEY_CLIPBOARD_SYNC, enabled).apply()
+    }
+
     fun setAutoReconnect(enabled: Boolean) {
         _autoReconnect.value = enabled
         prefs.edit().putBoolean(KEY_AUTO_RECONNECT, enabled).apply()
@@ -262,5 +287,8 @@ class SettingsRepository(context: Context) {
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_BACKGROUND_SESSION_ENABLED = "background_session_enabled"
         private const val KEY_FAILOVER_ENABLED = "failover_enabled"
+        private const val KEY_STAY_CONNECTED = "stay_connected"
+        private const val KEY_ALLOW_REMOTE_CONTROL = "allow_remote_control"
+        private const val KEY_CLIPBOARD_SYNC = "clipboard_sync"
     }
 }
