@@ -1,6 +1,6 @@
 # BT Mouse Ecosystem — Plan (v1.6 → v2.0)
 
-**Status:** v1.6.0 built (see the status table at the end) | **Date:** 2026-10-31 | **Builds on:** [`unified_connectivity_plan.md`](unified_connectivity_plan.md)
+**Status:** v1.7.0 built (see the status tables at the end) | **Date:** 2026-10-31 | **Builds on:** [`unified_connectivity_plan.md`](unified_connectivity_plan.md)
 
 ## Where things stand today (v1.5.0)
 
@@ -220,3 +220,20 @@ Everything below shipped together in **v1.6.0** instead of five separate release
 3. HTTP file path on the LAN for large transfers.
 4. H.264 (MediaCodec) for streams; system-audio streams.
 5. Live drags (`continueStroke`) instead of replaying on release.
+
+## Build status (v1.7.0)
+
+| Item | Status in v1.7.0 |
+|---|---|
+| Live drags | Built: continued strokes follow the pointer, with automatic fallback to replay-on-release (`RemoteControlService.pumpLive`). |
+| Picture clipboard | Built both ways. PC → phone is automatic. Phone → PC follows the same Android limits as text. Pictures travel as small file transfers flagged `clipboard`. |
+| LAN fast path | Built: `TransferHttpServer` (PC, port 53536, per-transfer token) plus OkHttp pull and upload on Android, resuming from received chunks and falling back to chunks on any error. |
+| 4. Android-only | Built as a **phone hub** (`AndroidHub`, UDP 53540, same protocol and QR format as the PC). The tablet's trackpad, keyboard and Screen preview drive and show the phone. Clipboard, files, control and screen watching work both ways. Not built: relaying between two tablets, the phone watching a tablet's screen, and discovery without the QR. |
+| PC dials out to phones | Not built (phones still reconnect to the PC). |
+| H.264/Opus, audio through the hub | Not built. Next big item. |
+
+### Next steps
+1. Physical-device pass with `docs/ecosystem_test_checklist.md` (v1.6 and v1.7 sections).
+2. H.264 via MediaCodec for screen and camera streams, decoding with MediaCodec on Android and PyAV on the PC.
+3. Audio streams through the PC hub (reuse the live-audio PCM path, then Opus).
+4. Hub: relaying between tablets, and watching a tablet's screen from the phone.
