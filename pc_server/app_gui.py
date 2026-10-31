@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -2744,6 +2744,8 @@ class CompanionApp(QMainWindow):
                 self.server.stop()
                 if self.server_thread and self.server_thread.is_alive():
                     self.server_thread.join(timeout=1.0)
+                if getattr(self.server, "ecosystem", None):
+                    self.server.ecosystem.shutdown()
             time.sleep(0.3)
             self._init_server()
             self.server_thread = threading.Thread(target=self.server.start, daemon=True)

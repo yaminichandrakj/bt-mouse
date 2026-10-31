@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from ecosystem import Ecosystem
+from secure import SessionStore
 
 
 def _pairing_pin_config_path():
@@ -2921,6 +2922,7 @@ class PhoneCameraHttpServer:
 
 class Server:
     ecosystem = None
+    secure_sessions = None
 
     def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token=None):
         ensure_interactive_desktop()
@@ -3009,6 +3011,7 @@ class Server:
 
         # Phones and tablets this PC's keyboard and mouse can move to
         self.ecosystem = Ecosystem(pc_name=socket.gethostname())
+        self.secure_sessions = SessionStore()
 
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
@@ -3360,6 +3363,24 @@ class Server:
     def handle_packet(self, data, addr=None, responder=None):
         if not isinstance(data, dict):
             return
+        if "enc" in data and self.secure_sessions is not None:
+            # Encrypted session: read it, and seal everything sent back on it.
+            inner, sealer = self.secure_sessions.open(data)
+            if inner is None:
+                # Unknown session (this PC restarted): ask the phone to exchange keys again.
+                reset = {"type": "secure_reset"}
+                if responder:
+                    responder(reset)
+                elif addr and self.sock:
+                    self._send_udp_json(reset, addr)
+                return
+            plain_responder = responder
+            if plain_responder is None:
+                if not (addr and self.sock):
+                    return
+                plain_responder = lambda payload: self._send_udp_json(payload, addr)  # noqa: E731
+            responder = lambda payload: plain_responder(sealer(payload))  # noqa: E731
+            data = inner
         cmd_type = data.get("type")
 
         def respond(payload):
@@ -3419,7 +3440,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.8.0"
+                    "version": "1.9.0"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -3438,6 +3459,12 @@ class Server:
 
         self._refresh_camera_stream_lease(addr, data, respond)
         self._note_client_activity(addr, alive=cmd_type != "disconnect")
+        if cmd_type == "key_exchange" and self.secure_sessions is not None:
+            reply = self.secure_sessions.handshake(data, self.auth_token)
+            if reply:
+                respond(reply)
+            return
+
         eco = self.ecosystem
         if eco:
             eco.registry.note_packet(data, respond)
@@ -4022,7 +4049,8 @@ class Server:
     def _send_udp_json(self, resp_dict, addr):
         try:
             payload = json.dumps(resp_dict).encode("utf-8")
-            if len(payload) <= 60000:
+            # Room for a sealed 32 KB file chunk or camera frame; under the 65,507-byte UDP limit.
+            if len(payload) <= 65000:
                 self.sock.sendto(payload, addr)
                 return True
             print(f"[-] Dropped oversized UDP response ({len(payload)} bytes)")

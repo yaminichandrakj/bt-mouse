@@ -161,7 +161,7 @@ fun DevicesScreen(
             }
         }
 
-        SectionHeader("This ${if (DeviceIdentity.isTablet(context)) "tablet" else "phone"}")
+        SectionHeader("This ${if (DeviceIdentity.isTablet(context)) "tablet" else "phone"}", action = "Setup guide", onAction = { settings.setSetupDone(false) })
         PanelCard {
             Text(DeviceIdentity.name(context), color = OnInk, fontSize = 18.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(12.dp))
@@ -234,6 +234,11 @@ fun DevicesScreen(
                     "Pictures are only taken while someone watches."
                 else "Let your laptop or another device watch this screen. Android asks each time."
             )
+            Spacer(Modifier.height(10.dp))
+            val smooth by settings.smoothMirroring.collectAsState()
+            ToggleRow("Smooth mirroring (beta)", "Real video when watching another phone or tablet. Turn off if the picture stays black.", smooth) {
+                settings.setSmoothMirroring(it)
+            }
             Spacer(Modifier.height(10.dp))
             if (sharingScreen) {
                 PillButton("Stop sharing", { CompanionSessionService.stopProjection(context) }, style = PillStyle.Danger)
@@ -444,18 +449,18 @@ private fun TransferRow(info: TransferInfo, context: Context) {
     }
 }
 
-private fun isKeyboardEnabled(context: Context): Boolean {
+internal fun isKeyboardEnabled(context: Context): Boolean {
     val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
     return imm.enabledInputMethodList.any { it.packageName == context.packageName }
 }
 
-private fun isKeyboardSelected(context: Context): Boolean {
+internal fun isKeyboardSelected(context: Context): Boolean {
     val current = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: return false
     return current.startsWith(context.packageName + "/")
 }
 
 @SuppressLint("BatteryLife")
-private fun requestBatteryExemption(context: Context) {
+internal fun requestBatteryExemption(context: Context) {
     val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     runCatching { context.startActivity(direct) }.onFailure {
@@ -635,60 +640,97 @@ fun StreamViewerScreen(stream: LiveStream, onClose: () -> Unit) {
                 style = PillStyle.Quiet
             )
         }
+        val videoSize by com.btmouse.app.ecosystem.H264Viewer.videoSize.collectAsState()
+        val videoDevice by com.btmouse.app.ecosystem.H264Viewer.deviceSize.collectAsState()
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel),
             contentAlignment = Alignment.Center
         ) {
             val bmp = bitmap
-            if (bmp == null) {
-                Caption("Waiting for ${stream.ownerName}… If it asks, tap Start now on it.")
-            } else {
-                val boxW = constraints.maxWidth.toFloat()
-                val boxH = constraints.maxHeight.toFloat()
-                val scale = minOf(boxW / bmp.width, boxH / bmp.height)
-                val shownW = bmp.width * scale
-                val shownH = bmp.height * scale
-                val left = (boxW - shownW) / 2
-                val top = (boxH - shownH) / 2
-                val f = frame
-                fun toDevice(p: androidx.compose.ui.geometry.Offset): Pair<Int, Int>? {
-                    val fx = (p.x - left) / shownW
-                    val fy = (p.y - top) / shownH
-                    if (fx !in 0f..1f || fy !in 0f..1f || f == null) return null
-                    return (fx * f.width).toInt() to (fy * f.height).toInt()
-                }
-                androidx.compose.foundation.Image(
-                    bmp, "Live picture from ${stream.ownerName}",
-                    Modifier.fillMaxSize().then(
-                        if (!canControl) Modifier else Modifier.pointerInput(stream.id) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown()
-                                val start = toDevice(down.position) ?: return@awaitEachGesture
-                                Ecosystem.remoteInput(stream.owner, "move") { addProperty("x", start.first); addProperty("y", start.second) }
-                                Ecosystem.remoteInput(stream.owner, "button") {
-                                    addProperty("button", "left"); addProperty("down", true)
-                                    addProperty("x", start.first); addProperty("y", start.second)
-                                }
-                                var last = start
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull() ?: break
-                                    toDevice(change.position)?.let { p ->
-                                        last = p
-                                        Ecosystem.remoteInput(stream.owner, "move") { addProperty("x", p.first); addProperty("y", p.second) }
-                                    }
-                                    change.consume()
-                                    if (!change.pressed) break
-                                }
-                                Ecosystem.remoteInput(stream.owner, "button") {
-                                    addProperty("button", "left"); addProperty("down", false)
-                                    addProperty("x", last.first); addProperty("y", last.second)
-                                }
+            val f = frame
+            val video = videoSize
+            // What is on screen: smooth video when it plays, otherwise the latest picture.
+            val content: Pair<Int, Int>? = video ?: bmp?.let { it.width to it.height }
+            val device: Pair<Int, Int>? = when {
+                video != null && videoDevice.first > 0 -> videoDevice
+                video == null && f != null -> f.width to f.height
+                else -> null
+            }
+            val boxW = constraints.maxWidth.toFloat()
+            val boxH = constraints.maxHeight.toFloat()
+            val scale = content?.let { minOf(boxW / it.first, boxH / it.second) } ?: 1f
+            val shownW = (content?.first ?: 1) * scale
+            val shownH = (content?.second ?: 1) * scale
+            val left = (boxW - shownW) / 2
+            val top = (boxH - shownH) / 2
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            fun toDevice(p: androidx.compose.ui.geometry.Offset): Pair<Int, Int>? {
+                val d = device ?: return null
+                val fx = (p.x - left) / shownW
+                val fy = (p.y - top) / shownH
+                if (fx !in 0f..1f || fy !in 0f..1f) return null
+                return (fx * d.first).toInt() to (fy * d.second).toInt()
+            }
+            // The decoder needs its surface before the first key frame, so it is always here.
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { ctx ->
+                    android.view.TextureView(ctx).apply {
+                        surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                                com.btmouse.app.ecosystem.H264Viewer.setSurface(android.view.Surface(st))
                             }
+                            override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                                com.btmouse.app.ecosystem.H264Viewer.setSurface(null)
+                                return true
+                            }
+                            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
                         }
-                    ),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                )
+                    }
+                },
+                modifier = if (video != null) {
+                    with(density) { Modifier.size(shownW.toDp(), shownH.toDp()) }
+                } else {
+                    Modifier.size(1.dp)
+                }
+            )
+            if (video == null) {
+                if (bmp == null) {
+                    Caption("Waiting for ${stream.ownerName}… If it asks, tap Start now on it.")
+                } else {
+                    androidx.compose.foundation.Image(
+                        bmp, "Live picture from ${stream.ownerName}", Modifier.fillMaxSize(),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    )
+                }
+            }
+            if (canControl && content != null) {
+                Box(Modifier.fillMaxSize().pointerInput(stream.id, content, device) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        val start = toDevice(down.position) ?: return@awaitEachGesture
+                        Ecosystem.remoteInput(stream.owner, "move") { addProperty("x", start.first); addProperty("y", start.second) }
+                        Ecosystem.remoteInput(stream.owner, "button") {
+                            addProperty("button", "left"); addProperty("down", true)
+                            addProperty("x", start.first); addProperty("y", start.second)
+                        }
+                        var last = start
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull() ?: break
+                            toDevice(change.position)?.let { p ->
+                                last = p
+                                Ecosystem.remoteInput(stream.owner, "move") { addProperty("x", p.first); addProperty("y", p.second) }
+                            }
+                            change.consume()
+                            if (!change.pressed) break
+                        }
+                        Ecosystem.remoteInput(stream.owner, "button") {
+                            addProperty("button", "left"); addProperty("down", false)
+                            addProperty("x", last.first); addProperty("y", last.second)
+                        }
+                    }
+                })
             }
         }
         if (canControl) {

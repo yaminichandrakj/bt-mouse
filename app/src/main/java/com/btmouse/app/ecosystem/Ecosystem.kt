@@ -229,7 +229,7 @@ object Ecosystem {
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
         "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch",
-        "stream_watch", "screen_request", "stream_audio"
+        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -245,6 +245,8 @@ object Ecosystem {
             }
             "stream_watch" -> onStreamWatch(json)
             "stream_audio" -> onStreamAudio(json)
+            "stream_h264" -> H264Viewer.accept(json)
+            "stream_keyframe" -> if (json.get("from")?.asString in h264Watchers) H264Encoder.requestKeyframe()
             "screen_request" -> onScreenRequest(json)
             "control_state" -> {
                 val active = json.get("active")?.asBoolean ?: false
@@ -358,7 +360,7 @@ object Ecosystem {
         if (kind == "screen") {
             val now = System.currentTimeMillis()
             if (directWatchers.entries.removeIf { now - it.value > 25_000 }) updateScreenViewers()
-            directWatchers.keys.forEach { watcher ->
+            directWatchers.keys.filter { it !in h264Watchers }.forEach { watcher ->
                 sendTo(watcher, payload.deepCopy())
             }
         }
@@ -376,11 +378,14 @@ object Ecosystem {
     fun watch(streamId: String) {
         val previous = watching
         if (previous != null && previous != streamId) unwatch()
+        if (previous != streamId) H264Viewer.reset(streamId)
         watching = streamId
+        val smooth = settings?.smoothMirroring?.value == true && !h264Broken
         sendTo(streamId.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
             addProperty("stream_id", streamId)
             addProperty("on", true)
+            if (smooth) addProperty("codec", "h264")
         })
     }
 
@@ -388,6 +393,7 @@ object Ecosystem {
         val id = watching ?: return
         watching = null
         _watchedFrame.value = null
+        H264Viewer.reset(null)
         stopStreamAudio()
         sendTo(id.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
@@ -436,12 +442,52 @@ object Ecosystem {
         val streamId = json.get("stream_id")?.asString ?: return
         val from = json.get("from")?.takeIf { !it.isJsonNull }?.asString ?: return
         if (streamId != "$selfId:screen" || from == selfId) return
-        if (json.get("on")?.asBoolean != false) directWatchers[from] = System.currentTimeMillis() else directWatchers.remove(from)
+        if (json.get("on")?.asBoolean != false) {
+            directWatchers[from] = System.currentTimeMillis()
+            if (json.get("codec")?.asString == "h264") {
+                if (h264Watchers.add(from)) H264Encoder.requestKeyframe()
+            } else {
+                h264Watchers.remove(from)
+            }
+        } else {
+            directWatchers.remove(from)
+            h264Watchers.remove(from)
+        }
         updateScreenViewers()
     }
 
+    private val h264Watchers = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var h264Broken = false
+
     private fun updateScreenViewers() {
+        h264Watchers.retainAll(directWatchers.keys)
+        if (h264Watchers.isEmpty()) H264Encoder.stop()
         ScreenShare.viewers = pcScreenViewers + directWatchers.size
+    }
+
+    /** Someone watches this screen as H.264 video. */
+    fun wantsH264(): Boolean = h264Watchers.isNotEmpty()
+
+    /** Viewers that still want JPEG pictures (the PC, older apps, smooth mirroring off). */
+    fun jpegViewers(): Int = pcScreenViewers + directWatchers.keys.count { it !in h264Watchers }
+
+    fun publishH264(part: JsonObject) {
+        part.addProperty("type", "stream_h264")
+        part.addProperty("stream_id", "$selfId:screen")
+        h264Watchers.forEach { sendTo(it, part.deepCopy()) }
+    }
+
+    fun requestKeyframe(streamId: String) {
+        sendTo(streamId.substringBefore(':'), JsonObject().apply {
+            addProperty("type", "stream_keyframe")
+            addProperty("stream_id", streamId)
+        })
+    }
+
+    /** This device can't decode H.264: watch with pictures instead. */
+    fun h264Unavailable() {
+        h264Broken = true
+        watching?.let { watch(it) }
     }
 
     /** Another device asked to mirror this screen: start sharing (Android asks the user once). */
