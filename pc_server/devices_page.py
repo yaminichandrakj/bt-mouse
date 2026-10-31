@@ -607,16 +607,52 @@ def wire_ecosystem(app):
     clipboard = QApplication.clipboard()
 
     def on_local_clipboard():
-        if not getattr(app, "chk_clip", None) or app.chk_clip.isChecked():
-            text = clipboard.text()
-            if text:
-                threading.Thread(target=app.server.ecosystem.sync.publish_clipboard, args=(text,), daemon=True).start()
+        if getattr(app, "chk_clip", None) and not app.chk_clip.isChecked():
+            return
+        mime = clipboard.mimeData()
+        text = clipboard.text()
+        if text:
+            threading.Thread(target=app.server.ecosystem.sync.publish_clipboard, args=(text,), daemon=True).start()
+        elif mime is not None and mime.hasImage():
+            if getattr(app, "_skip_next_clip_image", False):
+                app._skip_next_clip_image = False
+                return
+            publish_image(clipboard.image())
+
+    def publish_image(image):
+        import hashlib
+        import tempfile
+        if image.isNull():
+            return
+        if image.width() > 2560 or image.height() > 2560:
+            image = image.scaled(2560, 2560, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        folder = Path(tempfile.gettempdir()) / "LanyardClipboard"
+        folder.mkdir(exist_ok=True)
+        path = folder / "clipboard.png"
+        if not image.save(str(path), "PNG"):
+            return
+        digest = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
+        if digest == getattr(app, "_last_clip_image", None):
+            return
+        app._last_clip_image = digest
+        final = folder / f"Copied image {digest}.png"
+        os.replace(path, final)
+        threading.Thread(target=app.server.ecosystem.sync.publish_clipboard_image, args=(str(final),), daemon=True).start()
 
     if not getattr(app, "_clipboard_hooked", False):
         clipboard.dataChanged.connect(on_local_clipboard)
         app._clipboard_hooked = True
 
     eco.sync.on_clipboard = lambda text: app._run_on_ui(lambda: clipboard.setText(text))
+
+    def set_image(path):
+        from PySide6.QtGui import QImage
+        img = QImage(path)
+        if not img.isNull():
+            app._skip_next_clip_image = True
+            clipboard.setImage(img)
+
+    eco.sync.on_clipboard_image = lambda path: app._run_on_ui(lambda: set_image(path))
 
     def on_target(target):
         def _ui():

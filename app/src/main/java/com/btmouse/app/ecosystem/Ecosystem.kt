@@ -87,6 +87,7 @@ object Ecosystem {
     val lastClipboardNotice: StateFlow<String?> = _lastClipboard.asStateFlow()
 
     private var lastClipId: String? = null
+    private var lastClipImage: String? = null
     private var suppressNextLocalClip = false
 
     val selfId: String get() = DeviceIdentity.id(appContext)
@@ -184,6 +185,7 @@ object Ecosystem {
                 addProperty("keyboard", RemoteKeyboardService.instance != null)
                 addProperty("clipboard", settings?.clipboardSync?.value ?: true)
                 addProperty("files", true)
+                addProperty("clipboard_image", settings?.clipboardSync?.value ?: true)
                 addProperty("library", true)
                 addProperty("streams", true)
             })
@@ -330,6 +332,18 @@ object Ecosystem {
     private fun clipId(text: String): String =
         MessageDigest.getInstance("SHA-1").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
 
+    fun setClipboardImage(uri: android.net.Uri, fromName: String) {
+        if (settings?.clipboardSync?.value == false) return
+        main.post {
+            runCatching {
+                val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                suppressNextLocalClip = true
+                clipboard.setPrimaryClip(ClipData.newUri(appContext.contentResolver, "Image from $fromName", uri))
+                _lastClipboard.value = "Picture from $fromName"
+            }
+        }
+    }
+
     private fun applyRemoteClipboard(json: JsonObject) {
         if (settings?.clipboardSync?.value == false) return
         val text = json.get("text")?.asString ?: return
@@ -349,10 +363,24 @@ object Ecosystem {
     /** Send the clipboard if it changed. Only works while the app or the Lanyard keyboard has focus. */
     fun pushClipboardIfNew(force: Boolean = false): Boolean {
         if (!initialized || (settings?.clipboardSync?.value == false && !force)) return false
-        val text = runCatching {
-            val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(appContext)?.toString()
-        }.getOrNull()
+        val clip = runCatching {
+            (appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
+        }.getOrNull() ?: return false
+        if (clip.itemCount == 0) return false
+        val item = clip.getItemAt(0)
+        val uri = item.uri
+        if (item.text.isNullOrEmpty() && uri != null) {
+            // A copied picture: send it as a file the PC puts on its clipboard (never echo our own).
+            if (uri.authority == "${appContext.packageName}.fileprovider") return false
+            val mime = runCatching { appContext.contentResolver.getType(uri) }.getOrNull() ?: return false
+            if (!mime.startsWith("image/")) return false
+            val key = uri.toString()
+            if (key == lastClipImage && !force) return false
+            lastClipImage = key
+            files.sendUri(PC_ID, "your PC", uri, clipboard = true)
+            return true
+        }
+        val text = item.coerceToText(appContext)?.toString()
         if (text.isNullOrEmpty()) return false
         return pushText(text, force)
     }

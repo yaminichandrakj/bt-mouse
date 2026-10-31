@@ -47,6 +47,13 @@ class RemoteControlService : AccessibilityService() {
     private var y = 0f
     private var leftDownAt = 0L
     private val dragPoints = ArrayList<Pair<Float, Float>>()
+
+    // Live dragging: one continued stroke follows the pointer while the button is held.
+    private var liveStroke: GestureDescription.StrokeDescription? = null
+    private var liveEnd: Pair<Float, Float>? = null
+    private var liveBusy = false
+    private var liveReleasing = false
+    private var liveBroken = false
     private var pendingWheelY = 0f
     private var pendingWheelX = 0f
     private var wheelScheduled = false
@@ -98,7 +105,13 @@ class RemoteControlService : AccessibilityService() {
         when (ev) {
             "move" -> {
                 moveCursor()
-                if (leftDownAt > 0) addDragPoint()
+                if (leftDownAt > 0) {
+                    addDragPoint()
+                    val start = dragPoints.first()
+                    if (!liveDragUnsupported && !liveBroken &&
+                        (liveStroke != null || hypot(x - start.first, y - start.second) >= 12f)
+                    ) pumpLive()
+                }
             }
             "button" -> onButton(json.get("button")?.asString ?: "left", json.get("down")?.asBoolean ?: false)
             "wheel" -> onWheel(json.get("dy")?.asFloat ?: 0f, json.get("dx")?.asFloat ?: 0f)
@@ -125,6 +138,11 @@ class RemoteControlService : AccessibilityService() {
         when (button) {
             "left" -> if (down) {
                 leftDownAt = SystemClock.uptimeMillis()
+                liveStroke = null
+                liveEnd = null
+                liveBusy = false
+                liveReleasing = false
+                liveBroken = false
                 dragPoints.clear()
                 dragPoints.add(x to y)
                 cursorView?.buttonDown = true
@@ -133,7 +151,13 @@ class RemoteControlService : AccessibilityService() {
                 leftDownAt = 0
                 cursorView?.buttonDown = false
                 addDragPoint()
-                finishLeftGesture(duration)
+                if (liveStroke != null && !liveBroken) {
+                    liveReleasing = true
+                    if (!liveBusy) pumpLive()
+                    dragPoints.clear()
+                } else {
+                    finishLeftGesture(duration)
+                }
             }
             "right" -> if (!down) performGlobalAction(GLOBAL_ACTION_BACK)
             "middle" -> if (!down) performGlobalAction(GLOBAL_ACTION_HOME)
@@ -163,6 +187,62 @@ class RemoteControlService : AccessibilityService() {
             }
         }
         dragPoints.clear()
+    }
+
+    /** Extend the held stroke to the pointer, one segment at a time; lift it on release. */
+    private fun pumpLive() {
+        if (liveBusy) return
+        val target = x to y
+        val prev = liveStroke
+        val from = liveEnd ?: dragPoints.firstOrNull() ?: target
+        if (prev != null && from == target && !liveReleasing) return
+        val path = Path().apply {
+            moveTo(from.first, from.second)
+            // A segment must have length, even when the pointer has not moved.
+            if (from == target) lineTo(target.first + 0.5f, target.second + 0.5f) else lineTo(target.first, target.second)
+        }
+        val keepGoing = !liveReleasing
+        val stroke = runCatching {
+            if (prev == null) GestureDescription.StrokeDescription(path, 0L, 40L, keepGoing)
+            else prev.continueStroke(path, 0L, 40L, keepGoing)
+        }.getOrNull()
+        if (stroke == null) {
+            breakLive()
+            return
+        }
+        liveBusy = true
+        liveStroke = stroke
+        liveEnd = if (from == target) (target.first + 0.5f) to (target.second + 0.5f) else target
+        val sent = runCatching {
+            dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    main.post {
+                        liveBusy = false
+                        if (!keepGoing) {
+                            liveStroke = null
+                            liveEnd = null
+                        } else if (liveReleasing || liveEnd != (x to y)) {
+                            pumpLive()
+                        }
+                    }
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    main.post { breakLive() }
+                }
+            }, null)
+        }.getOrDefault(false)
+        if (!sent) breakLive()
+    }
+
+    /** Continued strokes failed on this device: fall back to replaying the drag on release. */
+    private fun breakLive() {
+        liveBusy = false
+        liveBroken = true
+        liveStroke = null
+        liveEnd = null
+        liveFailures++
+        if (liveFailures >= 3) liveDragUnsupported = true
     }
 
     private fun tap(px: Float, py: Float, duration: Long) {
@@ -412,6 +492,8 @@ class RemoteControlService : AccessibilityService() {
     companion object {
         @Volatile var instance: RemoteControlService? = null
             private set
+        private var liveFailures = 0
+        private var liveDragUnsupported = false
         private val _enabled = MutableStateFlow(false)
         /** True while Android has this service turned on. */
         val enabled: StateFlow<Boolean> = _enabled.asStateFlow()

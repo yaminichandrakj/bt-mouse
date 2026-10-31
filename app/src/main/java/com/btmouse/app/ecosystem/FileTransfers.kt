@@ -77,7 +77,8 @@ class FileTransfers(
 
     private class Incoming(
         val id: String, val name: String, val size: Long, val sha256: String, val replyTo: String?,
-        val peerName: String, val part: File, val meta: File, val library: Boolean = false
+        val peerName: String, val part: File, val meta: File, val library: Boolean = false,
+        val clipboard: Boolean = false
     ) {
         val chunks = maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt())
         val done = ConcurrentHashMap.newKeySet<Int>()
@@ -110,7 +111,10 @@ class FileTransfers(
         sendUri(deviceId, "your PC", Uri.fromFile(file), library = true, displayName = file.name)
     }
 
-    fun sendUri(deviceId: String, peerName: String, uri: Uri, library: Boolean = false, displayName: String? = null) {
+    fun sendUri(
+        deviceId: String, peerName: String, uri: Uri, library: Boolean = false, displayName: String? = null,
+        clipboard: Boolean = false
+    ) {
         scope.launch(Dispatchers.IO) {
             val id = UUID.randomUUID().toString().replace("-", "").take(16)
             var name = displayName ?: "file"
@@ -139,7 +143,7 @@ class FileTransfers(
                 val size = local.length()
                 val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()))
                 outgoing[id] = t
-                runSend(t, local, sha, library)
+                runSend(t, local, sha, library, clipboard)
             } catch (e: Exception) {
                 publish(TransferInfo(id, name, local.length(), peerName, true, "failed", 0f, e.message ?: "Failed"))
             } finally {
@@ -149,7 +153,7 @@ class FileTransfers(
         }
     }
 
-    private suspend fun runSend(t: Outgoing, file: File, sha: String, library: Boolean) {
+    private suspend fun runSend(t: Outgoing, file: File, sha: String, library: Boolean, clipboard: Boolean = false) {
         val offer = JsonObject().apply {
             addProperty("type", "file_offer")
             addProperty("transfer_id", t.id)
@@ -160,6 +164,7 @@ class FileTransfers(
             addProperty("chunks", t.chunks)
             addProperty("from_name", DeviceIdentity.name(context))
             if (library) addProperty("library", true)
+            if (clipboard) addProperty("clipboard", true)
         }
         publish(TransferInfo(t.id, t.name, t.size, t.peerName, true, "waiting", 0f))
         val offerDeadline = System.currentTimeMillis() + GIVE_UP_MS
@@ -279,7 +284,8 @@ class FileTransfers(
             val created = Incoming(
                 id, safeName(json.get("name")?.asString), size, sha, from,
                 json.get("from_name")?.takeIf { !it.isJsonNull }?.asString ?: "your PC", part, meta,
-                library = json.get("library")?.asBoolean ?: false
+                library = json.get("library")?.asBoolean ?: false,
+                clipboard = json.get("clipboard")?.asBoolean ?: false
             )
             if (part.exists() && part.length() == size) {
                 runCatching { meta.readText().split(',').mapNotNull { it.trim().toIntOrNull() }.forEach { created.done.add(it) } }
@@ -352,7 +358,13 @@ class FileTransfers(
         }.getOrNull()
         val ok = sha == inc.sha256
         var openUri: Uri? = null
-        if (ok) openUri = runCatching { if (inc.library) saveToLibrary(inc) else saveToDownloads(inc) }.getOrNull()
+        if (ok) openUri = runCatching {
+            when {
+                inc.clipboard -> saveToClipboard(inc)
+                inc.library -> saveToLibrary(inc)
+                else -> saveToDownloads(inc)
+            }
+        }.getOrNull()
         val saved = ok && openUri != null
         inc.resultOk = saved
         inc.state = if (saved) "done" else "failed"
@@ -361,7 +373,7 @@ class FileTransfers(
         if (!ok) inc.part.delete()
         publish(TransferInfo(id, inc.name, inc.size, inc.peerName, false, inc.state, 1f,
             if (saved) null else "Could not save the file", openUri?.toString()))
-        if (saved && !inc.library) notifyReceived(inc, openUri!!)
+        if (saved && !inc.library && !inc.clipboard) notifyReceived(inc, openUri!!)
     }
 
     private fun sendResult(inc: Incoming, ok: Boolean, error: String?) {
@@ -375,6 +387,20 @@ class FileTransfers(
 
     private fun mimeFor(name: String): String =
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
+
+    /** A picture copied on another device: keep the latest one and put it on the clipboard. */
+    private fun saveToClipboard(inc: Incoming): Uri {
+        val dir = File(context.cacheDir, "clipboard").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val dest = File(dir, inc.name)
+        if (!inc.part.renameTo(dest)) {
+            inc.part.copyTo(dest, overwrite = true)
+            inc.part.delete()
+        }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+        Ecosystem.setClipboardImage(uri, inc.peerName)
+        return uri
+    }
 
     /** Library files go next to this device's own recordings so the Library tab lists them. */
     private fun saveToLibrary(inc: Incoming): Uri {

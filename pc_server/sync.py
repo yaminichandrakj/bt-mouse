@@ -107,6 +107,7 @@ class SyncHub:
         self.receive_dir = Path(receive_dir) if receive_dir else None
         self.clipboard_enabled = True
         self.on_clipboard = None        # (text) -> None: put text on the PC clipboard
+        self.on_clipboard_image = None  # (path) -> None: put a picture on the PC clipboard
         self.on_transfer = None         # (info dict) -> None: progress for the UI
         self.on_file_received = None    # (path, from_name) -> None
         self._last_clip_id = None
@@ -203,12 +204,27 @@ class SyncHub:
             except Exception:
                 pass
 
+    def publish_clipboard_image(self, png_path):
+        """A copied picture goes to every device as a small file it puts on its clipboard."""
+        if not self.clipboard_enabled:
+            return 0
+        sent = 0
+        for dev in self.registry.online_devices():
+            if dev.get("caps", {}).get("clipboard_image"):
+                self.send_file(dev["device_id"], png_path, extra={"clipboard": True})
+                sent += 1
+        return sent
+
     # --- sending files -------------------------------------------------
-    def send_file(self, device_id, path):
-        """Start sending ``path`` to ``device_id`` in the background. Returns the transfer id."""
+    def send_file(self, device_id, path, extra=None):
+        """Start sending ``path`` to ``device_id`` in the background. Returns the transfer id.
+
+        ``extra`` adds fields to the offer, e.g. ``{"clipboard": True}`` for a copied image.
+        """
         path = Path(path)
         size = path.stat().st_size
         t = Transfer(uuid.uuid4().hex[:16], path.name, size, None, device_id, "out", path)
+        t.extra = dict(extra or {})
         with self._lock:
             self._transfers[t.id] = t
         threading.Thread(target=self._send_worker, args=(t,), name=f"FileSend-{t.id}", daemon=True).start()
@@ -221,6 +237,7 @@ class SyncHub:
             t.sha256 = file_sha256(t.path)
             offer = {"type": "file_offer", "transfer_id": t.id, "name": t.name, "size": t.size, "sha256": t.sha256,
                      "chunk_size": CHUNK_SIZE, "chunks": t.chunks, "from": PC_ID, "from_name": self.pc_name()}
+            offer.update(getattr(t, "extra", {}))
             deadline = time.monotonic() + GIVE_UP_AFTER
             while not t.accepted.wait(2.0):
                 if t.cancelled.is_set() or time.monotonic() > deadline:
@@ -329,6 +346,7 @@ class SyncHub:
             t = Transfer(transfer_id, safe_name(data.get("name")), int(data.get("size") or 0), sha256, sender, "in")
             t.from_name = str(data.get("from_name") or (self.registry.get(sender) or {}).get("name") or "Device")
             t.library = bool(data.get("library")) and self.library_dir is not None
+            t.clipboard = bool(data.get("clipboard"))
             t.part, t.meta = self._part_paths(sha256, t.size)
             try:
                 t.done = set(json.loads(t.meta.read_text()).get("have", []))
@@ -379,7 +397,12 @@ class SyncHub:
         except OSError:
             ok = False
         if ok:
-            if getattr(t, "library", False):
+            if getattr(t, "clipboard", False):
+                import tempfile
+                folder = Path(tempfile.gettempdir()) / "LanyardClipboard"
+                folder.mkdir(parents=True, exist_ok=True)
+                dest = folder / t.name
+            elif getattr(t, "library", False):
                 folder = Path(self.library_dir(t.name))
                 folder.mkdir(parents=True, exist_ok=True)
                 dest = folder / t.name
@@ -406,6 +429,13 @@ class SyncHub:
                 except OSError:
                     pass
         self._notify(t)
+        if ok and getattr(t, "clipboard", False):
+            if self.on_clipboard_image and self.clipboard_enabled:
+                try:
+                    self.on_clipboard_image(str(t.path))
+                except Exception:
+                    pass
+            return
         if ok and self.on_file_received and not getattr(t, "library", False):
             try:
                 self.on_file_received(t.path, getattr(t, "from_name", "Device"))
