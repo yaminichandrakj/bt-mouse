@@ -116,6 +116,14 @@ class InputShareTests(unittest.TestCase):
         self.assertTrue(self.share.on_key(0x24, True))
         self.assertIsNone(self.share.target)
 
+    def test_altgr_does_not_trigger_hotkeys(self):
+        # AltGr = left Ctrl + right Alt; AltGr+2 types @ on many layouts.
+        self.share.on_key(0xA2, True)
+        self.share.on_key(0xA5, True)
+        self.assertFalse(self.share.on_key(0x27, True))
+        self.assertFalse(self.share.on_key(0x32, True))
+        self.assertIsNone(self.share.target)
+
     def test_typing_goes_to_phone_with_char(self):
         self.share.switch_to("phone1")
         self.assertTrue(self.share.on_key(0x41, True))
@@ -271,6 +279,7 @@ class HttpTransferTests(unittest.TestCase):
             url = f"http://127.0.0.1:{accept['upload_port']}/u/abc123?k={accept['upload_token']}&offset=0"
             urllib.request.urlopen(urllib.request.Request(url, data=data, method="PUT"), timeout=5).read()
             hub.handle("file_done", {"transfer_id": "abc123", "client_session": "sp"}, sink.append)
+            self.assertTrue(self.wait(lambda: any(p.get("type") == "file_result" for p in sink)))
             result = [p for p in sink if p.get("type") == "file_result"][-1]
             self.assertTrue(result["ok"], result)
             self.assertEqual(Path(got[0]).read_bytes(), data)

@@ -50,7 +50,8 @@ object AndroidHub {
         @Volatile var screenW: Int = 0,
         @Volatile var screenH: Int = 0,
         @Volatile var caps: JsonObject = JsonObject(),
-        @Volatile var lastSeen: Long = System.currentTimeMillis()
+        @Volatile var lastSeen: Long = System.currentTimeMillis(),
+        @Volatile var session: String? = null
     )
 
     private val gson = Gson()
@@ -65,6 +66,36 @@ object AndroidHub {
     private val _clientsFlow = MutableStateFlow<List<HubClient>>(emptyList())
     /** Devices connected to this phone, for the Devices screen. */
     val connected: StateFlow<List<HubClient>> = _clientsFlow.asStateFlow()
+
+    private val failures = ConcurrentHashMap<String, Pair<Long, Int>>()
+    private val challenges = ConcurrentHashMap<String, Pair<String, Long>>()
+
+    fun randomHex(bytes: Int): String =
+        ByteArray(bytes).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }
+
+    fun hmac(key: String, message: String): String {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA256"))
+        return mac.doFinal(message.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    fun constantTimeEquals(a: String, b: String): Boolean =
+        java.security.MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
+
+    private fun isBlocked(ip: String): Boolean {
+        val (start, count) = failures[ip] ?: return false
+        if (System.currentTimeMillis() - start > 60_000) {
+            failures.remove(ip)
+            return false
+        }
+        return count >= 10
+    }
+
+    private fun recordFailure(ip: String) {
+        val now = System.currentTimeMillis()
+        val (start, count) = failures[ip]?.takeIf { now - it.first <= 60_000 } ?: (now to 0)
+        failures[ip] = start to count + 1
+    }
 
     // Cursor for the client's trackpad driving this phone.
     private var cursorX = -1f
@@ -243,9 +274,37 @@ object AndroidHub {
         val type = json.get("type")?.asString ?: return
         val key = "${from.address.hostAddress}:${from.port}"
         val token = json.get("token")?.asString?.trim()
+        val ip = from.address.hostAddress ?: ""
+        if (isBlocked(ip)) return
+        if (type == "family_challenge") {
+            // Step 1 of joining as a family member: a one-time number to prove the key against.
+            val nonce = randomHex(16)
+            challenges[key] = nonce to System.currentTimeMillis()
+            send(HubClient(from), JsonObject().apply {
+                addProperty("type", "family_challenge")
+                addProperty("nonce", nonce)
+            })
+            return
+        }
         val byPin = token == pin()
-        val byFamily = token != null && token.length == 64 && token == Family.key()
-        if (!byPin && !byFamily) {
+        val bySession = token != null && clients[key]?.session?.let { it == token } == true
+        var byProof = false
+        var hubProof: String? = null
+        if (!byPin && !bySession && type == "connect") {
+            // Step 2: the device proves it holds the family key without ever sending it.
+            val (nonce, at) = challenges.remove(key) ?: (null to 0L)
+            val clientNonce = json.get("client_nonce")?.asString.orEmpty()
+            val proof = json.get("proof")?.asString.orEmpty()
+            if (nonce != null && System.currentTimeMillis() - at < 30_000 && clientNonce.length >= 16 &&
+                Family.key().isNotEmpty() && constantTimeEquals(proof, hmac(Family.key(), "client|$nonce|$clientNonce"))
+            ) {
+                byProof = true
+                hubProof = hmac(Family.key(), "hub|$nonce|$clientNonce")
+            }
+        }
+        if (!byPin && !bySession && !byProof) {
+            // Ten wrong tries a minute per address, so a 6-digit PIN can't be guessed on a shared network.
+            recordFailure(ip)
             if (type == "connect") send(HubClient(from), JsonObject().apply {
                 addProperty("type", "connect_ack")
                 addProperty("success", false)
@@ -267,6 +326,13 @@ object AndroidHub {
                 addProperty("success", true)
                 addProperty("server_name", DeviceIdentity.name(appContext))
                 addProperty("version", "1.8.0")
+                if (byProof) {
+                    // Later packets carry this session token; the hub's proof shows it really is family.
+                    val session = randomHex(32)
+                    client.session = session
+                    addProperty("session", session)
+                    addProperty("hub_proof", hubProof)
+                }
                 if (byPin) {
                     // Pairing by PIN brings the other device into this family.
                     addProperty("group_id", Family.id())

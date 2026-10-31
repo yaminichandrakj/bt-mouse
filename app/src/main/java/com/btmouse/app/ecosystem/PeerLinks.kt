@@ -47,7 +47,7 @@ object PeerLinks {
     private class Link(
         val deviceId: String,
         val address: InetSocketAddress,
-        val token: String,
+        @Volatile var token: String,
         val socket: DatagramSocket
     ) {
         @Volatile var name = "Device"
@@ -57,6 +57,7 @@ object PeerLinks {
         @Volatile var canControl = false
         @Volatile var lastHeard = System.currentTimeMillis()
         var job: Job? = null
+        var challenge: CompletableDeferred<JsonObject>? = null
     }
 
     private val gson = Gson()
@@ -194,47 +195,95 @@ object PeerLinks {
 
     /** Link to a family member if this device is the one that should dial. */
     private fun consider(device: NearbyDevice) {
-        if (links.containsKey(device.id)) return
+        if (links.containsKey(device.id) || device.id in connecting) return
         if (AndroidHub.connected.value.any { it.deviceId == device.id }) return
-        val token = when {
-            device.familyId == Family.id() && Family.key().isNotEmpty() -> Family.key()
-            else -> Family.peerToken(device.id) ?: return
-        }
+        val family = device.familyId == Family.id() && Family.key().isNotEmpty()
+        val pinToken = if (family) null else Family.peerToken(device.id) ?: return
         // Only one side dials, or both would link twice.
-        if (Ecosystem.selfId > device.id && device.familyId == Family.id()) return
-        connect(device, token, pairing = false)
+        if (family && Ecosystem.selfId > device.id) return
+        connect(device, pinToken, pairing = false)
     }
+
+    private val connecting = ConcurrentHashMap.newKeySet<String>()
 
     /** Pair with a nearby device by the PIN it shows on its Devices screen. */
     fun pairWithPin(device: NearbyDevice, pin: String, onResult: (Boolean, String) -> Unit) {
         connect(device, pin.trim(), pairing = true, onResult = onResult)
     }
 
-    private fun connect(device: NearbyDevice, token: String, pairing: Boolean, onResult: ((Boolean, String) -> Unit)? = null) {
+    /**
+     * ``pinToken`` null means a family member: prove the family key with a challenge (the key
+     * itself never goes on the network) and check the hub's proof back, so a device that
+     * merely copies the public family id learns nothing and gets nothing.
+     */
+    private fun connect(device: NearbyDevice, pinToken: String?, pairing: Boolean, onResult: ((Boolean, String) -> Unit)? = null) {
         val s = scope ?: return
+        if (!connecting.add(device.id)) return
         s.launch(Dispatchers.IO) {
-            val socket = runCatching { DatagramSocket() }.getOrNull() ?: return@launch
-            val link = Link(device.id, InetSocketAddress(device.host, device.port), token, socket)
-            val ack = CompletableDeferred<JsonObject>()
-            link.job = s.launch(Dispatchers.IO) { receiveLoop(link, ack) }
-            var reply: JsonObject? = null
+            try {
+                runConnect(s, device, pinToken, pairing, onResult)
+            } finally {
+                connecting.remove(device.id)
+            }
+        }
+    }
+
+    private suspend fun runConnect(
+        s: CoroutineScope, device: NearbyDevice, pinToken: String?, pairing: Boolean, onResult: ((Boolean, String) -> Unit)?
+    ) {
+        val socket = runCatching { DatagramSocket() }.getOrNull() ?: return
+        val link = Link(device.id, InetSocketAddress(device.host, device.port), pinToken ?: "", socket)
+        val ack = CompletableDeferred<JsonObject>()
+        val challenge = CompletableDeferred<JsonObject>()
+        link.challenge = challenge
+        link.job = s.launch(Dispatchers.IO) { receiveLoop(link, ack) }
+
+        fun fail(message: String) {
+            link.job?.cancel()
+            socket.close()
+            onResult?.invoke(false, message)
+        }
+
+        var connectPacket = JsonObject().apply { addProperty("type", "connect"); addProperty("client", "Lanyard peer") }
+        var expectedHubProof: String? = null
+        if (pinToken == null) {
+            var nonceReply: JsonObject? = null
             repeat(3) {
-                if (reply == null) {
-                    sendRaw(link, JsonObject().apply { addProperty("type", "connect"); addProperty("client", "Lanyard peer") })
-                    reply = withTimeoutOrNull(1500) { ack.await() }
+                if (nonceReply == null) {
+                    sendRaw(link, JsonObject().apply { addProperty("type", "family_challenge") })
+                    nonceReply = withTimeoutOrNull(1500) { challenge.await() }
                 }
             }
-            val ok = reply?.get("success")?.asBoolean == true
-            if (!ok) {
-                link.job?.cancel()
-                socket.close()
-                onResult?.invoke(false, reply?.get("error")?.asString ?: "No answer from ${device.name}")
-                return@launch
+            val nonce = nonceReply?.get("nonce")?.asString ?: return fail("No answer from ${device.name}")
+            val clientNonce = AndroidHub.randomHex(16)
+            val key = Family.key()
+            connectPacket.addProperty("client_nonce", clientNonce)
+            connectPacket.addProperty("proof", AndroidHub.hmac(key, "client|$nonce|$clientNonce"))
+            expectedHubProof = AndroidHub.hmac(key, "hub|$nonce|$clientNonce")
+        }
+        var reply: JsonObject? = null
+        // A proof is single-use, so a family connect is sent once; a PIN connect may retry.
+        repeat(if (pinToken == null) 1 else 3) {
+            if (reply == null) {
+                sendRaw(link, connectPacket.deepCopy())
+                reply = withTimeoutOrNull(2500) { ack.await() }
             }
-            if (pairing) {
+        }
+        val ok = reply?.get("success")?.asBoolean == true
+        if (!ok) return fail(reply?.get("error")?.asString ?: "No answer from ${device.name}")
+        if (expectedHubProof != null) {
+            val hubProof = reply?.get("hub_proof")?.asString.orEmpty()
+            val session = reply?.get("session")?.asString.orEmpty()
+            if (session.isEmpty() || !AndroidHub.constantTimeEquals(hubProof, expectedHubProof)) {
+                return fail("${device.name} could not prove it is one of your devices")
+            }
+            link.token = session
+        }
+        run {
+            if (pairing && pinToken != null) {
                 val gid = reply?.get("group_id")?.asString.orEmpty()
                 val gkey = reply?.get("group_key")?.asString.orEmpty()
-                if (!Family.adoptFromPeer(gid, gkey)) Family.rememberPeer(device.id, token)
+                if (!Family.adoptFromPeer(gid, gkey)) Family.rememberPeer(device.id, pinToken)
             }
             links[device.id]?.let { old -> old.job?.cancel(); old.socket.close() }
             links[device.id] = link
@@ -243,7 +292,7 @@ object PeerLinks {
             publish()
             publishNearby()
             onResult?.invoke(true, "Paired with ${device.name}")
-            while (isActive && links[device.id] === link) {
+            while (kotlin.coroutines.coroutineContext.isActive && links[device.id] === link) {
                 sendRaw(link, Ecosystem.helloPayload())
                 repeat(3) {
                     sendRaw(link, JsonObject().apply {
@@ -269,6 +318,7 @@ object PeerLinks {
             link.lastHeard = System.currentTimeMillis()
             when (json.get("type")?.asString) {
                 "connect_ack" -> ack.complete(json)
+                "family_challenge" -> link.challenge?.complete(json)
                 // The PC's lists stay authoritative; a direct link only adds this one device.
                 "pong", "device_hello_ack", "path_switch_ack", "streams_update" -> Unit
                 "auth_error" -> drop(link.deviceId)

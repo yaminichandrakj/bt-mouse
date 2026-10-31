@@ -365,7 +365,7 @@ class InputShare:
     """
 
     MOVE_INTERVAL = 0.008
-    LINK_TIMEOUT = 3.0
+    LINK_TIMEOUT = 4.0
     EDGE_PUSHES = 2
 
     def __init__(self, registry, layout, set_cursor=None, get_park=None, pc_name="Laptop"):
@@ -381,6 +381,7 @@ class InputShare:
         self.on_target_change = None
         self._lock = threading.RLock()
         self._mods = set()
+        self._held = set()
         self._key_dest = {}
         self._buttons_down = set()
         self._edge_hits = 0
@@ -599,7 +600,10 @@ class InputShare:
             mod = _modifier_name(vk)
             if mod:
                 (self._mods.add if down else self._mods.discard)(mod)
-            if down and {"ctrl", "alt"} <= self._mods and not mod and self._hotkey(vk):
+                (self._held.add if down else self._held.discard)(vk)
+            # Left Alt only: AltGr arrives as Ctrl + right Alt and types @, € and friends.
+            hotkey_mods = 0xA4 in self._held and (self._held & {0xA2, 0xA3, 0x11})
+            if down and hotkey_mods and not mod and self._hotkey(vk):
                 self._key_dest[vk] = "hotkey"
                 return True
             if not down and self._key_dest.get(vk) == "hotkey":
@@ -699,7 +703,7 @@ class InputShare:
         while True:
             time.sleep(0.5)
             target = self.target
-            if target is not None and not self.registry.is_online(target):
+            if target is not None:
                 dev = self.registry.get(target)
                 if not dev or time.monotonic() - dev.get("last_seen", NEVER) > self.LINK_TIMEOUT:
                     self.switch_to(None)

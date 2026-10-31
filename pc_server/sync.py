@@ -419,8 +419,14 @@ class SyncHub:
         if t.state == "done":
             respond({"type": "file_result", "transfer_id": t.id, "ok": True})
             return
-        if len(t.done) < t.chunks:
+        if len(t.done) < t.chunks or getattr(t, "verifying", False):
             return
+        # Hashing a large file takes seconds: never on the thread that handles input.
+        t.verifying = True
+        threading.Thread(target=self._verify_and_store, args=(t, respond), name=f"FileVerify-{t.id}",
+                         daemon=True).start()
+
+    def _verify_and_store(self, t, respond):
         try:
             ok = file_sha256(t.part) == t.sha256
         except OSError:
@@ -445,8 +451,9 @@ class SyncHub:
             except OSError as exc:
                 ok = False
                 t.error = str(exc)
-        respond({"type": "file_result", "transfer_id": t.id, "ok": ok, "error": None if ok else (t.error or "Checksum mismatch")})
         self._finish_in(t, ok, None if ok else (t.error or "Checksum mismatch"))
+        t.verifying = False
+        respond({"type": "file_result", "transfer_id": t.id, "ok": ok, "error": None if ok else (t.error or "Checksum mismatch")})
 
     def _finish_in(self, t, ok, error):
         t.state = "done" if ok else "failed"
