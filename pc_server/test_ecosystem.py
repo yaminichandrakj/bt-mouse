@@ -206,5 +206,53 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("token", relayed[0])
 
 
+class StreamTests(unittest.TestCase):
+    def test_frames_fan_out_to_viewers_and_demand_reaches_publisher(self):
+        from streams import StreamHub
+        registry = DeviceRegistry()
+        phone, tab = [], []
+        hello(registry, "phone", "sp", sink=phone)
+        hello(registry, "tab", "st", sink=tab)
+        hub = SyncHub(registry)
+        from ecosystem import Ecosystem
+        streams = StreamHub(registry)
+        hub.extra_handlers.append(lambda t, d, r: streams.handle(t, d, hub._sender_id(d)))
+        hub.handle("stream_announce", {"kind": "screen", "client_session": "sp"}, phone.append)
+        self.assertTrue(any(p.get("type") == "streams_update" and p["streams"] for p in tab))
+        hub.handle("stream_watch", {"stream_id": "phone:screen", "on": True, "client_session": "st"}, tab.append)
+        self.assertTrue(any(p.get("type") == "stream_demand" and p["viewers"] == 1 for p in phone))
+        local = []
+        streams.watch_local("phone:screen", "win", local.append)
+        hub.handle("stream_frame", {"stream_id": "phone:screen", "frame": "abc", "width": 2, "height": 3,
+                                    "client_session": "sp"}, phone.append)
+        self.assertTrue(any(p.get("type") == "stream_frame" and p["frame"] == "abc" for p in tab))
+        self.assertEqual(local[0]["frame"], "abc")
+        # A device cannot publish frames for someone else's stream.
+        hub.handle("stream_frame", {"stream_id": "phone:screen", "frame": "evil", "client_session": "st"}, tab.append)
+        self.assertFalse(any(p.get("frame") == "evil" for p in tab))
+
+
+class LibraryTests(unittest.TestCase):
+    def test_fetches_only_missing_items_once(self):
+        from library import LibrarySync
+        with tempfile.TemporaryDirectory() as d:
+            dirs = {"videos": Path(d) / "V", "audios": Path(d) / "A", "snapshots": Path(d) / "S"}
+            for p in dirs.values():
+                p.mkdir()
+            (dirs["snapshots"] / "have.jpg").write_bytes(b"12345")
+            registry = DeviceRegistry()
+            phone = []
+            hello(registry, "phone", "sp", sink=phone)
+            hub = SyncHub(registry)
+            lib = LibrarySync(registry, hub, lambda: dirs)
+            hub.extra_handlers.append(lib.handle)
+            items = [{"id": "have.jpg", "name": "have.jpg", "size": 5}, {"id": "new.mp4", "name": "new.mp4", "size": 9}]
+            hub.handle("library_items", {"items": items, "client_session": "sp"}, phone.append)
+            hub.handle("library_items", {"items": items, "client_session": "sp"}, phone.append)
+            fetches = [p["id"] for p in phone if p.get("type") == "library_fetch"]
+            self.assertEqual(fetches, ["new.mp4"])
+            self.assertEqual(hub.library_dir("x.wav"), dirs["audios"])
+
+
 if __name__ == "__main__":
     unittest.main()

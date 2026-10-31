@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from library import LibrarySync
+from streams import StreamHub
 from sync import SyncHub
 
 
@@ -835,6 +837,17 @@ class WindowsInputHooks:
         self._mouse = self._keyboard = None
 
 
+def _media_dirs():
+    base = _data_dir()
+    dirs = {"videos": base / "Videos", "audios": base / "Audios", "snapshots": base / "Snapshots"}
+    for d in dirs.values():
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return dirs
+
+
 class Ecosystem:
     """Glue owned by ``Server``: registry, layout, and input sharing."""
 
@@ -846,6 +859,10 @@ class Ecosystem:
                                 get_park=self._park_point, pc_name=pc_name)
         self.hooks = WindowsInputHooks(self.share)
         self.sync = SyncHub(self.registry)
+        self.streams = StreamHub(self.registry)
+        self.sync.extra_handlers.append(self._handle_streams)
+        self.library = LibrarySync(self.registry, self.sync, _media_dirs)
+        self.sync.extra_handlers.append(self.library.handle)
         self.registry.on_change = self._on_devices_changed
         self.on_devices_changed = None
 
@@ -881,6 +898,9 @@ class Ecosystem:
         target = self.share.target
         if target and self.registry._session_to_device.get(session) == target:
             self.share.release()
+
+    def _handle_streams(self, cmd_type, data, respond):
+        return self.streams.handle(cmd_type, data, self.sync._sender_id(data))
 
     def _on_devices_changed(self):
         threading.Thread(target=self.sync.announce_devices, daemon=True).start()

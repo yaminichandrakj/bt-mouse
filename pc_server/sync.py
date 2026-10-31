@@ -110,6 +110,8 @@ class SyncHub:
         self.on_transfer = None         # (info dict) -> None: progress for the UI
         self.on_file_received = None    # (path, from_name) -> None
         self._last_clip_id = None
+        self.library_dir = None         # (name) -> folder for library files; set by LibrarySync
+        self.extra_handlers = []        # (cmd_type, data, respond) -> bool, for streams and library
         self._transfers = {}
         self._lock = threading.Lock()
 
@@ -131,7 +133,7 @@ class SyncHub:
             "file_cancel": self._on_cancel,
         }.get(cmd_type)
         if handler is None:
-            return False
+            return any(h(cmd_type, data, respond) for h in self.extra_handlers)
         handler(data, respond)
         return True
 
@@ -326,6 +328,7 @@ class SyncHub:
             sender = self._sender_id(data)
             t = Transfer(transfer_id, safe_name(data.get("name")), int(data.get("size") or 0), sha256, sender, "in")
             t.from_name = str(data.get("from_name") or (self.registry.get(sender) or {}).get("name") or "Device")
+            t.library = bool(data.get("library")) and self.library_dir is not None
             t.part, t.meta = self._part_paths(sha256, t.size)
             try:
                 t.done = set(json.loads(t.meta.read_text()).get("have", []))
@@ -376,7 +379,14 @@ class SyncHub:
         except OSError:
             ok = False
         if ok:
-            dest = unique_path(self.receive_dir or downloads_dir(), t.name)
+            if getattr(t, "library", False):
+                folder = Path(self.library_dir(t.name))
+                folder.mkdir(parents=True, exist_ok=True)
+                dest = folder / t.name
+                if dest.exists():
+                    dest = unique_path(folder, t.name)
+            else:
+                dest = unique_path(self.receive_dir or downloads_dir(), t.name)
             try:
                 os.replace(t.part, dest)
                 t.path = dest
@@ -396,7 +406,7 @@ class SyncHub:
                 except OSError:
                     pass
         self._notify(t)
-        if ok and self.on_file_received:
+        if ok and self.on_file_received and not getattr(t, "library", False):
             try:
                 self.on_file_received(t.path, getattr(t, "from_name", "Device"))
             except Exception:

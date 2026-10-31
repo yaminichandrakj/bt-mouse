@@ -225,6 +225,140 @@ class TargetPill(QWidget):
         self.show()
 
 
+class StreamWindow(QWidget):
+    """Watch a phone or tablet stream. On a screen stream, click, drag and scroll to use the device."""
+
+    frame_ready = Signal(bytes, int, int)
+
+    def __init__(self, ecosystem, stream):
+        super().__init__(None, Qt.WindowType.Window)
+        self.eco = ecosystem
+        self.stream = stream
+        self.owner = stream["owner"]
+        self.setWindowTitle(f"{stream['owner_name']} · {stream['label']}")
+        self.resize(420, 820)
+        self.setStyleSheet("background-color: #000000; color: #E8E8E8;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.view = QLabel("Waiting for the first picture…")
+        self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.view.setMinimumSize(200, 200)
+        lay.addWidget(self.view, 1)
+        self.can_control = stream["kind"] == "screen" and bool(
+            (ecosystem.registry.get(self.owner) or {}).get("caps", {}).get("control"))
+        bar = QHBoxLayout()
+        bar.setContentsMargins(10, 6, 10, 8)
+        info = QLabel("Click to tap, drag to swipe, scroll to scroll, right-click is Back" if self.can_control
+                      else "View only")
+        info.setStyleSheet("color: #8E8E8E; font-size: 12px;")
+        bar.addWidget(info, 1)
+        if self.can_control:
+            for label, action in (("Back", "back"), ("Home", "home"), ("Recents", "recents")):
+                b = QPushButton(label)
+                b.clicked.connect(lambda _c=False, a=action: self._send({"ev": "global", "action": a}))
+                bar.addWidget(b)
+        lay.addLayout(bar)
+        self._pixmap = None
+        self._img_size = (0, 0)
+        self._dev_size = (0, 0)
+        self.frame_ready.connect(self._show_frame)
+        self._key = f"window-{id(self)}"
+        ecosystem.streams.watch_local(stream["id"], self._key, self._on_payload)
+        if self.can_control:
+            self.eco.registry.send(self.owner, {"type": "control_state", "active": True,
+                                                "controller": self.eco.share.pc_name})
+
+    def _on_payload(self, payload):
+        import base64
+        try:
+            data = base64.b64decode(payload.get("frame") or "")
+        except Exception:
+            return
+        self.frame_ready.emit(data, int(payload.get("width") or 0), int(payload.get("height") or 0))
+
+    def _show_frame(self, data, w, h):
+        from PySide6.QtGui import QPixmap
+        pix = QPixmap()
+        if not pix.loadFromData(data, "JPG"):
+            return
+        self._pixmap = pix
+        self._img_size = (pix.width(), pix.height())
+        dev = self.eco.registry.get(self.owner) or {}
+        self._dev_size = (dev.get("screen_w") or w or pix.width(), dev.get("screen_h") or h or pix.height())
+        self._render()
+
+    def _render(self):
+        if self._pixmap is not None:
+            self.view.setPixmap(self._pixmap.scaled(self.view.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                                                    Qt.TransformationMode.SmoothTransformation))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._render()
+
+    def _device_point(self, pos):
+        pm = self.view.pixmap()
+        if pm is None or pm.isNull() or not self._dev_size[0]:
+            return None
+        vx = (self.view.width() - pm.width()) / 2
+        vy = (self.view.height() - pm.height()) / 2
+        p = self.view.mapFrom(self, pos.toPoint())
+        fx = (p.x() - vx) / max(1, pm.width())
+        fy = (p.y() - vy) / max(1, pm.height())
+        if not (0 <= fx <= 1 and 0 <= fy <= 1):
+            return None
+        return int(fx * self._dev_size[0]), int(fy * self._dev_size[1])
+
+    def _send(self, fields, point=None):
+        payload = {"type": "remote_input"}
+        payload.update(fields)
+        if point:
+            payload["x"], payload["y"] = point
+        self.eco.registry.send(self.owner, payload)
+
+    def mousePressEvent(self, event):
+        if not self.can_control:
+            return
+        pt = self._device_point(event.position())
+        if pt is None:
+            return
+        button = {Qt.MouseButton.LeftButton: "left", Qt.MouseButton.RightButton: "right",
+                  Qt.MouseButton.MiddleButton: "middle"}.get(event.button())
+        if button:
+            self._send({"ev": "move"}, pt)
+            self._send({"ev": "button", "button": button, "down": True}, pt)
+
+    def mouseMoveEvent(self, event):
+        if not self.can_control:
+            return
+        pt = self._device_point(event.position())
+        if pt is not None:
+            self._send({"ev": "move"}, pt)
+
+    def mouseReleaseEvent(self, event):
+        if not self.can_control:
+            return
+        pt = self._device_point(event.position())
+        button = {Qt.MouseButton.LeftButton: "left", Qt.MouseButton.RightButton: "right",
+                  Qt.MouseButton.MiddleButton: "middle"}.get(event.button())
+        if button:
+            self._send({"ev": "button", "button": button, "down": False}, pt)
+
+    def wheelEvent(self, event):
+        if not self.can_control:
+            return
+        pt = self._device_point(event.position())
+        if pt is not None:
+            self._send({"ev": "wheel", "dy": event.angleDelta().y() / 120.0, "dx": event.angleDelta().x() / 120.0}, pt)
+
+    def closeEvent(self, event):
+        self.eco.streams.unwatch_local(self.stream["id"], self._key)
+        if self.can_control:
+            self.eco.registry.send(self.owner, {"type": "control_state", "active": False,
+                                                "controller": self.eco.share.pc_name})
+        super().closeEvent(event)
+
+
 class SendDialog(QDialog):
     """Choose which device gets the files (Explorer › Send to › Lanyard, or drag and drop)."""
 
@@ -326,6 +460,25 @@ def build_devices_page(app):
     cl.addLayout(opts)
     layout.addWidget(canvas_card)
 
+    layout.addWidget(app._section_label("Live from your devices"))
+    live_card = QFrame()
+    live_card.setObjectName("Card")
+    ll = QVBoxLayout(live_card)
+    ll.setContentsMargins(20, 16, 20, 16)
+    app.list_streams = QListWidget()
+    app.list_streams.setMinimumHeight(90)
+    ll.addWidget(app.list_streams)
+    live_row = QHBoxLayout()
+    btn_watch = QPushButton("Watch")
+    live_row.addWidget(btn_watch)
+    live_note = QLabel("Start Share screen or Camera on a phone or tablet (Devices › Live). "
+                       "Phone screens can be used with this mouse right in the window.")
+    live_note.setWordWrap(True)
+    live_note.setStyleSheet("color: #8E8E8E; font-size: 13px;")
+    live_row.addWidget(live_note, 1)
+    ll.addLayout(live_row)
+    layout.addWidget(live_card)
+
     layout.addWidget(app._section_label("Clipboard and files"))
     files_card = QFrame()
     files_card.setObjectName("Card")
@@ -409,7 +562,39 @@ def build_devices_page(app):
             subprocess.Popen(["xdg-open", folder])
 
     btn_open.clicked.connect(open_received)
+
+    app.stream_windows = []
+
+    def watch():
+        item = app.list_streams.currentItem() or (app.list_streams.item(0) if app.list_streams.count() else None)
+        if item is None:
+            return
+        stream = item.data(Qt.ItemDataRole.UserRole)
+        if not stream:
+            return
+        win = StreamWindow(eco(), stream)
+        app.stream_windows.append(win)
+        win.show()
+
+    btn_watch.clicked.connect(watch)
+    app.list_streams.itemDoubleClicked.connect(lambda _i: watch())
     return page
+
+
+def refresh_streams(app):
+    lst = getattr(app, "list_streams", None)
+    if lst is None or not app.server:
+        return
+    lst.clear()
+    for s in app.server.ecosystem.streams.list():
+        viewers = f" · {s['viewers']} watching" if s["viewers"] else ""
+        item = QListWidgetItem(f"{s['owner_name']} · {s['label']}{viewers}")
+        item.setData(Qt.ItemDataRole.UserRole, s)
+        lst.addItem(item)
+    if lst.count() == 0:
+        placeholder = QListWidgetItem("Nothing is being shared right now")
+        placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+        lst.addItem(placeholder)
 
 
 def wire_ecosystem(app):
@@ -492,6 +677,8 @@ def wire_ecosystem(app):
         app._run_on_ui(_ui)
 
     eco.on_devices_changed = on_devices
+    eco.streams.on_streams_changed = lambda: app._run_on_ui(lambda: refresh_streams(app))
+    app._run_on_ui(lambda: refresh_streams(app))
     if getattr(app, "layout_canvas", None):
         app.layout_canvas.eco = eco
         app.layout_canvas.update()
