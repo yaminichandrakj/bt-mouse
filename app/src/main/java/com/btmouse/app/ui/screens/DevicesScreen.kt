@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -64,7 +65,10 @@ import com.btmouse.app.control.RemoteKeyboardService
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ecosystem.DeviceIdentity
 import com.btmouse.app.ecosystem.Ecosystem
+import com.btmouse.app.ecosystem.LiveStream
 import com.btmouse.app.ecosystem.PeerDevice
+import com.btmouse.app.ecosystem.ScreenShare
+import com.btmouse.app.service.CompanionSessionService
 import com.btmouse.app.ecosystem.TransferInfo
 import com.btmouse.app.ui.components.Caption
 import com.btmouse.app.ui.components.MonoSwitch
@@ -87,7 +91,12 @@ import kotlin.math.max
 
 /** Everything about the other devices: being controlled, clipboard, files, and controlling a tablet. */
 @Composable
-fun DevicesScreen(coordinator: ConnectionCoordinator, settings: SettingsRepository, onControl: (PeerDevice) -> Unit) {
+fun DevicesScreen(
+    coordinator: ConnectionCoordinator,
+    settings: SettingsRepository,
+    onControl: (PeerDevice) -> Unit,
+    onWatch: (LiveStream) -> Unit = {}
+) {
     val context = LocalContext.current
     val connected by coordinator.isConnected.collectAsState()
     val devices by Ecosystem.devices.collectAsState()
@@ -108,6 +117,16 @@ fun DevicesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposito
             batteryOk = (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
                 .isIgnoringBatteryOptimizations(context.packageName)
             delay(1000)
+        }
+    }
+
+    val liveStreams by Ecosystem.streams.collectAsState()
+    val sharingScreen by ScreenShare.active.collectAsState()
+    val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == android.app.Activity.RESULT_OK && data != null) {
+            ScreenShare.setPermission(result.resultCode, data)
+            CompanionSessionService.startProjection(context)
         }
     }
 
@@ -196,6 +215,37 @@ fun DevicesScreen(coordinator: ConnectionCoordinator, settings: SettingsReposito
             )
             Spacer(Modifier.height(10.dp))
             PillButton("Send clipboard now", { Ecosystem.pushClipboardIfNew(force = true) }, enabled = connected)
+        }
+
+        SectionHeader("Live")
+        PanelCard {
+            Text(if (sharingScreen) "Sharing this screen" else "Share this screen", color = OnInk, fontSize = 16.sp)
+            Caption(
+                if (sharingScreen) "Your other devices can watch it, and your laptop can use it with its mouse. " +
+                    "Pictures are only taken while someone watches."
+                else "Let your laptop or another device watch this screen. Android asks each time."
+            )
+            Spacer(Modifier.height(10.dp))
+            if (sharingScreen) {
+                PillButton("Stop sharing", { CompanionSessionService.stopProjection(context) }, style = PillStyle.Danger)
+            } else {
+                PillButton("Share screen", { captureLauncher.launch(ScreenShare.captureIntent(context)) }, enabled = connected)
+            }
+            if (liveStreams.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                liveStreams.forEach { stream ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("${stream.ownerName} · ${stream.label}", color = OnInk, fontSize = 15.sp)
+                            if (stream.viewers > 0) Caption("${stream.viewers} watching")
+                        }
+                        PillButton("Watch", { onWatch(stream) }, height = 38.dp)
+                    }
+                }
+            } else {
+                Spacer(Modifier.height(8.dp))
+                Caption("When another device shares its screen or camera, it shows up here.")
+            }
         }
 
         SectionHeader("Your devices")
@@ -464,6 +514,95 @@ fun RemotePadScreen(target: PeerDevice, onClose: () -> Unit) {
                     text = ""
                 }
             }, style = PillStyle.Quiet)
+        }
+    }
+}
+
+
+/** Watch a stream; on a phone or tablet screen that allows it, tap and swipe to use it. */
+@Composable
+fun StreamViewerScreen(stream: LiveStream, onClose: () -> Unit) {
+    val frame by Ecosystem.watchedFrame.collectAsState()
+    val devices by Ecosystem.devices.collectAsState()
+    val canControl = stream.kind == "screen" && devices.any { it.id == stream.owner && it.canBeControlled }
+    DisposableEffect(stream.id) {
+        Ecosystem.watch(stream.id)
+        onDispose { Ecosystem.unwatch() }
+    }
+    val bitmap = remember(frame) {
+        frame?.let { f -> android.graphics.BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.size)?.asImageBitmap() }
+    }
+    Column(Modifier.fillMaxSize().background(Ink).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RoundIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Close", onClose, style = PillStyle.Quiet)
+            Spacer(Modifier.width(6.dp))
+            Column(Modifier.weight(1f)) {
+                Text("${stream.ownerName} · ${stream.label}", color = OnInk, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                Caption(if (canControl) "Tap and swipe on the picture to use it" else "Watching")
+            }
+        }
+        androidx.compose.foundation.layout.BoxWithConstraints(
+            Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel),
+            contentAlignment = Alignment.Center
+        ) {
+            val bmp = bitmap
+            if (bmp == null) {
+                Caption("Waiting for the first picture…")
+            } else {
+                val boxW = constraints.maxWidth.toFloat()
+                val boxH = constraints.maxHeight.toFloat()
+                val scale = minOf(boxW / bmp.width, boxH / bmp.height)
+                val shownW = bmp.width * scale
+                val shownH = bmp.height * scale
+                val left = (boxW - shownW) / 2
+                val top = (boxH - shownH) / 2
+                val f = frame
+                fun toDevice(p: androidx.compose.ui.geometry.Offset): Pair<Int, Int>? {
+                    val fx = (p.x - left) / shownW
+                    val fy = (p.y - top) / shownH
+                    if (fx !in 0f..1f || fy !in 0f..1f || f == null) return null
+                    return (fx * f.width).toInt() to (fy * f.height).toInt()
+                }
+                androidx.compose.foundation.Image(
+                    bmp, "Live picture from ${stream.ownerName}",
+                    Modifier.fillMaxSize().then(
+                        if (!canControl) Modifier else Modifier.pointerInput(stream.id) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
+                                val start = toDevice(down.position) ?: return@awaitEachGesture
+                                Ecosystem.remoteInput(stream.owner, "move") { addProperty("x", start.first); addProperty("y", start.second) }
+                                Ecosystem.remoteInput(stream.owner, "button") {
+                                    addProperty("button", "left"); addProperty("down", true)
+                                    addProperty("x", start.first); addProperty("y", start.second)
+                                }
+                                var last = start
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull() ?: break
+                                    toDevice(change.position)?.let { p ->
+                                        last = p
+                                        Ecosystem.remoteInput(stream.owner, "move") { addProperty("x", p.first); addProperty("y", p.second) }
+                                    }
+                                    change.consume()
+                                    if (!change.pressed) break
+                                }
+                                Ecosystem.remoteInput(stream.owner, "button") {
+                                    addProperty("button", "left"); addProperty("down", false)
+                                    addProperty("x", last.first); addProperty("y", last.second)
+                                }
+                            }
+                        }
+                    ),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                )
+            }
+        }
+        if (canControl) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RoundIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", { Ecosystem.remoteInput(stream.owner, "global") { addProperty("action", "back") } })
+                RoundIconButton(Icons.Default.Home, "Home", { Ecosystem.remoteInput(stream.owner, "global") { addProperty("action", "home") } })
+                RoundIconButton(Icons.Default.Apps, "Recent apps", { Ecosystem.remoteInput(stream.owner, "global") { addProperty("action", "recents") } })
+            }
         }
     }
 }

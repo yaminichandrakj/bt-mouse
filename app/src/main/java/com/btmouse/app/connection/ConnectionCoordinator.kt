@@ -415,6 +415,7 @@ class ConnectionCoordinator(
 
         phoneCameraStreamer.onFrameAvailable = { bytes, width, height, lens ->
             currentCompanionConnection.sendPhoneCameraFrame(bytes, width, height, lens)
+            com.btmouse.app.ecosystem.Ecosystem.onCameraFrame(bytes, width, height)
         }
 
         onPermissionsUpdated()

@@ -29,6 +29,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -171,7 +172,7 @@
         <service
             android:name=".service.CompanionSessionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|microphone|camera|mediaPlayback" />
+            android:foregroundServiceType="connectedDevice|microphone|camera|mediaPlayback|mediaProjection" />
 
     </application>
 

@@ -50,6 +50,15 @@ class CompanionSessionService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_START_PROJECTION -> {
+                startForegroundWithSession()
+                return START_STICKY
+            }
+            ACTION_STOP_PROJECTION -> {
+                com.btmouse.app.ecosystem.ScreenShare.stop()
+                startForegroundWithSession()
+                return START_STICKY
+            }
             ACTION_RELEASE_CONTROL -> {
                 com.btmouse.app.ecosystem.Ecosystem.releaseControl()
                 updateNotification()
@@ -61,6 +70,7 @@ class CompanionSessionService : Service() {
                 return START_STICKY
             }
             ACTION_STOP_MEDIA -> {
+                com.btmouse.app.ecosystem.ScreenShare.stop()
                 ConnectionCoordinator.activeInstance?.let {
                     it.stopPcLiveAudio()
                     it.stopPhoneLiveAudio()
@@ -122,6 +132,9 @@ class CompanionSessionService : Service() {
                     type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
                 }
             }
+            if (com.btmouse.app.ecosystem.ScreenShare.needsForeground) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            }
             type
         } else 0
 
@@ -133,6 +146,7 @@ class CompanionSessionService : Service() {
             }
             isForegroundStarted = true
             acquireWakeLockIfNeeded()
+            com.btmouse.app.ecosystem.ScreenShare.beginIfPending(this)
         } catch (e: Exception) {
             Log.w(tag, "Could not start foreground service with full type mask ($foregroundType), trying fallback", e)
             try {
@@ -246,6 +260,7 @@ class CompanionSessionService : Service() {
         val connected = coord?.isConnected?.value == true
         val statusText = when {
             controller != null -> "$controller is using its keyboard and mouse here"
+            com.btmouse.app.ecosystem.ScreenShare.active.value -> "Sharing this screen with your devices"
             isPhoneCameraActive -> "Phone Camera as Webcam streaming to PC"
             isAudioActive && isPcCameraActive -> "PC Camera feed & Live Audio active"
             isAudioActive -> "Live Audio active"
@@ -271,7 +286,7 @@ class CompanionSessionService : Service() {
             )
             builder.addAction(0, "Release", releaseIntent)
         }
-        if (isAnyMediaActive) {
+        if (isAnyMediaActive || com.btmouse.app.ecosystem.ScreenShare.active.value) {
             builder.addAction(0, "Stop Stream", stopMediaIntent)
         }
         if (!connected) {
@@ -313,6 +328,21 @@ class CompanionSessionService : Service() {
         const val ACTION_DISCONNECT = "com.btmouse.app.action.DISCONNECT"
         const val ACTION_RELEASE_CONTROL = "com.btmouse.app.action.RELEASE_CONTROL"
         const val ACTION_RECONNECT = "com.btmouse.app.action.RECONNECT"
+        const val ACTION_START_PROJECTION = "com.btmouse.app.action.START_PROJECTION"
+        const val ACTION_STOP_PROJECTION = "com.btmouse.app.action.STOP_PROJECTION"
+
+        fun startProjection(context: Context) {
+            try {
+                val intent = Intent(context, CompanionSessionService::class.java).apply { action = ACTION_START_PROJECTION }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            } catch (_: Exception) {}
+        }
+
+        fun stopProjection(context: Context) {
+            try {
+                context.startService(Intent(context, CompanionSessionService::class.java).apply { action = ACTION_STOP_PROJECTION })
+            } catch (_: Exception) {}
+        }
 
         fun start(context: Context) {
             try {

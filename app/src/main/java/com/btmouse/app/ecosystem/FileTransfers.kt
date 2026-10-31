@@ -77,7 +77,7 @@ class FileTransfers(
 
     private class Incoming(
         val id: String, val name: String, val size: Long, val sha256: String, val replyTo: String?,
-        val peerName: String, val part: File, val meta: File
+        val peerName: String, val part: File, val meta: File, val library: Boolean = false
     ) {
         val chunks = maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt())
         val done = ConcurrentHashMap.newKeySet<Int>()
@@ -105,11 +105,16 @@ class FileTransfers(
     }
 
     // --- sending -------------------------------------------------------
-    fun sendUri(deviceId: String, peerName: String, uri: Uri) {
+    /** Send one of this device's recordings for the shared library (no notification, filed by type). */
+    fun sendLibraryFile(deviceId: String, file: File) {
+        sendUri(deviceId, "your PC", Uri.fromFile(file), library = true, displayName = file.name)
+    }
+
+    fun sendUri(deviceId: String, peerName: String, uri: Uri, library: Boolean = false, displayName: String? = null) {
         scope.launch(Dispatchers.IO) {
             val id = UUID.randomUUID().toString().replace("-", "").take(16)
-            var name = "file"
-            runCatching {
+            var name = displayName ?: "file"
+            if (displayName == null) runCatching {
                 context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                     if (c.moveToFirst()) c.getString(0)?.let { name = it }
                 }
@@ -134,7 +139,7 @@ class FileTransfers(
                 val size = local.length()
                 val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()))
                 outgoing[id] = t
-                runSend(t, local, sha)
+                runSend(t, local, sha, library)
             } catch (e: Exception) {
                 publish(TransferInfo(id, name, local.length(), peerName, true, "failed", 0f, e.message ?: "Failed"))
             } finally {
@@ -144,7 +149,7 @@ class FileTransfers(
         }
     }
 
-    private suspend fun runSend(t: Outgoing, file: File, sha: String) {
+    private suspend fun runSend(t: Outgoing, file: File, sha: String, library: Boolean) {
         val offer = JsonObject().apply {
             addProperty("type", "file_offer")
             addProperty("transfer_id", t.id)
@@ -154,6 +159,7 @@ class FileTransfers(
             addProperty("chunk_size", CHUNK_SIZE)
             addProperty("chunks", t.chunks)
             addProperty("from_name", DeviceIdentity.name(context))
+            if (library) addProperty("library", true)
         }
         publish(TransferInfo(t.id, t.name, t.size, t.peerName, true, "waiting", 0f))
         val offerDeadline = System.currentTimeMillis() + GIVE_UP_MS
@@ -272,7 +278,8 @@ class FileTransfers(
             val meta = File(dir, "$key.json")
             val created = Incoming(
                 id, safeName(json.get("name")?.asString), size, sha, from,
-                json.get("from_name")?.takeIf { !it.isJsonNull }?.asString ?: "your PC", part, meta
+                json.get("from_name")?.takeIf { !it.isJsonNull }?.asString ?: "your PC", part, meta,
+                library = json.get("library")?.asBoolean ?: false
             )
             if (part.exists() && part.length() == size) {
                 runCatching { meta.readText().split(',').mapNotNull { it.trim().toIntOrNull() }.forEach { created.done.add(it) } }
@@ -345,7 +352,7 @@ class FileTransfers(
         }.getOrNull()
         val ok = sha == inc.sha256
         var openUri: Uri? = null
-        if (ok) openUri = runCatching { saveToDownloads(inc) }.getOrNull()
+        if (ok) openUri = runCatching { if (inc.library) saveToLibrary(inc) else saveToDownloads(inc) }.getOrNull()
         val saved = ok && openUri != null
         inc.resultOk = saved
         inc.state = if (saved) "done" else "failed"
@@ -354,7 +361,7 @@ class FileTransfers(
         if (!ok) inc.part.delete()
         publish(TransferInfo(id, inc.name, inc.size, inc.peerName, false, inc.state, 1f,
             if (saved) null else "Could not save the file", openUri?.toString()))
-        if (saved) notifyReceived(inc, openUri!!)
+        if (saved && !inc.library) notifyReceived(inc, openUri!!)
     }
 
     private fun sendResult(inc: Incoming, ok: Boolean, error: String?) {
@@ -368,6 +375,18 @@ class FileTransfers(
 
     private fun mimeFor(name: String): String =
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
+
+    /** Library files go next to this device's own recordings so the Library tab lists them. */
+    private fun saveToLibrary(inc: Incoming): Uri {
+        val dest = File(Library.folderFor(context, inc.name), inc.name)
+        if (dest.exists() && dest.length() == inc.size) {
+            inc.part.delete()
+        } else if (!inc.part.renameTo(dest)) {
+            inc.part.copyTo(dest, overwrite = true)
+            inc.part.delete()
+        }
+        return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+    }
 
     /** Downloads/BT Mouse on Android 10+, the app's own Received folder before that. */
     private fun saveToDownloads(inc: Incoming): Uri {

@@ -35,6 +35,18 @@ data class PeerDevice(
     val isPc: Boolean get() = kind == "pc"
 }
 
+/** A live stream somewhere in the ecosystem (a phone's screen or camera). */
+data class LiveStream(
+    val id: String,
+    val kind: String,
+    val label: String,
+    val owner: String,
+    val ownerName: String,
+    val viewers: Int
+)
+
+class StreamFrame(val streamId: String, val jpeg: ByteArray, val width: Int, val height: Int)
+
 /**
  * This device's part of the ecosystem: says hello to the PC, answers remote control,
  * syncs the clipboard, and moves files. Everything travels over whichever link the
@@ -60,6 +72,16 @@ object Ecosystem {
     private val _controlledBy = MutableStateFlow<String?>(null)
     /** Name of the device currently driving this one, or null. */
     val controlledBy: StateFlow<String?> = _controlledBy.asStateFlow()
+
+    private val _streams = MutableStateFlow<List<LiveStream>>(emptyList())
+    /** Streams other devices are sharing. */
+    val streams: StateFlow<List<LiveStream>> = _streams.asStateFlow()
+
+    private val _watchedFrame = MutableStateFlow<StreamFrame?>(null)
+    val watchedFrame: StateFlow<StreamFrame?> = _watchedFrame.asStateFlow()
+    @Volatile private var watching: String? = null
+    @Volatile private var cameraViewers = 0
+    private var cameraAnnounced = false
 
     private val _lastClipboard = MutableStateFlow<String?>(null)
     val lastClipboardNotice: StateFlow<String?> = _lastClipboard.asStateFlow()
@@ -88,6 +110,11 @@ object Ecosystem {
                 while (true) {
                     sendHello()
                     send(JsonObject().apply { addProperty("type", "devices_query") })
+                    send(JsonObject().apply { addProperty("type", "streams_query") })
+                    // The PC may have restarted: say again what this device is sharing.
+                    if (ScreenShare.active.value) announceStream("screen", "Screen", true)
+                    if (cameraAnnounced) announceStream("camera", "Camera", true)
+                    watching?.let { watch(it) }
                     delay(10_000)
                 }
             }
@@ -96,11 +123,22 @@ object Ecosystem {
         appContext.registerComponentCallbacks(object : ComponentCallbacks {
             override fun onConfigurationChanged(newConfig: Configuration) {
                 main.postDelayed({ sendHello() }, 300)
+                ScreenShare.onConfigurationChanged()
             }
 
             @Deprecated("Deprecated in Java")
             override fun onLowMemory() {}
         })
+
+        // The phone camera (already streamed to the PC as a webcam) is also offered as a live stream.
+        scope.launch {
+            coordinator.phoneCameraStreamer.isStreaming.collect { on ->
+                if (on != cameraAnnounced) {
+                    cameraAnnounced = on
+                    announceStream("camera", "Camera", on)
+                }
+            }
+        }
 
         val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.addPrimaryClipChangedListener {
@@ -146,6 +184,8 @@ object Ecosystem {
                 addProperty("keyboard", RemoteKeyboardService.instance != null)
                 addProperty("clipboard", settings?.clipboardSync?.value ?: true)
                 addProperty("files", true)
+                addProperty("library", true)
+                addProperty("streams", true)
             })
         })
     }
@@ -153,7 +193,8 @@ object Ecosystem {
     // --- incoming ------------------------------------------------------
     private val handledTypes = setOf(
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
-        "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel"
+        "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
+        "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -173,6 +214,18 @@ object Ecosystem {
             }
             "clipboard_push" -> applyRemoteClipboard(json)
             "devices_update" -> parseDevices(json.getAsJsonArray("devices"))
+            "streams_update" -> parseStreams(json.getAsJsonArray("streams"))
+            "stream_frame" -> onStreamFrame(json)
+            "stream_demand" -> {
+                val id = json.get("stream_id")?.asString ?: ""
+                val n = json.get("viewers")?.asInt ?: 0
+                when {
+                    id.endsWith(":screen") -> ScreenShare.viewers = n
+                    id.endsWith(":camera") -> cameraViewers = n
+                }
+            }
+            "library_list" -> Library.answerList(appContext, json) { send(it) }
+            "library_fetch" -> Library.answerFetch(appContext, json)
             else -> files.handle(type, json)
         }
         return true
@@ -195,6 +248,82 @@ object Ecosystem {
                 acceptsFiles = caps?.get("files")?.asBoolean ?: true
             )
         }?.sortedBy { if (it.isPc) 0 else 1 } ?: emptyList()
+    }
+
+    // --- streams -------------------------------------------------------
+    private fun parseStreams(list: JsonArray?) {
+        val me = selfId
+        _streams.value = list?.mapNotNull { el ->
+            val o = el.asJsonObject
+            val owner = o.get("owner")?.asString ?: return@mapNotNull null
+            if (owner == me) return@mapNotNull null
+            LiveStream(
+                id = o.get("id")?.asString ?: return@mapNotNull null,
+                kind = o.get("kind")?.asString ?: "screen",
+                label = o.get("label")?.asString ?: "Stream",
+                owner = owner,
+                ownerName = o.get("owner_name")?.asString ?: "Device",
+                viewers = o.get("viewers")?.asInt ?: 0
+            )
+        } ?: emptyList()
+    }
+
+    fun announceStream(kind: String, label: String, active: Boolean) {
+        if (!initialized) return
+        send(JsonObject().apply {
+            addProperty("type", "stream_announce")
+            addProperty("stream_id", "$selfId:$kind")
+            addProperty("kind", kind)
+            addProperty("label", label)
+            addProperty("active", active)
+        })
+    }
+
+    /** One picture from this device's screen or camera; dropped when nobody watches. */
+    fun publishFrame(kind: String, jpeg: ByteArray, width: Int, height: Int) {
+        if (kind == "camera" && cameraViewers <= 0) return
+        send(JsonObject().apply {
+            addProperty("type", "stream_frame")
+            addProperty("stream_id", "$selfId:$kind")
+            addProperty("frame", android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP))
+            addProperty("width", width)
+            addProperty("height", height)
+        })
+    }
+
+    fun onCameraFrame(jpeg: ByteArray, width: Int, height: Int) {
+        if (cameraViewers > 0) publishFrame("camera", jpeg, width, height)
+    }
+
+    fun watch(streamId: String) {
+        val previous = watching
+        if (previous != null && previous != streamId) unwatch()
+        watching = streamId
+        send(JsonObject().apply {
+            addProperty("type", "stream_watch")
+            addProperty("stream_id", streamId)
+            addProperty("on", true)
+        })
+    }
+
+    fun unwatch() {
+        val id = watching ?: return
+        watching = null
+        _watchedFrame.value = null
+        send(JsonObject().apply {
+            addProperty("type", "stream_watch")
+            addProperty("stream_id", id)
+            addProperty("on", false)
+        })
+    }
+
+    private fun onStreamFrame(json: JsonObject) {
+        val id = json.get("stream_id")?.asString ?: return
+        if (id != watching) return
+        val bytes = runCatching {
+            android.util.Base64.decode(json.get("frame")?.asString ?: "", android.util.Base64.DEFAULT)
+        }.getOrNull() ?: return
+        _watchedFrame.value = StreamFrame(id, bytes, json.get("width")?.asInt ?: 0, json.get("height")?.asInt ?: 0)
     }
 
     // --- clipboard -----------------------------------------------------
