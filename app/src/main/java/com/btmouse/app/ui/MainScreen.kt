@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PlayCircle
@@ -72,6 +73,11 @@ import com.btmouse.app.ui.components.rememberZoomState
 import com.btmouse.app.ui.screens.CamerasTab
 import com.btmouse.app.ui.screens.ConnectionScreen
 import com.btmouse.app.ui.screens.ControlTab
+import com.btmouse.app.ui.screens.DevicesScreen
+import com.btmouse.app.ui.screens.RemotePadScreen
+import com.btmouse.app.ui.screens.StreamViewerScreen
+import com.btmouse.app.ecosystem.LiveStream
+import com.btmouse.app.ecosystem.PeerDevice
 import com.btmouse.app.ui.screens.KeyboardTab
 import com.btmouse.app.ui.screens.MediaTab
 import com.btmouse.app.ui.screens.PcTab
@@ -98,7 +104,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     Pc("PC", Icons.Default.Computer)
 }
 
-private enum class Overlay { Connect, Settings }
+private enum class Overlay { Connect, Settings, Devices }
 private enum class Sheet { Tasks, Recordings, Apps }
 
 @Composable
@@ -109,6 +115,8 @@ fun MainScreen(
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
+    var padTarget by remember { mutableStateOf<PeerDevice?>(null) }
+    var watching by remember { mutableStateOf<LiveStream?>(null) }
     var sheet by remember { mutableStateOf<Sheet?>(null) }
     var previewOn by rememberSaveable { mutableStateOf(false) }
     var slides by rememberSaveable { mutableStateOf(false) }
@@ -141,7 +149,9 @@ fun MainScreen(
         )
     ScreenFeedPoller(coordinator, screenWanted)
 
-    BackHandler(enabled = overlay != null) { overlay = null }
+    BackHandler(enabled = overlay != null && padTarget == null && watching == null) { overlay = null }
+    BackHandler(enabled = padTarget != null) { padTarget = null }
+    BackHandler(enabled = watching != null) { watching = null }
 
     Box(Modifier.fillMaxSize().background(Ink)) {
         Column(Modifier.fillMaxSize()) {
@@ -170,6 +180,7 @@ fun MainScreen(
                         onClick = { previewOn = !previewOn }
                     )
                 }
+                RoundIconButton(Icons.Default.Devices, "Devices", { overlay = Overlay.Devices }, style = PillStyle.Quiet, size = 44.dp)
                 ConnectionPill(isConnected, isHealthy, transport) { overlay = Overlay.Connect }
                 if (current == Tab.Pc) {
                     RoundIconButton(Icons.Default.Settings, "Settings", { overlay = Overlay.Settings }, style = PillStyle.Quiet, size = 44.dp)
@@ -226,14 +237,34 @@ fun MainScreen(
                 ) {
                     RoundIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", { overlay = null }, style = PillStyle.Quiet)
                     Spacer(Modifier.width(6.dp))
-                    Text(if (shown == Overlay.Connect) "Connect" else "Settings", color = OnInk, fontSize = 26.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        when (shown) {
+                            Overlay.Connect -> "Connect"
+                            Overlay.Settings -> "Settings"
+                            Overlay.Devices -> "Devices"
+                        },
+                        color = OnInk, fontSize = 26.sp, fontWeight = FontWeight.Medium
+                    )
                 }
                 Box(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
                     when (shown) {
                         Overlay.Connect -> ConnectionScreen(coordinator, settings)
                         Overlay.Settings -> SettingsScreen(settings, airMouseManager, onClose = { overlay = null })
+                        Overlay.Devices -> DevicesScreen(coordinator, settings, onControl = { padTarget = it }, onWatch = { watching = it })
                     }
                 }
+            }
+        }
+
+        watching?.let { stream ->
+            Box(Modifier.fillMaxSize().background(Ink).statusBarsPadding().navigationBarsPadding()) {
+                StreamViewerScreen(stream) { watching = null }
+            }
+        }
+
+        padTarget?.let { target ->
+            Box(Modifier.fillMaxSize().background(Ink).statusBarsPadding().navigationBarsPadding()) {
+                RemotePadScreen(target) { padTarget = null }
             }
         }
 

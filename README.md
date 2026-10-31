@@ -82,6 +82,16 @@
 
 ---
 
+### 🔗 8. Your Devices, Together (v1.6.0)
+* **Use the laptop's keyboard and mouse on a phone or tablet.** Push the mouse off a screen edge, or press `Ctrl+Alt+→`. `Ctrl+Alt+Home` always comes back. You arrange the devices around your monitors by drag and drop in **Lanyard for PC › Devices**.
+* **Stay connected**: the phone reconnects by itself, in the background and after a restart.
+* **Shared clipboard** and **file sending** in every direction, with resume after a dropped connection.
+* **Live streams**: share a phone's screen or camera; any device or the PC can watch, and you can use a shared phone screen with the PC's mouse.
+* **One library**: the PC keeps a copy of every recording and snapshot from your devices.
+* One-time phone setup: **Devices › Let your laptop control this device** (Accessibility + Lanyard keyboard). Details: [release notes](release-notes/v1.6.0.md), [plan and status](docs/ecosystem_plan.md), [test checklist](docs/ecosystem_test_checklist.md).
+
+---
+
 ## 🛠️ How to Build & Install the App
 
 You have **3 convenient ways** to build the `.apk`:

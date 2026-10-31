@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.8.0"
 GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
@@ -1059,6 +1059,9 @@ class CompanionApp(QMainWindow):
 
         self.server.on_packet_callback = self._on_packet
         self.server.on_client_callback = self._on_client
+        if self.server.ecosystem and hasattr(self, "bridge"):
+            from devices_page import wire_ecosystem
+            self._run_on_ui(lambda: wire_ecosystem(self))
         self.server.on_status_callback = self._on_status
         self.server.on_pc_cam_frame_callback = self._on_pc_cam_frame_received
         if hasattr(self.server, "phone_camera_receiver") and self.server.phone_camera_receiver:
@@ -1118,6 +1121,7 @@ class CompanionApp(QMainWindow):
             ("Phone camera", "camera", self._create_phone_cam_page),
             ("Webcam && apps", "video", self._create_desktop_page),
             ("Library", "library", self._create_recordings_page),
+            ("Devices", "link", self._create_devices_page),
             ("Activity", "pulse", self._create_logs_page),
             ("Settings", "settings", self._create_settings_page),
         ]
@@ -1846,6 +1850,29 @@ class CompanionApp(QMainWindow):
     # ------------------------------------------------------------------
     # Activity: who is connected and what happened
     # ------------------------------------------------------------------
+    def _create_devices_page(self):
+        from devices_page import build_devices_page
+        page = build_devices_page(self)
+        self.setAcceptDrops(True)
+        return page
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if paths:
+            self.open_send_dialog(paths)
+
+    def open_send_dialog(self, paths):
+        from devices_page import SendDialog
+        paths = [p for p in paths if os.path.isfile(p)]
+        if not paths or not self.server:
+            return
+        self.show_from_tray()
+        SendDialog(self.server.ecosystem, paths, self).exec()
+
     def _create_logs_page(self):
         page, layout = self._page("Activity", "What your phone has done on this PC.", max_width=980)
 
@@ -1906,6 +1933,8 @@ class CompanionApp(QMainWindow):
         menu.addAction(act_snaps)
 
         menu.addSeparator()
+        self.tray_share_menu = menu.addMenu("Keyboard and mouse")
+        self.tray_share_menu.aboutToShow.connect(lambda: __import__("devices_page").refresh_tray_menu(self))
         act_restart = QAction("Restart Server", self)
         act_restart.triggered.connect(self.restart_server)
         menu.addAction(act_restart)
@@ -2955,13 +2984,20 @@ def acquire_single_instance_lock():
     return not (_single_instance_mutex and ctypes.get_last_error() == ERROR_ALREADY_EXISTS)
 
 
+def _send_paths_from_argv():
+    if "--send" not in sys.argv:
+        return []
+    return [a for a in sys.argv[sys.argv.index("--send") + 1:] if not a.startswith("--")]
+
+
 def ask_running_instance_to_show():
     from PySide6.QtNetwork import QLocalSocket
 
     sock = QLocalSocket()
     sock.connectToServer(SINGLE_INSTANCE_NAME)
     if sock.waitForConnected(1000):
-        sock.write(b"show")
+        paths = _send_paths_from_argv()
+        sock.write(("send\n" + "\n".join(paths)).encode("utf-8") if paths else b"show")
         sock.waitForBytesWritten(1000)
         sock.disconnectFromServer()
 
@@ -2975,7 +3011,13 @@ def listen_for_show_requests(window):
     def _on_connection():
         conn = server.nextPendingConnection()
         if conn:
-            conn.readyRead.connect(lambda: (conn.readAll(), window.show_from_tray()))
+            def _read():
+                data = bytes(conn.readAll()).decode("utf-8", "replace")
+                if data.startswith("send\n"):
+                    window.open_send_dialog([p for p in data.split("\n")[1:] if p])
+                else:
+                    window.show_from_tray()
+            conn.readyRead.connect(_read)
             conn.disconnected.connect(conn.deleteLater)
 
     server.newConnection.connect(_on_connection)
@@ -2992,6 +3034,10 @@ if __name__ == "__main__":
             if "--minimized" not in sys.argv:
                 ask_running_instance_to_show()
             sys.exit(0)
+        if _send_paths_from_argv():
+            # Started from Send to while not running: start normally, then ask where to send.
+            pending_send = _send_paths_from_argv()
+            QTimer.singleShot(4000, lambda: win.open_send_dialog(pending_send))
         qt_app.setQuitOnLastWindowClosed(False)
         win = CompanionApp()
         instance_server = listen_for_show_requests(win)

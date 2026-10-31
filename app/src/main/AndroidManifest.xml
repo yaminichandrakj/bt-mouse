@@ -29,8 +29,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Haptic feedback for tactile clicks -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -87,11 +91,96 @@
             android:name="com.google.mlkit.vision.DEPENDENCIES"
             android:value="barcode_ui" />
 
+        <!-- Lets the laptop or another device drive this one: pointer, taps, scrolling, typing -->
+        <service
+            android:name=".control.RemoteControlService"
+            android:exported="true"
+            android:label="@string/remote_control_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/remote_control_service" />
+        </service>
+
+        <!-- Keyboard that types keys pressed on another device -->
+        <service
+            android:name=".control.RemoteKeyboardService"
+            android:exported="true"
+            android:label="@string/remote_keyboard_label"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/remote_keyboard" />
+        </service>
+
+        <!-- Quick Settings: send the clipboard to the other devices -->
+        <service
+            android:name=".ecosystem.ClipboardTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_stat_companion"
+            android:label="@string/clipboard_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name=".ecosystem.ClipboardSendActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.BtMouse.Translucent" />
+
+        <activity
+            android:name=".ecosystem.ScreenRequestActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.BtMouse.Translucent" />
+
+        <activity
+            android:name=".ecosystem.ShareReceiverActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/share_target_label"
+            android:taskAffinity=""
+            android:theme="@style/Theme.BtMouse.Sheet">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Stay connected: start again after a restart or an update -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <!-- Foreground service for preserving active streaming sessions in background -->
         <service
             android:name=".service.CompanionSessionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|microphone|camera|mediaPlayback" />
+            android:foregroundServiceType="connectedDevice|microphone|camera|mediaPlayback|mediaProjection" />
 
     </application>
 

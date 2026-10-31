@@ -77,6 +77,8 @@ interface InputConnection {
     val measuredLatencyMs: StateFlow<Long?>? get() = null
     val isConnectionHealthy: StateFlow<Boolean>? get() = null
     fun notifyPathSwitch() {}
+    /** Send an ecosystem message (device_hello, clipboard, files, remote control) over this link. */
+    fun sendJsonObject(obj: JsonObject) {}
 
     fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int = 0, hScroll: Int = 0)
     fun sendMouseButton(buttons: Int)

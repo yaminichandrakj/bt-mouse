@@ -21,12 +21,11 @@ import com.btmouse.app.R
 import com.btmouse.app.connection.ConnectionCoordinator
 
 /**
- * Foreground service that keeps explicitly user-started live camera or audio
- * companion streams running while the Android app is backgrounded.
+ * Foreground service that keeps the phone connected to the PC in the background
+ * ("Stay connected"), and keeps user-started camera or audio streams running.
  *
- * In accordance with Android 14+ foreground service guidelines, this service
- * displays a persistent, user-visible notification with explicit stop and
- * disconnect controls, and never auto-starts without user action.
+ * Android requires a visible notification for this; it carries Disconnect,
+ * Reconnect now, Stop Stream and Release (hand keyboard and mouse back) actions.
  */
 class CompanionSessionService : Service() {
 
@@ -51,7 +50,27 @@ class CompanionSessionService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_START_PROJECTION -> {
+                startForegroundWithSession()
+                return START_STICKY
+            }
+            ACTION_STOP_PROJECTION -> {
+                com.btmouse.app.ecosystem.ScreenShare.stop()
+                startForegroundWithSession()
+                return START_STICKY
+            }
+            ACTION_RELEASE_CONTROL -> {
+                com.btmouse.app.ecosystem.Ecosystem.releaseControl()
+                updateNotification()
+                return START_STICKY
+            }
+            ACTION_RECONNECT -> {
+                ConnectionCoordinator.activeInstance?.reconnectNow()
+                startForegroundWithSession()
+                return START_STICKY
+            }
             ACTION_STOP_MEDIA -> {
+                com.btmouse.app.ecosystem.ScreenShare.stop()
                 ConnectionCoordinator.activeInstance?.let {
                     it.stopPcLiveAudio()
                     it.stopPhoneLiveAudio()
@@ -69,7 +88,7 @@ class CompanionSessionService : Service() {
                         it.isCameraStreaming.value ||
                         it.isPhoneCameraStreaming.value
                 } ?: false
-                if (!hasActiveMedia && coord?.isConnected?.value != true) {
+                if (!hasActiveMedia && coord?.isConnected?.value != true && coord?.shouldStayConnected() != true) {
                     stopForegroundSafely()
                     stopSelf()
                     return START_NOT_STICKY
@@ -113,6 +132,9 @@ class CompanionSessionService : Service() {
                     type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
                 }
             }
+            if (com.btmouse.app.ecosystem.ScreenShare.needsForeground) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            }
             type
         } else 0
 
@@ -124,6 +146,7 @@ class CompanionSessionService : Service() {
             }
             isForegroundStarted = true
             acquireWakeLockIfNeeded()
+            com.btmouse.app.ecosystem.ScreenShare.beginIfPending(this)
         } catch (e: Exception) {
             Log.w(tag, "Could not start foreground service with full type mask ($foregroundType), trying fallback", e)
             try {
@@ -155,6 +178,16 @@ class CompanionSessionService : Service() {
     }
 
     private fun acquireWakeLockIfNeeded() {
+        // Staying connected needs no wake lock; only live camera/audio keep the CPU awake.
+        val coord = ConnectionCoordinator.activeInstance
+        val hasActiveMedia = coord?.let {
+            it.isPcLiveAudioActive.value || it.isPhoneLiveAudioActive.value ||
+                it.isCameraStreaming.value || it.isPhoneCameraStreaming.value
+        } ?: false
+        if (!hasActiveMedia) {
+            releaseWakeLock()
+            return
+        }
         if (wakeLock == null) {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTMouse:SessionWakeLock").apply {
@@ -223,25 +256,54 @@ class CompanionSessionService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val controller = com.btmouse.app.ecosystem.Ecosystem.controlledBy.value
+        val connected = coord?.isConnected?.value == true
         val statusText = when {
+            controller != null -> "$controller is using its keyboard and mouse here"
+            com.btmouse.app.ecosystem.ScreenShare.active.value -> "Sharing this screen with your devices"
             isPhoneCameraActive -> "Phone Camera as Webcam streaming to PC"
             isAudioActive && isPcCameraActive -> "PC Camera feed & Live Audio active"
             isAudioActive -> "Live Audio active"
             isPcCameraActive -> "PC Camera stream active"
-            else -> "Companion connection active"
+            connected -> "Connected · clipboard and files ready"
+            coord?.settings?.serverPin?.value?.length == 6 -> "Waiting for your PC · reconnects on its own"
+            else -> "Phones and tablets on this Wi-Fi can reach this one"
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_companion)
-            .setContentTitle("Connected to $deviceName")
+            .setContentTitle(
+                when {
+                    connected -> "Connected to $deviceName"
+                    coord?.settings?.serverPin?.value?.length == 6 ->
+                        "Staying connected to ${coord.settings.pcName.value.ifBlank { "your PC" }}"
+                    else -> "Lanyard is ready for your devices"
+                }
+            )
             .setContentText(statusText)
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
 
-        if (isAnyMediaActive) {
+        if (controller != null) {
+            val releaseIntent = PendingIntent.getService(
+                this, 3,
+                Intent(this, CompanionSessionService::class.java).apply { action = ACTION_RELEASE_CONTROL },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(0, "Release", releaseIntent)
+        }
+        if (isAnyMediaActive || com.btmouse.app.ecosystem.ScreenShare.active.value) {
             builder.addAction(0, "Stop Stream", stopMediaIntent)
+        }
+        if (!connected) {
+            val reconnectIntent = PendingIntent.getService(
+                this, 4,
+                Intent(this, CompanionSessionService::class.java).apply { action = ACTION_RECONNECT },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(0, "Reconnect now", reconnectIntent)
         }
         builder.addAction(0, "Disconnect", disconnectIntent)
 
@@ -272,6 +334,23 @@ class CompanionSessionService : Service() {
         const val ACTION_STOP_SERVICE = "com.btmouse.app.action.STOP_SESSION_SERVICE"
         const val ACTION_STOP_MEDIA = "com.btmouse.app.action.STOP_MEDIA"
         const val ACTION_DISCONNECT = "com.btmouse.app.action.DISCONNECT"
+        const val ACTION_RELEASE_CONTROL = "com.btmouse.app.action.RELEASE_CONTROL"
+        const val ACTION_RECONNECT = "com.btmouse.app.action.RECONNECT"
+        const val ACTION_START_PROJECTION = "com.btmouse.app.action.START_PROJECTION"
+        const val ACTION_STOP_PROJECTION = "com.btmouse.app.action.STOP_PROJECTION"
+
+        fun startProjection(context: Context) {
+            try {
+                val intent = Intent(context, CompanionSessionService::class.java).apply { action = ACTION_START_PROJECTION }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            } catch (_: Exception) {}
+        }
+
+        fun stopProjection(context: Context) {
+            try {
+                context.startService(Intent(context, CompanionSessionService::class.java).apply { action = ACTION_STOP_PROJECTION })
+            } catch (_: Exception) {}
+        }
 
         fun start(context: Context) {
             try {
