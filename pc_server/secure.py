@@ -95,7 +95,11 @@ class SessionStore:
 
         def sealer(payload):
             blob = seal(key, json.dumps(payload).encode("utf-8"))
-            return {"enc": sid, "c": base64.b64encode(blob).decode("ascii")}
+            sealed = {"enc": sid, "c": base64.b64encode(blob).decode("ascii")}
+            if payload.get("type") == "camera_frame_response":
+                # The WebSocket sender throttles camera frames by this label; it reveals nothing else.
+                sealed["type"] = "camera_frame_response"
+            return sealed
 
         return inner, sealer
 

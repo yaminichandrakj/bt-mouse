@@ -35,6 +35,7 @@ class RemoteWanManager(
 
     private val tag = "RemoteWanManager"
     private val gson = Gson()
+    private val secure = SecureTransport { settings.serverPin.value }
 
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -178,6 +179,7 @@ class RemoteWanManager(
     }
 
     fun disconnect() {
+        secure.reset()
         heartbeatJob?.cancel()
         heartbeatJob = null
         try {
@@ -217,7 +219,12 @@ class RemoteWanManager(
 
     private fun handleIncomingMessage(text: String, source: WebSocket) {
         try {
-            val root = gson.fromJson(text, JsonObject::class.java) ?: return
+            val parsed = gson.fromJson(text, JsonObject::class.java) ?: return
+            val root = secure.unwrap(parsed) ?: return
+            if (root.get("type")?.asString == "key_exchange_ack") {
+                secure.onAck(root)
+                return
+            }
             if (_isConnected.value && com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
             val type = root.get("type")?.asString ?: ""
             if (_isConnected.value) recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
@@ -245,6 +252,8 @@ class RemoteWanManager(
                         _statusMessage.value = "Connected over WAN (Secured)"
                         _connectedDeviceName.value = "Remote PC (WAN)"
                         startHeartbeat()
+                        secure.reset()
+                        secure.begin()?.let { sendJson(it, includeSeq = false) }
                         queryMedia()
                     } else {
                         _isConnected.value = false
@@ -521,7 +530,7 @@ class RemoteWanManager(
                 }
             }
         }
-        if (!socket.send(obj.toString())) {
+        if (!socket.send(secure.wrap(obj.toString()))) {
             Log.w(tag, "WebSocket rejected an outgoing packet")
         }
     }

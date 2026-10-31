@@ -135,6 +135,9 @@ class WifiClientManager(
     // High-performance, zero-jitter non-blocking send queue
     private val sendQueue = Channel<DatagramPacket>(capacity = 1000, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
+    // Declared before init: the receiver started there uses it.
+    private val secure = SecureTransport { settings.serverPin.value }
+
     init {
         try {
             udpSocket = DatagramSocket()
@@ -181,7 +184,12 @@ class WifiClientManager(
 
     private fun handleIncomingPacket(jsonStr: String, sourceAddress: InetAddress, sourcePort: Int) {
         try {
-            val json = gson.fromJson(jsonStr, JsonObject::class.java)
+            val parsed = gson.fromJson(jsonStr, JsonObject::class.java) ?: return
+            val json = secure.unwrap(parsed) ?: return
+            if (json.get("type")?.asString == "key_exchange_ack") {
+                secure.onAck(json)
+                return
+            }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(json)) return
             recordingTransfer.handleMessage(json) { ack ->
                 sendPacket(mapOf(
@@ -629,6 +637,7 @@ class WifiClientManager(
                 val address = InetAddress.getByName(host)
                 val acknowledgement = CompletableDeferred<JsonObject>()
                 pendingConnect = PendingConnect(address, port, acknowledgement)
+                secure.reset()
                 val connectPacket = mapOf("type" to "connect", "client" to "Android BT Mouse", "token" to pin)
                 var accepted = false
                 var confirmedServerName = serverName
@@ -659,6 +668,8 @@ class WifiClientManager(
                 _connectedDeviceName.value = "$confirmedServerName ($host)"
                 _statusMessage.value = "Connected to $confirmedServerName"
                 startHeartbeat()
+                // Encrypt the rest of this session (older PCs ignore this and stay plain).
+                secure.begin()?.let { sendJsonObject(it) }
                 queryMedia()
             } catch (e: Exception) {
                 Log.e(tag, "Connection failed", e)
@@ -682,6 +693,7 @@ class WifiClientManager(
     }
 
     private fun clearSessionState() {
+        secure.reset()
         recordingTransfer.cancel()
         snapshotRetryJob?.cancel()
         snapshotRetryJob = null
@@ -719,7 +731,7 @@ class WifiClientManager(
             out.addProperty("token", settings.serverPin.value.trim())
             if (clientSessionId.isNotEmpty()) out.addProperty("client_session", clientSessionId)
             nextSeqSupplier?.invoke()?.let { seq -> if (seq > 0) out.addProperty("seq", seq) }
-            val bytes = out.toString().toByteArray()
+            val bytes = secure.wrap(out.toString()).toByteArray()
             if (bytes.size > 65000) {
                 Log.w(tag, "Skipping oversized UDP datagram (${bytes.size} bytes)")
                 return
@@ -754,7 +766,7 @@ class WifiClientManager(
                 }
             }
             val authenticatedData = data + extra
-            val json = gson.toJson(authenticatedData)
+            val json = secure.wrap(gson.toJson(authenticatedData))
             val bytes = json.toByteArray()
             if (bytes.size > 65000) {
                 Log.w(tag, "Skipping oversized UDP datagram (${bytes.size} bytes)")
