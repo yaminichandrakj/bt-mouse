@@ -34,6 +34,7 @@ class StreamHub:
             "stream_announce": self._on_announce,
             "stream_watch": self._on_watch,
             "stream_frame": self._on_frame,
+            "stream_audio": self._on_frame,
             "streams_query": self._on_query,
         }.get(cmd_type)
         if handler is None:
@@ -67,12 +68,16 @@ class StreamHub:
             s = self._streams.get(stream_id)
             if not s or s["owner"] != sender_id:
                 return
-            s["frames"] += 1
-            s["last"] = time.monotonic()
+            if data.get("type") != "stream_audio":
+                s["frames"] += 1
+                s["last"] = time.monotonic()
             viewers = list(s["viewers"])
             locals_ = list(self._local_viewers.get(stream_id, {}).values())
-        payload = {"type": "stream_frame", "stream_id": stream_id, "frame": data.get("frame"),
-                   "width": data.get("width"), "height": data.get("height")}
+        if data.get("type") == "stream_audio":
+            payload = {"type": "stream_audio", "stream_id": stream_id, "pcm": data.get("pcm")}
+        else:
+            payload = {"type": "stream_frame", "stream_id": stream_id, "frame": data.get("frame"),
+                       "width": data.get("width"), "height": data.get("height")}
         for v in viewers:
             if v != sender_id:
                 self.registry.send(v, payload)

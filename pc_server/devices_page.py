@@ -252,6 +252,15 @@ class StreamWindow(QWidget):
                       else "View only")
         info.setStyleSheet("color: #8E8E8E; font-size: 12px;")
         bar.addWidget(info, 1)
+        self._muted = False
+        btn_mute = QPushButton("Mute")
+
+        def toggle_mute():
+            self._muted = not self._muted
+            btn_mute.setText("Unmute" if self._muted else "Mute")
+
+        btn_mute.clicked.connect(toggle_mute)
+        bar.addWidget(btn_mute)
         if self.can_control:
             for label, action in (("Back", "back"), ("Home", "home"), ("Recents", "recents")):
                 b = QPushButton(label)
@@ -270,11 +279,47 @@ class StreamWindow(QWidget):
 
     def _on_payload(self, payload):
         import base64
+        if payload.get("type") == "stream_audio":
+            self._play_audio(payload.get("pcm"))
+            return
         try:
             data = base64.b64decode(payload.get("frame") or "")
         except Exception:
             return
         self.frame_ready.emit(data, int(payload.get("width") or 0), int(payload.get("height") or 0))
+
+    def _play_audio(self, pcm_b64):
+        """The mirrored device's sound: 16 kHz mono PCM, played through sounddevice."""
+        import base64
+        if getattr(self, "_muted", False) or not pcm_b64:
+            return
+        if getattr(self, "_audio_queue", None) is None:
+            import queue
+            self._audio_queue = queue.Queue(maxsize=25)
+            threading.Thread(target=self._audio_loop, name="MirrorAudio", daemon=True).start()
+        try:
+            self._audio_queue.put_nowait(base64.b64decode(pcm_b64))
+        except Exception:
+            pass  # Behind: drop rather than add delay.
+
+    def _audio_loop(self):
+        # Runs off the network thread: writing blocks until the sound card wants more.
+        try:
+            import sounddevice
+            out = sounddevice.RawOutputStream(samplerate=16000, channels=1, dtype="int16", latency="low")
+            out.start()
+        except Exception:
+            return
+        self._audio_out = out
+        while not getattr(self, "_closed", False):
+            try:
+                pcm = self._audio_queue.get(timeout=1.0)
+            except Exception:
+                continue
+            try:
+                out.write(pcm)
+            except Exception:
+                break
 
     def _show_frame(self, data, w, h):
         from PySide6.QtGui import QPixmap
@@ -353,6 +398,14 @@ class StreamWindow(QWidget):
 
     def closeEvent(self, event):
         self.eco.streams.unwatch_local(self.stream["id"], self._key)
+        self._closed = True
+        out = getattr(self, "_audio_out", None)
+        if out:
+            try:
+                out.stop()
+                out.close()
+            except Exception:
+                pass
         if self.can_control:
             self.eco.registry.send(self.owner, {"type": "control_state", "active": False,
                                                 "controller": self.eco.share.pc_name})

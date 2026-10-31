@@ -28,7 +28,7 @@ import java.io.ByteArrayOutputStream
 object ScreenShare {
     private const val TAG = "ScreenShare"
     private const val TARGET_WIDTH = 720
-    private const val FPS = 8
+    private const val FPS = 12
     private const val MAX_JPEG_BYTES = 38_000
 
     private val _active = MutableStateFlow(false)
@@ -52,6 +52,47 @@ object ScreenShare {
 
     /** True while the service must run with the mediaProjection type. */
     val needsForeground: Boolean get() = pending != null || _active.value
+
+    private var audioRecord: android.media.AudioRecord? = null
+    private var audioThread: Thread? = null
+
+    /**
+     * Mirrors the sound apps play (Android 10+, apps that allow capture) as 16 kHz mono,
+     * so whoever watches this screen hears it too. Needs the microphone permission.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun startAudio(context: Context, mp: MediaProjection) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        runCatching {
+            val config = android.media.AudioPlaybackCaptureConfiguration.Builder(mp)
+                .addMatchingUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(android.media.AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(android.media.AudioAttributes.USAGE_UNKNOWN)
+                .build()
+            val format = android.media.AudioFormat.Builder()
+                .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(16000)
+                .setChannelMask(android.media.AudioFormat.CHANNEL_IN_MONO)
+                .build()
+            val record = android.media.AudioRecord.Builder()
+                .setAudioFormat(format)
+                .setAudioPlaybackCaptureConfig(config)
+                .setBufferSizeInBytes(16000)
+                .build()
+            record.startRecording()
+            audioRecord = record
+            audioThread = Thread({
+                val frame = ByteArray(1280) // 40 ms
+                while (!Thread.currentThread().isInterrupted) {
+                    val n = runCatching { record.read(frame, 0, frame.size) }.getOrDefault(-1)
+                    if (n <= 0) break
+                    if (viewers > 0) Ecosystem.publishAudio(frame.copyOf(n))
+                }
+            }, "ScreenAudio").apply { isDaemon = true; start() }
+        }.onFailure { Log.w(TAG, "No audio capture", it) }
+    }
 
     fun captureIntent(context: Context): Intent =
         (context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager).createScreenCaptureIntent()
@@ -77,6 +118,7 @@ object ScreenShare {
                 }
             }, Handler(t.looper))
             createDisplay(context)
+            startAudio(context, mp)
             _active.value = true
             Ecosystem.announceStream("screen", "Screen", true)
         } catch (e: Exception) {
@@ -162,6 +204,11 @@ object ScreenShare {
         pending = null
         runCatching { display?.release() }
         runCatching { reader?.close() }
+        audioThread?.interrupt()
+        audioThread = null
+        runCatching { audioRecord?.stop() }
+        runCatching { audioRecord?.release() }
+        audioRecord = null
         runCatching { projection?.stop() }
         display = null
         reader = null

@@ -31,6 +31,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Home
@@ -621,6 +623,13 @@ fun StreamViewerScreen(stream: LiveStream, onClose: () -> Unit) {
                 Text("${stream.ownerName} · ${stream.label}", color = OnInk, fontSize = 20.sp, fontWeight = FontWeight.Medium)
                 Caption(if (canControl) "Tap and swipe on the picture to use it" else "Watching")
             }
+            val muted by Ecosystem.streamMuted.collectAsState()
+            RoundIconButton(
+                if (muted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                if (muted) "Unmute" else "Mute",
+                { Ecosystem.setStreamMuted(!muted) },
+                style = PillStyle.Quiet
+            )
         }
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel),

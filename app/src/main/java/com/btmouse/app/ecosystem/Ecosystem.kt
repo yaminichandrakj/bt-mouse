@@ -222,7 +222,7 @@ object Ecosystem {
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
         "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch",
-        "stream_watch", "screen_request"
+        "stream_watch", "screen_request", "stream_audio"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -237,6 +237,7 @@ object Ecosystem {
                 if (gkey.isNotEmpty()) Family.adoptFromPc(gid, gkey)
             }
             "stream_watch" -> onStreamWatch(json)
+            "stream_audio" -> onStreamAudio(json)
             "screen_request" -> onScreenRequest(json)
             "control_state" -> {
                 val active = json.get("active")?.asBoolean ?: false
@@ -380,6 +381,7 @@ object Ecosystem {
         val id = watching ?: return
         watching = null
         _watchedFrame.value = null
+        stopStreamAudio()
         sendTo(id.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
             addProperty("stream_id", id)
@@ -388,6 +390,40 @@ object Ecosystem {
     }
 
     private val directWatchers = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val audioPlayer = com.btmouse.app.connection.LiveAudioPlayer()
+    @Volatile private var audioStarted = false
+    private val _streamMuted = MutableStateFlow(false)
+    val streamMuted: StateFlow<Boolean> = _streamMuted.asStateFlow()
+
+    fun setStreamMuted(muted: Boolean) {
+        _streamMuted.value = muted
+        if (muted) stopStreamAudio()
+    }
+
+    /** Sound that goes with this screen, to everyone watching it. */
+    fun publishAudio(pcm: ByteArray) {
+        val payload = JsonObject().apply {
+            addProperty("type", "stream_audio")
+            addProperty("stream_id", "$selfId:screen")
+            addProperty("pcm", android.util.Base64.encodeToString(pcm, android.util.Base64.NO_WRAP))
+        }
+        directWatchers.keys.forEach { sendTo(it, payload.deepCopy()) }
+        if (pcScreenViewers > 0) send(payload)
+    }
+
+    private fun onStreamAudio(json: JsonObject) {
+        if (json.get("stream_id")?.asString != watching || _streamMuted.value) return
+        val pcm = runCatching { android.util.Base64.decode(json.get("pcm")?.asString ?: "", android.util.Base64.DEFAULT) }.getOrNull() ?: return
+        if (!audioStarted) audioStarted = audioPlayer.start()
+        audioPlayer.accept(pcm)
+    }
+
+    private fun stopStreamAudio() {
+        if (audioStarted) {
+            audioPlayer.stop()
+            audioStarted = false
+        }
+    }
 
     private fun onStreamWatch(json: JsonObject) {
         val streamId = json.get("stream_id")?.asString ?: return
