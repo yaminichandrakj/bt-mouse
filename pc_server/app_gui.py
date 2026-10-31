@@ -2744,6 +2744,8 @@ class CompanionApp(QMainWindow):
                 self.server.stop()
                 if self.server_thread and self.server_thread.is_alive():
                     self.server_thread.join(timeout=1.0)
+                if getattr(self.server, "ecosystem", None):
+                    self.server.ecosystem.shutdown()
             time.sleep(0.3)
             self._init_server()
             self.server_thread = threading.Thread(target=self.server.start, daemon=True)

@@ -430,6 +430,7 @@ class InputShare:
         self._pending_move = None
         self._last_move_sent = 0.0
         self._queue = queue.Queue(maxsize=2000)
+        self.alive = True
         self._worker = threading.Thread(target=self._send_loop, name="InputShareSend", daemon=True)
         self._worker.start()
         self._watchdog = threading.Thread(target=self._watch_loop, name="InputShareWatch", daemon=True)
@@ -735,7 +736,7 @@ class InputShare:
             pass
 
     def _send_loop(self):
-        while True:
+        while self.alive:
             try:
                 device_id, payload = self._queue.get(timeout=self.MOVE_INTERVAL)
             except queue.Empty:
@@ -746,7 +747,7 @@ class InputShare:
             self.registry.send(device_id, payload)
 
     def _watch_loop(self):
-        while True:
+        while self.alive:
             time.sleep(0.5)
             target = self.target
             if target is not None:
@@ -955,6 +956,13 @@ class Ecosystem:
             if not self.sync.http.start():
                 self.sync.http = None
         return self.hooks.start()
+
+    def shutdown(self):
+        """For good (the window replaces the server): end every background thread too."""
+        self.stop()
+        self.share.alive = False
+        self.streams.alive = False
+        self.library.alive = False
 
     def stop(self):
         self.share.release()

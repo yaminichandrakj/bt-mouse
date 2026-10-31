@@ -26,6 +26,7 @@ class StreamHub:
         self._streams = {}
         self._local_viewers = {}
         self.on_streams_changed = None
+        self.alive = True
         self._pruner = threading.Thread(target=self._prune_loop, name="StreamPrune", daemon=True)
         self._pruner.start()
 
@@ -146,7 +147,7 @@ class StreamHub:
                 pass
 
     def _prune_loop(self):
-        while True:
+        while self.alive:
             time.sleep(5)
             changed = []
             with self._lock:
