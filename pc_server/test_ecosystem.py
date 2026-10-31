@@ -214,6 +214,68 @@ class SyncTests(unittest.TestCase):
         self.assertNotIn("token", relayed[0])
 
 
+class HttpTransferTests(unittest.TestCase):
+    def _hub(self, receive_dir=None):
+        from sync import TransferHttpServer
+        registry = DeviceRegistry()
+        sink = []
+        hello(registry, "phone", "sp", sink=sink)
+        hub = SyncHub(registry, receive_dir=receive_dir)
+        hub.http = TransferHttpServer(hub, port=53736)
+        self.assertTrue(hub.http.start())
+        self.addCleanup(hub.http.stop)
+        return hub, sink
+
+    def wait(self, pred, timeout=10):
+        end = time.time() + timeout
+        while time.time() < end and not pred():
+            time.sleep(0.05)
+        return pred()
+
+    def test_phone_pulls_file_over_http_with_resume(self):
+        import hashlib
+        import urllib.request
+        hub, sink = self._hub()
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "big.bin"
+            data = os.urandom(CHUNK_SIZE * 7 + 99)
+            src.write_bytes(data)
+            tid = hub.send_file("phone", src)
+            self.assertTrue(self.wait(lambda: any(p.get("type") == "file_offer" for p in sink)))
+            offer = [p for p in sink if p.get("type") == "file_offer"][0]
+            self.assertIn("http_token", offer)
+            hub.handle("file_accept", {"transfer_id": tid, "have": [], "pull": True, "client_session": "sp"}, sink.append)
+            url = f"http://127.0.0.1:{offer['http_port']}/t/{tid}?k={offer['http_token']}"
+            req = urllib.request.Request(url, headers={"Range": f"bytes={CHUNK_SIZE * 2}-"})
+            got = urllib.request.urlopen(req, timeout=5).read()
+            self.assertEqual(got, data[CHUNK_SIZE * 2:])
+            bad = urllib.request.Request(url.replace(offer["http_token"], "0" * 32))
+            with self.assertRaises(Exception):
+                urllib.request.urlopen(bad, timeout=5)
+            hub.handle("file_result", {"transfer_id": tid, "ok": True, "client_session": "sp"}, sink.append)
+            self.assertTrue(self.wait(lambda: hub._transfers[tid].state == "done"))
+            self.assertEqual(offer["sha256"], hashlib.sha256(data).hexdigest())
+
+    def test_phone_uploads_file_over_http(self):
+        import hashlib
+        import urllib.request
+        with tempfile.TemporaryDirectory() as d:
+            hub, sink = self._hub(receive_dir=d)
+            data = os.urandom(CHUNK_SIZE * 3 + 5)
+            sha = hashlib.sha256(data).hexdigest()
+            got = []
+            hub.on_file_received = lambda path, name: got.append(path)
+            hub.handle("file_offer", {"transfer_id": "abc123", "name": "clip.mp4", "size": len(data), "sha256": sha,
+                                      "chunk_size": CHUNK_SIZE, "http_upload": True, "client_session": "sp"}, sink.append)
+            accept = [p for p in sink if p.get("type") == "file_accept"][-1]
+            url = f"http://127.0.0.1:{accept['upload_port']}/u/abc123?k={accept['upload_token']}&offset=0"
+            urllib.request.urlopen(urllib.request.Request(url, data=data, method="PUT"), timeout=5).read()
+            hub.handle("file_done", {"transfer_id": "abc123", "client_session": "sp"}, sink.append)
+            result = [p for p in sink if p.get("type") == "file_result"][-1]
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(Path(got[0]).read_bytes(), data)
+
+
 class StreamTests(unittest.TestCase):
     def test_frames_fan_out_to_viewers_and_demand_reaches_publisher(self):
         from streams import StreamHub

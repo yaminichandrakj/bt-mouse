@@ -152,6 +152,13 @@ object Ecosystem {
         }
     }
 
+    /** The PC's LAN address while the Wi-Fi link is up, for the HTTP file fast path. */
+    fun pcLanHost(): String? {
+        val c = coordinator ?: return null
+        if (!c.wifiClientManager.isConnected.value) return null
+        return settings?.wifiHost?.value?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
     fun onControlCapabilityChanged() {
         if (initialized) main.post { sendHello() }
     }

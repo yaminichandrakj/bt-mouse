@@ -73,6 +73,8 @@ class FileTransfers(
         @Volatile var error: String? = null
         @Volatile var cancelled = false
         @Volatile var lastProgress = System.currentTimeMillis()
+        @Volatile var uploadPort: Int? = null
+        @Volatile var uploadToken: String? = null
     }
 
     private class Incoming(
@@ -84,6 +86,23 @@ class FileTransfers(
         val done = ConcurrentHashMap.newKeySet<Int>()
         @Volatile var state = "receiving"
         @Volatile var resultOk: Boolean? = null
+        @Volatile var pulling = false
+        @Volatile var httpFailed = false
+    }
+
+    private val http by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** First chunk not yet held, so HTTP can resume from there. */
+    private fun firstMissing(done: Set<Int>, chunks: Int): Int {
+        var i = 0
+        while (i < chunks && i in done) i++
+        return i
     }
 
     private val outgoing = ConcurrentHashMap<String, Outgoing>()
@@ -165,6 +184,7 @@ class FileTransfers(
             addProperty("from_name", DeviceIdentity.name(context))
             if (library) addProperty("library", true)
             if (clipboard) addProperty("clipboard", true)
+            if (t.peer == Ecosystem.PC_ID && Ecosystem.pcLanHost() != null) addProperty("http_upload", true)
         }
         publish(TransferInfo(t.id, t.name, t.size, t.peerName, true, "waiting", 0f))
         val offerDeadline = System.currentTimeMillis() + GIVE_UP_MS
@@ -173,6 +193,7 @@ class FileTransfers(
             sendRaw(addressed(offer.deepCopy(), t.peer))
             repeat(20) { if (!t.accepted) delay(100) }
         }
+        tryHttpUpload(t, file)
         val sentAt = HashMap<Int, Long>()
         RandomAccessFile(file, "r").use { raf ->
             val channel: FileChannel = raf.channel
@@ -222,6 +243,109 @@ class FileTransfers(
             if (ok) null else (t.error ?: "The device did not confirm the file")))
     }
 
+    /** LAN fast path: PUT the rest of the file to the PC. Any failure leaves the chunk path to finish. */
+    private fun tryHttpUpload(t: Outgoing, file: File) {
+        val port = t.uploadPort ?: return
+        val token = t.uploadToken ?: return
+        val host = Ecosystem.pcLanHost() ?: return
+        val first = firstMissing(t.done, t.chunks)
+        if (first >= t.chunks) return
+        val offset = first.toLong() * CHUNK_SIZE
+        val length = t.size - offset
+        val body = object : okhttp3.RequestBody() {
+            override fun contentType() = null
+            override fun contentLength() = length
+            override fun writeTo(sink: okio.BufferedSink) {
+                RandomAccessFile(file, "r").use { raf ->
+                    raf.seek(offset)
+                    val buf = ByteArray(256 * 1024)
+                    var sent = 0L
+                    var lastPublish = 0L
+                    while (sent < length) {
+                        if (t.cancelled) throw java.io.IOException("Cancelled")
+                        val n = raf.read(buf, 0, minOf(buf.size.toLong(), length - sent).toInt())
+                        if (n < 0) break
+                        sink.write(buf, 0, n)
+                        sent += n
+                        t.lastProgress = System.currentTimeMillis()
+                        val now = System.currentTimeMillis()
+                        if (now - lastPublish > 250) {
+                            lastPublish = now
+                            publish(TransferInfo(t.id, t.name, t.size, t.peerName, true, "sending",
+                                (offset + sent).toFloat() / t.size.coerceAtLeast(1)))
+                        }
+                    }
+                }
+            }
+        }
+        val ok = runCatching {
+            http.newCall(
+                okhttp3.Request.Builder()
+                    .url("http://$host:$port/u/${t.id}?k=$token&offset=$offset")
+                    .put(body)
+                    .build()
+            ).execute().use { it.isSuccessful }
+        }.getOrDefault(false)
+        if (ok) for (i in first until t.chunks) t.done.add(i)
+    }
+
+    /** LAN fast path: download what the PC offered; on failure ask for chunks instead. */
+    private fun startHttpPull(inc: Incoming, port: Int, token: String) {
+        val host = Ecosystem.pcLanHost() ?: return
+        inc.pulling = true
+        scope.launch(Dispatchers.IO) {
+            val first = firstMissing(inc.done, inc.chunks)
+            val offset = first.toLong() * CHUNK_SIZE
+            val ok = runCatching {
+                http.newCall(
+                    okhttp3.Request.Builder()
+                        .url("http://$host:$port/t/${inc.id}?k=$token")
+                        .header("Range", "bytes=$offset-")
+                        .build()
+                ).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use false
+                    val start = if (resp.code == 206) offset else 0L
+                    val input = resp.body?.byteStream() ?: return@use false
+                    RandomAccessFile(inc.part, "rw").use { raf ->
+                        raf.seek(start)
+                        val buf = ByteArray(256 * 1024)
+                        var pos = start
+                        var lastPublish = 0L
+                        while (true) {
+                            if (inc.state != "receiving") return@use false
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            raf.write(buf, 0, n)
+                            pos += n
+                            for (i in (start / CHUNK_SIZE).toInt() until (pos / CHUNK_SIZE).toInt()) inc.done.add(i)
+                            if (pos >= inc.size) inc.done.add(inc.chunks - 1)
+                            val now = System.currentTimeMillis()
+                            if (now - lastPublish > 250) {
+                                lastPublish = now
+                                publish(TransferInfo(inc.id, inc.name, inc.size, inc.peerName, false, "receiving",
+                                    pos.toFloat() / inc.size.coerceAtLeast(1)))
+                            }
+                        }
+                        pos >= inc.size
+                    }
+                }
+            }.getOrDefault(false)
+            inc.pulling = false
+            if (ok && inc.done.size >= inc.chunks) {
+                onDone(inc.id)
+            } else if (inc.state == "receiving") {
+                inc.httpFailed = true
+                saveMeta(inc)
+                sendRaw(addressed(JsonObject().apply {
+                    addProperty("type", "file_accept")
+                    addProperty("transfer_id", inc.id)
+                    addProperty("pull", false)
+                    add("have", JsonArray().apply { inc.done.sorted().forEach { add(it) } })
+                }, inc.replyTo))
+            }
+        }
+    }
+
     fun cancel(id: String) {
         outgoing[id]?.cancelled = true
         incoming[id]?.let { inc ->
@@ -244,6 +368,8 @@ class FileTransfers(
             "file_done" -> scope.launch(Dispatchers.IO) { onDone(id) }
             "file_accept" -> outgoing[id]?.let { t ->
                 (json.get("have") as? JsonArray)?.forEach { runCatching { t.done.add(it.asInt) } }
+                t.uploadPort = json.get("upload_port")?.takeIf { !it.isJsonNull }?.asInt
+                t.uploadToken = json.get("upload_token")?.takeIf { !it.isJsonNull }?.asString
                 t.lastProgress = System.currentTimeMillis()
                 t.accepted = true
             }
@@ -295,11 +421,17 @@ class FileTransfers(
             publish(TransferInfo(id, created.name, size, created.peerName, false, "receiving", created.done.size.toFloat() / created.chunks))
             created
         }
+        val httpPort = json.get("http_port")?.takeIf { !it.isJsonNull }?.asInt
+        val httpToken = json.get("http_token")?.takeIf { !it.isJsonNull }?.asString
+        val pull = httpPort != null && httpToken != null && !inc.httpFailed &&
+            (from == null || from == Ecosystem.PC_ID) && Ecosystem.pcLanHost() != null
         sendRaw(addressed(JsonObject().apply {
             addProperty("type", "file_accept")
             addProperty("transfer_id", id)
+            if (pull) addProperty("pull", true)
             add("have", JsonArray().apply { inc.done.sorted().forEach { add(it) } })
         }, inc.replyTo))
+        if (pull && !inc.pulling && inc.state == "receiving") startHttpPull(inc, httpPort!!, httpToken!!)
     }
 
     private var lastIncomingPublish = 0L

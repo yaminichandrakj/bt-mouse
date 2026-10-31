@@ -21,7 +21,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 import time
 import uuid
 from pathlib import Path
@@ -112,6 +115,7 @@ class SyncHub:
         self.on_file_received = None    # (path, from_name) -> None
         self._last_clip_id = None
         self.library_dir = None         # (name) -> folder for library files; set by LibrarySync
+        self.http = None                # TransferHttpServer, when the LAN fast path is running
         self.extra_handlers = []        # (cmd_type, data, respond) -> bool, for streams and library
         self._transfers = {}
         self._lock = threading.Lock()
@@ -225,6 +229,7 @@ class SyncHub:
         size = path.stat().st_size
         t = Transfer(uuid.uuid4().hex[:16], path.name, size, None, device_id, "out", path)
         t.extra = dict(extra or {})
+        t.token = secrets.token_hex(16)
         with self._lock:
             self._transfers[t.id] = t
         threading.Thread(target=self._send_worker, args=(t,), name=f"FileSend-{t.id}", daemon=True).start()
@@ -238,6 +243,10 @@ class SyncHub:
             offer = {"type": "file_offer", "transfer_id": t.id, "name": t.name, "size": t.size, "sha256": t.sha256,
                      "chunk_size": CHUNK_SIZE, "chunks": t.chunks, "from": PC_ID, "from_name": self.pc_name()}
             offer.update(getattr(t, "extra", {}))
+            if self.http and self.http.running:
+                # On the same network the phone can pull the file over HTTP instead of in chunks.
+                offer["http_port"] = self.http.port
+                offer["http_token"] = t.token
             deadline = time.monotonic() + GIVE_UP_AFTER
             while not t.accepted.wait(2.0):
                 if t.cancelled.is_set() or time.monotonic() > deadline:
@@ -247,12 +256,19 @@ class SyncHub:
             self._notify(t)
             sent_at = {}
             with open(t.path, "rb") as f:
-                while len(t.done) < t.chunks:
+                while len(t.done) < t.chunks and t.state not in ("done", "failed"):
                     if t.cancelled.is_set():
                         raise InterruptedError("Cancelled")
                     now = time.monotonic()
                     if now - t.last_progress > GIVE_UP_AFTER:
                         raise TimeoutError("The connection was lost")
+                    if getattr(t, "pull", False):
+                        # The device is downloading over HTTP; it answers with file_result,
+                        # or a new file_accept without pull to fall back to chunks.
+                        with t.cond:
+                            t.cond.wait(0.5)
+                        self._notify(t, throttle=True)
+                        continue
                     in_flight = [i for i, ts in sent_at.items() if i not in t.done and now - ts < RESEND_AFTER]
                     budget = WINDOW - len(in_flight)
                     for i in range(t.chunks):
@@ -269,6 +285,11 @@ class SyncHub:
                     with t.cond:
                         t.cond.wait(0.05)
                     self._notify(t, throttle=True)
+            if t.state == "done":
+                self._notify(t)
+                return
+            if t.state == "failed":
+                raise RuntimeError(t.error or "The device rejected the file")
             t.state = "verifying"
             self._notify(t)
             deadline = time.monotonic() + 15
@@ -292,8 +313,11 @@ class SyncHub:
         for i in data.get("have") or []:
             if isinstance(i, int) and 0 <= i < t.chunks:
                 t.done.add(i)
+        t.pull = bool(data.get("pull"))
         t.last_progress = time.monotonic()
         t.accepted.set()
+        with t.cond:
+            t.cond.notify_all()
 
     def _on_chunk_ack(self, data, respond):
         t = self._transfers.get(str(data.get("transfer_id")))
@@ -361,7 +385,12 @@ class SyncHub:
                 self._transfers[transfer_id] = t
             self._notify(t)
         t.respond = respond
-        respond({"type": "file_accept", "transfer_id": transfer_id, "have": sorted(t.done)})
+        accept = {"type": "file_accept", "transfer_id": transfer_id, "have": sorted(t.done)}
+        if data.get("http_upload") and self.http and self.http.running:
+            t.token = getattr(t, "token", None) or secrets.token_hex(16)
+            accept["upload_port"] = self.http.port
+            accept["upload_token"] = t.token
+        respond(accept)
 
     def _on_chunk(self, data, respond):
         t = self._transfers.get(str(data.get("transfer_id")))
@@ -476,3 +505,124 @@ class SyncHub:
                 cb(t.info())
             except Exception:
                 pass
+
+
+class TransferHttpServer:
+    """LAN fast path for files: GET /t/<id> downloads what the PC sends, PUT /u/<id>?offset=N
+    uploads what a device sends. Each transfer has its own random token (?k=...)."""
+
+    def __init__(self, hub, port=53536):
+        self.hub = hub
+        self.port = port
+        self.server = None
+        self.running = False
+
+    def start(self):
+        hub = self.hub
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def _transfer(self, prefix, direction):
+                url = urlparse(self.path)
+                if not url.path.startswith(prefix):
+                    return None, url
+                t = hub._transfers.get(url.path[len(prefix):])
+                token = (parse_qs(url.query).get("k") or [""])[0]
+                if not t or t.direction != direction or not getattr(t, "token", None) \
+                        or not secrets.compare_digest(token, t.token):
+                    return None, url
+                return t, url
+
+            def do_GET(self):
+                t, _ = self._transfer("/t/", "out")
+                if t is None or not t.path:
+                    self.send_error(404)
+                    return
+                start = 0
+                m = re.match(r"bytes=(\d+)-", self.headers.get("Range", ""))
+                if m:
+                    start = min(int(m.group(1)), t.size)
+                self.send_response(206 if m else 200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(t.size - start))
+                if m:
+                    self.send_header("Content-Range", f"bytes {start}-{max(start, t.size - 1)}/{t.size}")
+                self.end_headers()
+                sent = start
+                with open(t.path, "rb") as f:
+                    f.seek(start)
+                    while sent < t.size and not t.cancelled.is_set():
+                        block = f.read(256 * 1024)
+                        if not block:
+                            break
+                        self.wfile.write(block)
+                        sent += len(block)
+                        for i in range(start // CHUNK_SIZE, sent // CHUNK_SIZE):
+                            t.done.add(i)
+                        t.last_progress = time.monotonic()
+
+            def do_PUT(self):
+                t, url = self._transfer("/u/", "in")
+                if t is None or t.state != "receiving":
+                    self.send_error(404)
+                    return
+                try:
+                    offset = int((parse_qs(url.query).get("offset") or ["0"])[0])
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    self.send_error(400)
+                    return
+                if offset % CHUNK_SIZE or offset < 0 or offset + length > t.size:
+                    self.send_error(416)
+                    return
+                written = 0
+                with open(t.part, "r+b") as f:
+                    f.seek(offset)
+                    while written < length:
+                        block = self.rfile.read(min(256 * 1024, length - written))
+                        if not block:
+                            break
+                        f.write(block)
+                        written += len(block)
+                        end = offset + written
+                        for i in range(offset // CHUNK_SIZE, end // CHUNK_SIZE):
+                            t.done.add(i)
+                        if end == t.size:
+                            t.done.add(t.chunks - 1)
+                        t.last_progress = time.monotonic()
+                try:
+                    t.meta.write_text(json.dumps({"have": sorted(t.done)}))
+                except OSError:
+                    pass
+                hub._notify(t)
+                self.send_response(200 if written == length else 400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        for port in range(self.port, self.port + 5):
+            try:
+                self.server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+                self.server.daemon_threads = True
+                self.port = port
+                break
+            except OSError:
+                continue
+        if not self.server:
+            return False
+        self.running = True
+        threading.Thread(target=self.server.serve_forever, name="TransferHttp", daemon=True).start()
+        return True
+
+    def stop(self):
+        self.running = False
+        if self.server:
+            try:
+                self.server.shutdown()
+                self.server.server_close()
+            except Exception:
+                pass
+            self.server = None

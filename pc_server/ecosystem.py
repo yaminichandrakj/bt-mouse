@@ -15,7 +15,7 @@ from pathlib import Path
 
 from library import LibrarySync
 from streams import StreamHub
-from sync import SyncHub
+from sync import SyncHub, TransferHttpServer
 
 
 NEVER = float("-inf")
@@ -881,11 +881,18 @@ class Ecosystem:
         return int(m.x + m.w / 2), int(m.y + m.h / 2)
 
     def start(self):
+        if self.sync.http is None:
+            self.sync.http = TransferHttpServer(self.sync)
+            if not self.sync.http.start():
+                self.sync.http = None
         return self.hooks.start()
 
     def stop(self):
         self.share.release()
         self.hooks.stop()
+        if self.sync.http:
+            self.sync.http.stop()
+            self.sync.http = None
 
     def refresh_monitors(self, rects=None):
         self.layout.set_monitors(rects if rects is not None else windows_monitors())
