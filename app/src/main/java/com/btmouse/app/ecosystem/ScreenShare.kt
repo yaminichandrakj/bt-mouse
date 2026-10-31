@@ -29,7 +29,8 @@ object ScreenShare {
     private const val TAG = "ScreenShare"
     private const val TARGET_WIDTH = 720
     private const val FPS = 12
-    private const val MAX_JPEG_BYTES = 38_000
+    // Sealed and base64 twice it must still fit one 64 KB datagram.
+    private const val MAX_JPEG_BYTES = 30_000
 
     private val _active = MutableStateFlow(false)
     val active: StateFlow<Boolean> = _active.asStateFlow()
