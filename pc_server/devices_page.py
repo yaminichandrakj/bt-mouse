@@ -497,7 +497,7 @@ def build_devices_page(app):
     row.addWidget(btn_open)
     row.addStretch()
     fl.addLayout(row)
-    note = QLabel("Files from your devices are saved to Downloads\\BT Mouse. You can also drop files on this window.")
+    note = QLabel("Files from your devices are saved to Downloads\\Lanyard. You can also drop files on this window.")
     note.setStyleSheet("color: #8E8E8E; font-size: 13px;")
     note.setWordWrap(True)
     fl.addWidget(note)

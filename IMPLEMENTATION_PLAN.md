@@ -1,6 +1,6 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-30 | **Current version:** 1.5.1
+**Status:** Active roadmap | **Updated:** 2026-10-31 | **Current version:** 1.6.0
 **Owner:** Codex | **Release:** [v1.5.1 (Renamed to Lanyard, new icon)](release-notes/v1.5.1.md) · [v1.5.0 (New look, live screen view, zoom everywhere, slides)](release-notes/v1.5.0.md) · [v1.4.4 (Reliable internet access on flaky networks)](release-notes/v1.4.4.md) · [v1.4.3 (One Connect screen and QR, working updates, off-network fix)](release-notes/v1.4.3.md) · [v1.4.2 (Off-network remote access over a Cloudflare quick tunnel)](release-notes/v1.4.2.md) · [v1.4.1 (Native icons, single instance, truthful connection status & camera aspect fixes)](release-notes/v1.4.1.md) · [v1.4.0 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.4.0) · [v1.3.16](release-notes/v1.3.16.md) · [v1.3.15 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.15) · [v1.3.14 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14) · [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11) · [v1.3.10 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.10)
 
 ## Product objective
@@ -38,9 +38,9 @@ Source status below distinguishes CI/build verification from physical-device ver
 - Android camera/microphone use is user-started and permission-aware. Background/locked-screen operation is subject to Android foreground-service and permission rules.
 - Do not bump versions or publish until the release gates pass.
 
-## Next: device ecosystem (v1.6 → v2.0)
+## Device ecosystem (built in v1.6.0)
 
-Laptop → phone control, laptop + tab + phone as equal nodes, synced clipboard and file transfer, Android-only mode, any-to-any A/V streams, and one shared recordings library. Full plan: [`docs/ecosystem_plan.md`](docs/ecosystem_plan.md).
+Laptop → phone control with a drag-and-drop layout, always-connected phones, synced clipboard and file transfer, phone ↔ tablet through the PC, screen/camera streams any device can watch, and a PC library that collects every device's recordings. Plan and remaining work: [`docs/ecosystem_plan.md`](docs/ecosystem_plan.md). Code: `pc_server/ecosystem.py`, `sync.py`, `streams.py`, `library.py`, `devices_page.py`; Android `ecosystem/`, `control/`, `ui/screens/DevicesScreen.kt`.
 
 ## Phased implementation plan
 

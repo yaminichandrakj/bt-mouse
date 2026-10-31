@@ -18,7 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * "BT Mouse keyboard": a keyboard with no keys of its own. Keys typed on the laptop
+ * "Lanyard keyboard": a keyboard with no keys of its own. Keys typed on the laptop
  * (or another device) arrive here and go into whatever field has focus, exactly like a
  * hardware keyboard, including arrows, Backspace, Enter and Ctrl shortcuts.
  */

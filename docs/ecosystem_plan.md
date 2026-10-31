@@ -1,6 +1,6 @@
 # BT Mouse Ecosystem — Plan (v1.6 → v2.0)
 
-**Status:** Plan, waiting for approval | **Date:** 2026-10-30 | **Builds on:** [`unified_connectivity_plan.md`](unified_connectivity_plan.md)
+**Status:** v1.6.0 built (see the status table at the end) | **Date:** 2026-10-31 | **Builds on:** [`unified_connectivity_plan.md`](unified_connectivity_plan.md)
 
 ## Where things stand today (v1.5.0)
 
@@ -198,3 +198,25 @@ Ordered so each release is useful on its own, with the riskiest Android pieces f
 ## Verification per release
 - CI: `pc_server/test_server.py` gains tests for routing, clipboard loop protection, transfer resume and hash checks, library manifest merging, and stream fan-out. Android build must stay green. Unit tests cover gesture mapping (pointer delta → path), the key-code table and chunk reassembly.
 - Manual checklist (shipped in each release note): switch by edge, hotkey, panic key and phone notification; copy on each device and paste on the others; send a 1 GB file and kill Wi-Fi halfway to check resume; two viewers on one phone camera stream; play a phone recording on the laptop and a laptop recording on the tab.
+
+## Build status (2026-10-31)
+
+Everything below shipped together in **v1.6.0** instead of five separate releases. It compiles in CI (APK and Windows EXE) and is covered by `pc_server/test_ecosystem.py`. None of it has been tried on physical devices yet.
+
+| Item | Status | Differences from the plan |
+|---|---|---|
+| 1. Laptop → phone control | Built | Same as planned: Accessibility pointer and gestures, keyless input method, Windows LL hooks, edge crossing, hotkeys, panic key, tray, pill, 3 s auto-return. Drags are replayed when the button is released, not live. |
+| Layout editor | Built | Drag-and-drop canvas on **Devices**; snaps to any monitor or device edge; strip for hotkey-only devices. |
+| Always connected | Built | Persistent service, boot/update receiver, network callback, once-a-minute retry, battery prompt. The PC does not dial out to phones; phones reconnect to it. |
+| 2. Any device controls any device | Built through the PC hub | Phone/tablet ↔ phone/tablet goes through the PC relay (`to` field). There is no direct Android-to-Android server yet. |
+| 3. Clipboard and files | Built | Text clipboard only (no images). Files are 32 KB chunks over the existing links (UDP/RFCOMM/WS) with resume; there is no fast HTTP path on the LAN yet. |
+| 4. Android-only (no laptop) | **Not built** | Needs an Android node server and phone-to-phone pairing. Bluetooth HID (phone as mouse for a tablet) still works without the PC. |
+| 5. Streams | Built (JPEG) | Phone screen (MediaProjection) and phone camera publish to the PC hub; any device or the PC window watches; a watched screen can be controlled. PC screen sharing stays as before. No H.264/Opus and no audio streams through the hub yet. |
+| 6. Library everywhere | Built (PC as hub) | The PC copies every phone/tablet recording into its Library; phones browse and play the PC's Library as before. No in-place streaming from a phone to another phone. |
+
+### Next steps, in order
+1. Test on real devices with the v1.6.0 release-note checklist; fix what breaks.
+2. Android node server (LAN WebSocket plus NSD) for item 4 and faster phone ↔ tablet links.
+3. HTTP file path on the LAN for large transfers.
+4. H.264 (MediaCodec) for streams; system-audio streams.
+5. Live drags (`continueStroke`) instead of replaying on release.

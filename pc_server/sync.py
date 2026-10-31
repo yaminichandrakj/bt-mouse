@@ -36,7 +36,7 @@ PC_ID = "pc"
 
 def downloads_dir():
     home = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
-    target = home / "Downloads" / "BT Mouse"
+    target = home / "Downloads" / "Lanyard"
     try:
         target.mkdir(parents=True, exist_ok=True)
     except OSError:

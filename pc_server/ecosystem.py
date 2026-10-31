@@ -336,7 +336,7 @@ META_CAPS = 0x100000
 
 
 def vk_to_char(vk, shift=False, caps=False):
-    """Printable character for a US layout key, used when the phone has no BT Mouse keyboard."""
+    """Printable character for a US layout key, used when the phone has no Lanyard keyboard."""
     if 0x41 <= vk <= 0x5A:
         upper = shift != caps
         return chr(vk) if upper else chr(vk).lower()

@@ -30,7 +30,7 @@ import kotlin.math.hypot
 
 /**
  * Lets another device drive this phone: draws a pointer, turns clicks, drags and wheel
- * notches into touch gestures, and types into the focused field when the BT Mouse
+ * notches into touch gestures, and types into the focused field when the Lanyard
  * keyboard is not the active keyboard.
  *
  * Positions arrive in this display's pixels (the size sent in device_hello).

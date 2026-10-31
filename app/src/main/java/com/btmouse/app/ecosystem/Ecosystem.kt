@@ -346,7 +346,7 @@ object Ecosystem {
         }
     }
 
-    /** Send the clipboard if it changed. Only works while the app or the BT Mouse keyboard has focus. */
+    /** Send the clipboard if it changed. Only works while the app or the Lanyard keyboard has focus. */
     fun pushClipboardIfNew(force: Boolean = false): Boolean {
         if (!initialized || (settings?.clipboardSync?.value == false && !force)) return false
         val text = runCatching {

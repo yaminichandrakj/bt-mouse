@@ -388,14 +388,14 @@ class FileTransfers(
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
     }
 
-    /** Downloads/BT Mouse on Android 10+, the app's own Received folder before that. */
+    /** Downloads/Lanyard on Android 10+, the app's own Received folder before that. */
     private fun saveToDownloads(inc: Incoming): Uri {
         val mime = mimeFor(inc.name)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, inc.name)
                 put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BT Mouse")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Lanyard")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val resolver = context.contentResolver
@@ -438,7 +438,7 @@ class FileTransfers(
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_companion)
                 .setContentTitle("Received ${inc.name}")
-                .setContentText("From ${inc.peerName} · saved to Downloads/BT Mouse")
+                .setContentText("From ${inc.peerName} · saved to Downloads/Lanyard")
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .build()
