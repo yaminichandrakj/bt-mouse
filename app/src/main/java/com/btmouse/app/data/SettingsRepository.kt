@@ -121,6 +121,15 @@ class SettingsRepository(context: Context) {
         prefs.edit().putBoolean(KEY_SETUP_DONE, done).apply()
     }
 
+    private val _smoothMirroring = MutableStateFlow(prefs.getBoolean(KEY_SMOOTH_MIRRORING, false))
+    /** Ask for H.264 video when mirroring another phone or tablet (beta). */
+    val smoothMirroring: StateFlow<Boolean> = _smoothMirroring.asStateFlow()
+
+    fun setSmoothMirroring(enabled: Boolean) {
+        _smoothMirroring.value = enabled
+        prefs.edit().putBoolean(KEY_SMOOTH_MIRRORING, enabled).apply()
+    }
+
     fun setStayConnected(enabled: Boolean) {
         _stayConnected.value = enabled
         prefs.edit().putBoolean(KEY_STAY_CONNECTED, enabled).apply()
@@ -298,6 +307,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_FAILOVER_ENABLED = "failover_enabled"
         private const val KEY_STAY_CONNECTED = "stay_connected"
         private const val KEY_SETUP_DONE = "setup_done_v18"
+        private const val KEY_SMOOTH_MIRRORING = "smooth_mirroring"
         private const val KEY_ALLOW_REMOTE_CONTROL = "allow_remote_control"
         private const val KEY_CLIPBOARD_SYNC = "clipboard_sync"
     }

@@ -42,6 +42,8 @@ object ScreenShare {
     private var reader: ImageReader? = null
     private var thread: HandlerThread? = null
     private var lastSent = 0L
+    private var lastVideo = 0L
+    private const val VIDEO_FPS = 24
     /** Latest picture, for a hub client's Screen preview. */
     @Volatile var lastJpeg: ByteArray? = null
         private set
@@ -160,14 +162,25 @@ object ScreenShare {
         val image = runCatching { r.acquireLatestImage() }.getOrNull() ?: return
         try {
             val now = SystemClock.elapsedRealtime()
-            if (viewers + AndroidHub.screenViewers() <= 0 || now - lastSent < 1000L / FPS) return
-            lastSent = now
+            val h264Due = Ecosystem.wantsH264() && now - lastVideo >= 1000L / VIDEO_FPS
+            val jpegDue = Ecosystem.jpegViewers() + AndroidHub.screenViewers() > 0 && now - lastSent >= 1000L / FPS
+            if (!Ecosystem.wantsH264() && H264Encoder.running) H264Encoder.stop()
+            if (!h264Due && !jpegDue) return
             val plane = image.planes[0]
             val pixelStride = plane.pixelStride
             val rowPadding = plane.rowStride - pixelStride * image.width
             val padded = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
             padded.copyPixelsFromBuffer(plane.buffer)
             var bmp = if (rowPadding == 0) padded else Bitmap.createBitmap(padded, 0, 0, image.width, image.height).also { padded.recycle() }
+            if (h264Due) {
+                lastVideo = now
+                H264Encoder.feed(bmp, deviceW, deviceH)
+            }
+            if (!jpegDue) {
+                bmp.recycle()
+                return
+            }
+            lastSent = now
             var jpeg = encode(bmp)
             while (jpeg.size > MAX_JPEG_BYTES && bmp.width > 240) {
                 val smaller = Bitmap.createScaledBitmap(bmp, bmp.width * 3 / 4, bmp.height * 3 / 4, true)
@@ -218,6 +231,7 @@ object ScreenShare {
         thread = null
         viewers = 0
         lastJpeg = null
+        H264Encoder.stop()
         if (wasActive) Ecosystem.announceStream("screen", "Screen", false)
     }
 }
