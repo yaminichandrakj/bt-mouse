@@ -10,6 +10,7 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -122,7 +123,11 @@ fun DevicesScreen(
 
     val liveStreams by Ecosystem.streams.collectAsState()
     val hubOn by com.btmouse.app.ecosystem.AndroidHub.enabled.collectAsState()
-    val hubClients by com.btmouse.app.ecosystem.AndroidHub.connected.collectAsState()
+    val nearby by com.btmouse.app.ecosystem.PeerLinks.nearby.collectAsState()
+    var pairing by remember { mutableStateOf<com.btmouse.app.ecosystem.NearbyDevice?>(null) }
+    var pinInput by remember { mutableStateOf("") }
+    var pairMessage by remember { mutableStateOf<String?>(null) }
+    var showQr by remember { mutableStateOf(false) }
     val sharingScreen by ScreenShare.active.collectAsState()
     val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
@@ -250,45 +255,54 @@ fun DevicesScreen(
             }
         }
 
-        SectionHeader("No PC? Connect a tablet to this phone")
+        SectionHeader("Nearby")
         PanelCard {
             ToggleRow(
-                "Let my other Android devices connect here",
-                "The tablet's trackpad and keyboard then drive this phone, and the two share the clipboard, files and this screen.",
+                "Find my devices on this Wi-Fi",
+                "Phones and tablets paired with the same PC link to each other by themselves. No codes to scan.",
                 hubOn
             ) { com.btmouse.app.ecosystem.AndroidHub.setEnabled(it) }
             if (hubOn) {
-                val code = remember(hubOn) { com.btmouse.app.ecosystem.AndroidHub.pairingCode() }
-                Spacer(Modifier.height(14.dp))
-                if (code == null) {
-                    Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the tablet), then reopen this page.", color = AccentAmber)
-                } else {
-                    val qr = remember(code) { qrBitmap(code, 600) }
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        androidx.compose.foundation.Image(
-                            qr, "Pairing code for this phone",
-                            Modifier.size(220.dp).clip(RoundedCornerShape(12.dp))
-                        )
+                Spacer(Modifier.height(12.dp))
+                Text("This device's PIN: ${com.btmouse.app.ecosystem.AndroidHub.pin()}", color = OnInk, fontSize = 16.sp)
+                Caption("Without a PC, pair once: pick this device on the other one and type this PIN. It is remembered.")
+                if (nearby.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    nearby.forEach { n ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(n.name, color = OnInk, fontSize = 15.sp)
+                                Caption("Not paired yet")
+                            }
+                            PillButton("Pair", { pairing = n; pinInput = "" }, height = 38.dp)
+                        }
                     }
-                    Spacer(Modifier.height(10.dp))
-                    Caption(
-                        "On the tablet: Lanyard › Connect › Scan PC QR code, and scan this. " +
-                            "PIN ${com.btmouse.app.ecosystem.AndroidHub.pin()}. The tablet then treats this phone as its PC; " +
-                            "scan your PC's code again to switch back."
-                    )
                 }
-                if (hubClients.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    Caption("Connected here: " + hubClients.joinToString { it.name }, color = StatusGreen)
+                pairMessage?.let { Spacer(Modifier.height(8.dp)); Caption(it, color = AccentAmber) }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (showQr) "Hide QR code" else "Show a QR code instead",
+                    color = OnInk, fontSize = 14.sp,
+                    modifier = Modifier.clickable { showQr = !showQr }.padding(vertical = 6.dp)
+                )
+                if (showQr) {
+                    val code = remember(hubOn) { com.btmouse.app.ecosystem.AndroidHub.pairingCode() }
+                    if (code == null) {
+                        Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the tablet).", color = AccentAmber)
+                    } else {
+                        val qr = remember(code) { qrBitmap(code, 600) }
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            androidx.compose.foundation.Image(qr, "Pairing code for this device", Modifier.size(200.dp).clip(RoundedCornerShape(12.dp)))
+                        }
+                        Caption("For a tablet with no PC: Connect › Scan PC QR code. It then uses this device as its PC.")
+                    }
                 }
             }
         }
 
         SectionHeader("Your devices")
-        if (!connected) {
-            Caption("Connect to your PC to see your other devices.")
-        } else if (devices.isEmpty()) {
-            Caption("Looking for your devices…")
+        if (devices.isEmpty()) {
+            Caption(if (connected) "Looking for your devices…" else "Connect to your PC, or pair a nearby device above.")
         }
         devices.forEach { device ->
             PanelCard(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
@@ -312,8 +326,11 @@ fun DevicesScreen(
                             picker.launch(arrayOf("*/*"))
                         })
                     }
+                    if (!device.isPc) {
+                        PillButton("Mirror & control", { onWatch(Ecosystem.requestMirror(device)) }, style = PillStyle.Primary)
+                    }
                     if (!device.isPc && device.canBeControlled) {
-                        PillButton("Control", { onControl(device) }, style = PillStyle.Primary)
+                        PillButton("Trackpad", { onControl(device) })
                     }
                 }
             }
@@ -324,6 +341,34 @@ fun DevicesScreen(
             transfers.forEach { TransferRow(it, context) }
         }
         Spacer(Modifier.height(24.dp))
+    }
+
+    pairing?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pairing = null },
+            title = { Text("Pair with ${target.name}") },
+            text = {
+                Column {
+                    Text("Type the PIN shown on ${target.name} under Devices › Nearby.")
+                    Spacer(Modifier.height(10.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = pinInput,
+                        onValueChange = { pinInput = it.filter(Char::isDigit).take(6) },
+                        singleLine = true,
+                        label = { Text("PIN") }
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    val pin = pinInput
+                    pairing = null
+                    pairMessage = "Pairing with ${target.name}…"
+                    com.btmouse.app.ecosystem.PeerLinks.pairWithPin(target, pin) { _, message -> pairMessage = message }
+                }, enabled = pinInput.length == 6) { Text("Pair") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { pairing = null }) { Text("Cancel") } }
+        )
     }
 }
 
@@ -583,7 +628,7 @@ fun StreamViewerScreen(stream: LiveStream, onClose: () -> Unit) {
         ) {
             val bmp = bitmap
             if (bmp == null) {
-                Caption("Waiting for the first picture…")
+                Caption("Waiting for ${stream.ownerName}… If it asks, tap Start now on it.")
             } else {
                 val boxW = constraints.maxWidth.toFloat()
                 val boxH = constraints.maxHeight.toFloat()

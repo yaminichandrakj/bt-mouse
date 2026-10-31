@@ -302,6 +302,23 @@ class StreamTests(unittest.TestCase):
         self.assertFalse(any(p.get("frame") == "evil" for p in tab))
 
 
+class FamilyKeyTests(unittest.TestCase):
+    def test_family_key_is_stable(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("LOCALAPPDATA")
+            os.environ["LOCALAPPDATA"] = d
+            try:
+                a = ecosystem.family_key()
+                b = ecosystem.family_key()
+            finally:
+                if old is None:
+                    os.environ.pop("LOCALAPPDATA")
+                else:
+                    os.environ["LOCALAPPDATA"] = old
+            self.assertEqual(a, b)
+            self.assertEqual(len(a["key"]), 64)
+
+
 class LibraryTests(unittest.TestCase):
     def test_fetches_only_missing_items_once(self):
         from library import LibrarySync

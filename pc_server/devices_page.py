@@ -471,6 +471,8 @@ def build_devices_page(app):
     live_row = QHBoxLayout()
     btn_watch = QPushButton("Watch")
     live_row.addWidget(btn_watch)
+    btn_mirror = QPushButton("Mirror a phone or tablet…")
+    live_row.addWidget(btn_mirror)
     live_note = QLabel("Start Share screen or Camera on a phone or tablet (Devices › Live). "
                        "Phone screens can be used with this mouse right in the window.")
     live_note.setWordWrap(True)
@@ -577,6 +579,32 @@ def build_devices_page(app):
         win.show()
 
     btn_watch.clicked.connect(watch)
+
+    def mirror():
+        devices = [d for d in eco().registry.online_devices()]
+        if not devices:
+            app.log("No phone or tablet is connected.")
+            return
+        dlg = QDialog(app)
+        dlg.setWindowTitle("Mirror and control")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Show which device here? It asks to start sharing; tap Start now on it."))
+        for dev in devices:
+            b = QPushButton(dev.get("name", "Device"))
+            b.clicked.connect(lambda _c=False, d=dev: (dlg.accept(), open_mirror(d)))
+            lay.addWidget(b)
+        dlg.exec()
+
+    def open_mirror(dev):
+        device_id = dev["device_id"]
+        eco().registry.send(device_id, {"type": "screen_request", "from": "pc", "from_name": eco().share.pc_name})
+        stream = {"id": f"{device_id}:screen", "kind": "screen", "label": "Screen", "owner": device_id,
+                  "owner_name": dev.get("name", "Device"), "viewers": 0}
+        win = StreamWindow(eco(), stream)
+        app.stream_windows.append(win)
+        win.show()
+
+    btn_mirror.clicked.connect(mirror)
     app.list_streams.itemDoubleClicked.connect(lambda _i: watch())
     return page
 

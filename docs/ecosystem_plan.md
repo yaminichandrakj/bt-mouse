@@ -237,3 +237,15 @@ Everything below shipped together in **v1.6.0** instead of five separate release
 2. H.264 via MediaCodec for screen and camera streams, decoding with MediaCodec on Android and PyAV on the PC.
 3. Audio streams through the PC hub (reuse the live-audio PCM path, then Opus).
 4. Hub: relaying between tablets, and watching a tablet's screen from the phone.
+
+## Build status (v1.8.0)
+
+| Item | Status |
+|---|---|
+| Mirror & control (Smart Connect style) | Built: `screen_request` makes the other device open Android's capture prompt (`ScreenRequestActivity`, with a full-screen notification as fallback). The requester watches directly (`stream_watch` addressed to the owner) and controls by touch on the picture. The PC gets a Mirror window. |
+| Automatic device network | Built: the PC's family key (`family.json`) goes to every paired device; each Android device advertises `_lanyard._udp` over mDNS and links to family members (`PeerLinks`, the smaller id dials). PIN pairing for devices with no PC (`Family.adoptFromPeer` / per-peer token). |
+| Direct watching | Frames go owner → watcher over the best route: hub link, peer link, or relayed by the PC. |
+
+Still later: H.264, audio streams, the PC dialling out, and links between networks without the PC (internet relay).
+
+Checklist additions for v1.8.0: (29) Mirror & control phone from tab and tab from phone, with touch; (30) the PC's Mirror window; (31) two devices paired to the PC see each other in Your devices with nothing scanned, and stay linked with the PC off; (32) PIN pairing between two devices that were never paired to the PC.

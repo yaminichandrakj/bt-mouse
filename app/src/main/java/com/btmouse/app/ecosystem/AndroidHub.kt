@@ -55,7 +55,6 @@ object AndroidHub {
 
     private val gson = Gson()
     private val clients = ConcurrentHashMap<String, HubClient>()
-    private val screenWatchers = ConcurrentHashMap.newKeySet<String>()
     private var socket: DatagramSocket? = null
     private var job: Job? = null
     private lateinit var appContext: Context
@@ -76,7 +75,8 @@ object AndroidHub {
     fun init(context: Context, scope: CoroutineScope) {
         appContext = context.applicationContext
         this.scope = scope
-        if (prefs().getBoolean(KEY_ENABLED, false)) start()
+        // On by default: it is how this person's other devices reach this one without a PC.
+        if (prefs().getBoolean(KEY_ENABLED, true)) start()
     }
 
     private fun prefs() = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -131,6 +131,7 @@ object AndroidHub {
                 }
                 socket = sock
                 _enabled.value = true
+                PeerLinks.advertise(PORT)
                 val buf = ByteArray(65535)
                 while (isActive) {
                     val packet = DatagramPacket(buf, buf.size)
@@ -154,19 +155,24 @@ object AndroidHub {
                 val now = System.currentTimeMillis()
                 val gone = clients.filterValues { now - it.lastSeen > 12_000 }.keys
                 if (gone.isNotEmpty()) {
-                    gone.forEach { key -> clients.remove(key)?.deviceId?.let { screenWatchers.remove(it) } }
+                    gone.forEach { key -> clients.remove(key) }
                     publishClients()
                 }
             }
         }
     }
 
+    fun onFamilyChanged() {
+        if (_enabled.value) PeerLinks.advertise(PORT)
+        PeerLinks.onFamilyChanged()
+    }
+
     private fun stop() {
+        PeerLinks.stopAdvertising()
         _enabled.value = false
         job?.cancel()
         socket?.close()
         clients.clear()
-        screenWatchers.clear()
         publishClients()
     }
 
@@ -179,8 +185,8 @@ object AndroidHub {
 
     fun hasClient(deviceId: String): Boolean = clients.values.any { it.deviceId == deviceId }
 
-    fun screenViewers(): Int =
-        screenWatchers.size + if (System.currentTimeMillis() - lastScreenQuery < 3000) 1 else 0
+    /** A client's Screen preview counts as a viewer for a few seconds after each request. */
+    fun screenViewers(): Int = if (System.currentTimeMillis() - lastScreenQuery < 3000) 1 else 0
 
     // --- sending -------------------------------------------------------
     private fun send(client: HubClient, obj: JsonObject) {
@@ -203,12 +209,6 @@ object AndroidHub {
 
     fun broadcast(obj: JsonObject, except: String? = null) {
         clients.values.filter { it.deviceId != null && it.deviceId != except }.forEach { send(it, obj.deepCopy()) }
-    }
-
-    /** A frame of this phone's screen or camera for clients that watch it. */
-    fun publishFrame(kind: String, payload: JsonObject) {
-        if (kind != "screen" || screenWatchers.isEmpty()) return
-        clients.values.filter { it.deviceId in screenWatchers }.forEach { send(it, payload.deepCopy()) }
     }
 
     private fun deviceList(): JsonArray = JsonArray().apply {
@@ -243,7 +243,9 @@ object AndroidHub {
         val type = json.get("type")?.asString ?: return
         val key = "${from.address.hostAddress}:${from.port}"
         val token = json.get("token")?.asString?.trim()
-        if (token != pin()) {
+        val byPin = token == pin()
+        val byFamily = token != null && token.length == 64 && token == Family.key()
+        if (!byPin && !byFamily) {
             if (type == "connect") send(HubClient(from), JsonObject().apply {
                 addProperty("type", "connect_ack")
                 addProperty("success", false)
@@ -264,7 +266,12 @@ object AndroidHub {
                 addProperty("type", "connect_ack")
                 addProperty("success", true)
                 addProperty("server_name", DeviceIdentity.name(appContext))
-                addProperty("version", "1.7.0")
+                addProperty("version", "1.8.0")
+                if (byPin) {
+                    // Pairing by PIN brings the other device into this family.
+                    addProperty("group_id", Family.id())
+                    addProperty("group_key", Family.key())
+                }
             })
             "ping" -> send(client, JsonObject().apply {
                 addProperty("type", "pong")
@@ -274,7 +281,6 @@ object AndroidHub {
             "path_switch" -> send(client, JsonObject().apply { addProperty("type", "path_switch_ack"); addProperty("success", true) })
             "disconnect" -> {
                 clients.remove(key)
-                client.deviceId?.let { screenWatchers.remove(it) }
                 publishClients()
             }
             "device_hello" -> {
@@ -290,13 +296,6 @@ object AndroidHub {
             }
             "devices_query" -> send(client, JsonObject().apply { addProperty("type", "devices_update"); add("devices", deviceList()) })
             "streams_query" -> send(client, streamsUpdate())
-            "stream_watch" -> {
-                val id = client.deviceId ?: return
-                val streamId = json.get("stream_id")?.asString ?: return
-                if (streamId == "${Ecosystem.selfId}:screen") {
-                    if (json.get("on")?.asBoolean != false) screenWatchers.add(id) else screenWatchers.remove(id)
-                }
-            }
             "screen_query" -> answerScreenQuery(client)
             "mouse" -> driveMouse(json)
             "button" -> driveButtons(json.get("btn")?.asInt ?: 0)
@@ -334,7 +333,7 @@ object AndroidHub {
                 addProperty("label", "Screen")
                 addProperty("owner", Ecosystem.selfId)
                 addProperty("owner_name", DeviceIdentity.name(appContext))
-                addProperty("viewers", screenWatchers.size)
+                addProperty("viewers", 0)
             })
         })
     }

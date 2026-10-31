@@ -858,6 +858,25 @@ def _media_dirs():
     return dirs
 
 
+def family_key():
+    """One secret shared by every phone and tablet paired with this PC, so they can find
+    and trust each other on the network without scanning codes between them."""
+    import secrets
+    path = _data_dir() / "family.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if len(data.get("key", "")) == 64 and data.get("id"):
+            return data
+    except (OSError, ValueError):
+        pass
+    data = {"id": secrets.token_hex(6), "key": secrets.token_hex(32)}
+    try:
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+    return data
+
+
 class Ecosystem:
     """Glue owned by ``Server``: registry, layout, and input sharing."""
 
@@ -906,8 +925,10 @@ class Ecosystem:
                 self.layout.save()
             else:
                 self.layout.resize_for(device_id, dev)
+            group = family_key()
             respond({"type": "device_hello_ack", "pc_name": self.share.pc_name,
-                     "controlling": self.share.target == device_id})
+                     "controlling": self.share.target == device_id,
+                     "group_id": group["id"], "group_key": group["key"]})
         return device_id
 
     def handle_release_request(self, data):

@@ -100,7 +100,10 @@ object Ecosystem {
         initialized = true
         appContext = context.applicationContext
         files = FileTransfers(appContext, scope) { send(it) }
+        Family.init(appContext)
+        PeerLinks.init(appContext, scope)
         AndroidHub.init(appContext, scope)
+        scope.launch { PeerLinks.peers.collect { mergeDevices() } }
 
         scope.launch {
             coordinator.isConnected.collectLatest { connected ->
@@ -169,7 +172,7 @@ object Ecosystem {
     fun send(obj: JsonObject) {
         // Devices connected straight to this phone (no PC) are reached through its hub.
         val to = obj.get("to")?.takeIf { !it.isJsonNull }?.asString
-        if (to != null && AndroidHub.sendTo(to, obj)) return
+        if (to != null && (AndroidHub.sendTo(to, obj) || PeerLinks.sendTo(to, obj))) return
         coordinator?.sendJsonObject(obj)
     }
 
@@ -185,9 +188,14 @@ object Ecosystem {
 
     fun sendHello() {
         if (!initialized) return
+        send(helloPayload())
+    }
+
+    /** What this device tells others about itself: name, screen and what it allows. */
+    fun helloPayload(): JsonObject {
         val (w, h) = DeviceIdentity.screenSize(appContext)
         val allowControl = settings?.allowRemoteControl?.value ?: true
-        send(JsonObject().apply {
+        return JsonObject().apply {
             addProperty("type", "device_hello")
             addProperty("device_id", selfId)
             addProperty("name", DeviceIdentity.name(appContext))
@@ -204,15 +212,17 @@ object Ecosystem {
                 addProperty("clipboard_image", settings?.clipboardSync?.value ?: true)
                 addProperty("library", true)
                 addProperty("streams", true)
+                addProperty("mirror", true)
             })
-        })
+        }
     }
 
     // --- incoming ------------------------------------------------------
     private val handledTypes = setOf(
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
-        "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch"
+        "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch",
+        "stream_watch", "screen_request"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -220,7 +230,14 @@ object Ecosystem {
         val type = json.get("type")?.asString ?: return false
         if (type !in handledTypes || !initialized) return false
         when (type) {
-            "device_hello_ack" -> Unit
+            "device_hello_ack" -> {
+                // Only the PC hands out the family key in its hello answer.
+                val gid = json.get("group_id")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+                val gkey = json.get("group_key")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+                if (gkey.isNotEmpty()) Family.adoptFromPc(gid, gkey)
+            }
+            "stream_watch" -> onStreamWatch(json)
+            "screen_request" -> onScreenRequest(json)
             "control_state" -> {
                 val active = json.get("active")?.asBoolean ?: false
                 val allowed = settings?.allowRemoteControl?.value ?: true
@@ -240,7 +257,7 @@ object Ecosystem {
                 when {
                     id.endsWith(":screen") -> {
                         pcScreenViewers = n
-                        ScreenShare.viewers = n
+                        updateScreenViewers()
                     }
                     id.endsWith(":camera") -> cameraViewers = n
                 }
@@ -264,8 +281,10 @@ object Ecosystem {
                 acceptsFiles = c.caps.get("files")?.asBoolean ?: true
             )
         }
-        val ids = hub.map { it.id }.toSet()
-        _devices.value = pcDevices.filter { it.id !in ids } + hub
+        val direct = hub + PeerLinks.peers.value.filter { p -> hub.none { it.id == p.id } }
+        val ids = direct.map { it.id }.toSet()
+        // A device reachable both ways keeps the PC's details but is listed once.
+        _devices.value = pcDevices.filter { it.id !in ids } + direct
     }
 
     private fun parseDevices(list: JsonArray?) {
@@ -328,7 +347,13 @@ object Ecosystem {
             addProperty("width", width)
             addProperty("height", height)
         }
-        AndroidHub.publishFrame(kind, payload)
+        if (kind == "screen") {
+            val now = System.currentTimeMillis()
+            directWatchers.entries.removeIf { now - it.value > 25_000 }
+            directWatchers.keys.forEach { watcher ->
+                sendTo(watcher, payload.deepCopy())
+            }
+        }
         if (kind != "screen" || pcScreenViewers > 0) send(payload)
     }
 
@@ -336,11 +361,15 @@ object Ecosystem {
         if (cameraViewers > 0) publishFrame("camera", jpeg, width, height)
     }
 
+    /**
+     * Watching goes straight to the device that owns the stream (directly when linked,
+     * otherwise passed along by the PC), and frames come straight back.
+     */
     fun watch(streamId: String) {
         val previous = watching
         if (previous != null && previous != streamId) unwatch()
         watching = streamId
-        send(JsonObject().apply {
+        sendTo(streamId.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
             addProperty("stream_id", streamId)
             addProperty("on", true)
@@ -351,11 +380,43 @@ object Ecosystem {
         val id = watching ?: return
         watching = null
         _watchedFrame.value = null
-        send(JsonObject().apply {
+        sendTo(id.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
             addProperty("stream_id", id)
             addProperty("on", false)
         })
+    }
+
+    private val directWatchers = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun onStreamWatch(json: JsonObject) {
+        val streamId = json.get("stream_id")?.asString ?: return
+        val from = json.get("from")?.takeIf { !it.isJsonNull }?.asString ?: return
+        if (streamId != "$selfId:screen" || from == selfId) return
+        if (json.get("on")?.asBoolean != false) directWatchers[from] = System.currentTimeMillis() else directWatchers.remove(from)
+        updateScreenViewers()
+    }
+
+    private fun updateScreenViewers() {
+        ScreenShare.viewers = pcScreenViewers + directWatchers.size
+    }
+
+    /** Another device asked to mirror this screen: start sharing (Android asks the user once). */
+    private fun onScreenRequest(json: JsonObject) {
+        if (ScreenShare.active.value) return
+        val who = json.get("from_name")?.takeIf { !it.isJsonNull }?.asString ?: "Another device"
+        ScreenRequestActivity.ask(appContext, who)
+    }
+
+    /** "Mirror & control": ask the device to share its screen, and start watching it. */
+    fun requestMirror(device: PeerDevice): LiveStream {
+        sendTo(device.id, JsonObject().apply {
+            addProperty("type", "screen_request")
+            addProperty("from_name", DeviceIdentity.name(appContext))
+        })
+        val stream = LiveStream("${device.id}:screen", "screen", "Screen", device.id, device.name, 0)
+        watch(stream.id)
+        return stream
     }
 
     private fun onStreamFrame(json: JsonObject) {
