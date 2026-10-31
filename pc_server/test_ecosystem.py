@@ -124,6 +124,16 @@ class InputShareTests(unittest.TestCase):
         self.assertFalse(self.share.on_key(0x32, True))
         self.assertIsNone(self.share.target)
 
+    def test_altgr_characters_are_typed_not_shortcuts(self):
+        self.share.switch_to("phone1")
+        self.share.on_key(0xA2, True)
+        self.share.on_key(0xA5, True)
+        self.share.on_key(0x51, True)
+        keys = []
+        self.assertTrue(self.wait_for(lambda: keys.extend(p for p in self.sent if p.get("ev") == "key" and p["code"] == 45) or keys))
+        # Off Windows the US fallback has no AltGr characters, but the meta must not read as Ctrl+Alt.
+        self.assertFalse(keys[0]["meta"] & (ecosystem.META_CTRL | ecosystem.META_ALT))
+
     def test_typing_goes_to_phone_with_char(self):
         self.share.switch_to("phone1")
         self.assertTrue(self.share.on_key(0x41, True))
