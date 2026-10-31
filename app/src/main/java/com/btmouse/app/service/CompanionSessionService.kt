@@ -266,12 +266,20 @@ class CompanionSessionService : Service() {
             isAudioActive -> "Live Audio active"
             isPcCameraActive -> "PC Camera stream active"
             connected -> "Connected · clipboard and files ready"
-            else -> "Waiting for your PC · reconnects on its own"
+            coord?.settings?.serverPin?.value?.length == 6 -> "Waiting for your PC · reconnects on its own"
+            else -> "Phones and tablets on this Wi-Fi can reach this one"
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_companion)
-            .setContentTitle(if (connected) "Connected to $deviceName" else "Staying connected to ${coord?.settings?.pcName?.value?.ifBlank { null } ?: "your PC"}")
+            .setContentTitle(
+                when {
+                    connected -> "Connected to $deviceName"
+                    coord?.settings?.serverPin?.value?.length == 6 ->
+                        "Staying connected to ${coord.settings.pcName.value.ifBlank { "your PC" }}"
+                    else -> "Lanyard is ready for your devices"
+                }
+            )
             .setContentText(statusText)
             .setContentIntent(openIntent)
             .setOngoing(true)
