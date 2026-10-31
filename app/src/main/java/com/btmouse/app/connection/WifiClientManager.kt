@@ -190,6 +190,12 @@ class WifiClientManager(
                 secure.onAck(json)
                 return
             }
+            if (json.get("type")?.asString == "secure_reset") {
+                // The PC lost our session (it restarted): exchange keys again.
+                secure.reset()
+                secure.begin()?.let { sendJsonObject(it) }
+                return
+            }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(json)) return
             recordingTransfer.handleMessage(json) { ack ->
                 sendPacket(mapOf(

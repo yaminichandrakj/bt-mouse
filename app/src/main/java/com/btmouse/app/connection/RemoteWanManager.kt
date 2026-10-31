@@ -225,6 +225,12 @@ class RemoteWanManager(
                 secure.onAck(root)
                 return
             }
+            if (root.get("type")?.asString == "secure_reset") {
+                // The PC lost our session (it restarted): exchange keys again.
+                secure.reset()
+                secure.begin()?.let { sendJson(it, includeSeq = false) }
+                return
+            }
             if (_isConnected.value && com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
             val type = root.get("type")?.asString ?: ""
             if (_isConnected.value) recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }

@@ -3367,6 +3367,12 @@ class Server:
             # Encrypted session: read it, and seal everything sent back on it.
             inner, sealer = self.secure_sessions.open(data)
             if inner is None:
+                # Unknown session (this PC restarted): ask the phone to exchange keys again.
+                reset = {"type": "secure_reset"}
+                if responder:
+                    responder(reset)
+                elif addr and self.sock:
+                    self._send_udp_json(reset, addr)
                 return
             plain_responder = responder
             if plain_responder is None:

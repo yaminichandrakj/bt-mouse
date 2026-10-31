@@ -279,6 +279,12 @@ class BluetoothRfcommManager(
                 secure.onAck(root)
                 return
             }
+            if (root.get("type")?.asString == "secure_reset") {
+                // The PC lost our session (it restarted): exchange keys again.
+                secure.reset()
+                secure.begin()?.let { sendJson(it, includeSeq = false) }
+                return
+            }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
             recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
             val type = root.get("type")?.asString ?: ""
