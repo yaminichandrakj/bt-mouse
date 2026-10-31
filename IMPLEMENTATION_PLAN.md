@@ -1,6 +1,6 @@
 # BT Mouse & PC Companion - Implementation Plan
 
-**Status:** Active roadmap | **Updated:** 2026-10-31 | **Current version:** 1.8.0
+**Status:** Active roadmap | **Updated:** 2026-10-31 | **Current version:** 1.9.0
 **Owner:** Codex | **Release:** [v1.5.1 (Renamed to Lanyard, new icon)](release-notes/v1.5.1.md) · [v1.5.0 (New look, live screen view, zoom everywhere, slides)](release-notes/v1.5.0.md) · [v1.4.4 (Reliable internet access on flaky networks)](release-notes/v1.4.4.md) · [v1.4.3 (One Connect screen and QR, working updates, off-network fix)](release-notes/v1.4.3.md) · [v1.4.2 (Off-network remote access over a Cloudflare quick tunnel)](release-notes/v1.4.2.md) · [v1.4.1 (Native icons, single instance, truthful connection status & camera aspect fixes)](release-notes/v1.4.1.md) · [v1.4.0 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.4.0) · [v1.3.16](release-notes/v1.3.16.md) · [v1.3.15 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.15) · [v1.3.14 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.14) · [v1.3.13 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.13) · [v1.3.12 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.12) · [v1.3.11 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.11) · [v1.3.10 released](https://github.com/yaminichandrakj/bt-mouse/releases/tag/v1.3.10)
 
 ## Product objective

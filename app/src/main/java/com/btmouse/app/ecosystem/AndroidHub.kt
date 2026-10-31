@@ -370,7 +370,7 @@ object AndroidHub {
                 addProperty("type", "connect_ack")
                 addProperty("success", true)
                 addProperty("server_name", DeviceIdentity.name(appContext))
-                addProperty("version", "1.8.0")
+                addProperty("version", "1.9.0")
                 if (byProof) {
                     // Later packets carry this session token; the hub's proof shows it really is family.
                     val session = randomHex(32)
