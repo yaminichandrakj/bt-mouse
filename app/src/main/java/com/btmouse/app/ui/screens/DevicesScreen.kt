@@ -161,7 +161,7 @@ fun DevicesScreen(
             }
         }
 
-        SectionHeader("This ${if (DeviceIdentity.isTablet(context)) "tablet" else "phone"}")
+        SectionHeader("This ${if (DeviceIdentity.isTablet(context)) "tablet" else "phone"}", action = "Setup guide", onAction = { settings.setSetupDone(false) })
         PanelCard {
             Text(DeviceIdentity.name(context), color = OnInk, fontSize = 18.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(12.dp))
@@ -444,18 +444,18 @@ private fun TransferRow(info: TransferInfo, context: Context) {
     }
 }
 
-private fun isKeyboardEnabled(context: Context): Boolean {
+internal fun isKeyboardEnabled(context: Context): Boolean {
     val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
     return imm.enabledInputMethodList.any { it.packageName == context.packageName }
 }
 
-private fun isKeyboardSelected(context: Context): Boolean {
+internal fun isKeyboardSelected(context: Context): Boolean {
     val current = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: return false
     return current.startsWith(context.packageName + "/")
 }
 
 @SuppressLint("BatteryLife")
-private fun requestBatteryExemption(context: Context) {
+internal fun requestBatteryExemption(context: Context) {
     val direct = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     runCatching { context.startActivity(direct) }.onFailure {

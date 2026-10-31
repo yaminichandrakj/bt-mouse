@@ -112,6 +112,15 @@ class SettingsRepository(context: Context) {
     private val _clipboardSync = MutableStateFlow(prefs.getBoolean(KEY_CLIPBOARD_SYNC, true))
     val clipboardSync: StateFlow<Boolean> = _clipboardSync.asStateFlow()
 
+    private val _setupDone = MutableStateFlow(prefs.getBoolean(KEY_SETUP_DONE, false))
+    /** The first-run guide was finished or skipped. */
+    val setupDone: StateFlow<Boolean> = _setupDone.asStateFlow()
+
+    fun setSetupDone(done: Boolean) {
+        _setupDone.value = done
+        prefs.edit().putBoolean(KEY_SETUP_DONE, done).apply()
+    }
+
     fun setStayConnected(enabled: Boolean) {
         _stayConnected.value = enabled
         prefs.edit().putBoolean(KEY_STAY_CONNECTED, enabled).apply()
@@ -288,6 +297,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_BACKGROUND_SESSION_ENABLED = "background_session_enabled"
         private const val KEY_FAILOVER_ENABLED = "failover_enabled"
         private const val KEY_STAY_CONNECTED = "stay_connected"
+        private const val KEY_SETUP_DONE = "setup_done_v18"
         private const val KEY_ALLOW_REMOTE_CONTROL = "allow_remote_control"
         private const val KEY_CLIPBOARD_SYNC = "clipboard_sync"
     }
