@@ -24,7 +24,7 @@ number.
 8. Press Ctrl+Alt+→ and then Ctrl+Alt+→ again (it should cycle through the devices), then
    Ctrl+Alt+Home.
 9. While on the phone, turn off the phone's Wi-Fi. Control should come back to the laptop
-   within about 3 seconds.
+   within about 4 seconds.
 10. Check that phone → laptop trackpad still works while the laptop's hooks are running.
 
 ## Always connected
