@@ -80,6 +80,12 @@ class InputShareTests(unittest.TestCase):
         self.assertLess(self.share.rx, 5)
         self.assertAlmostEqual(self.share.ry, 2400 * 260 / 600, delta=5)
 
+    def test_sliding_along_edge_does_not_cross(self):
+        self.share.on_mouse_move(1919, 400)
+        self.share.on_mouse_move(1919, 420)
+        self.share.on_mouse_move(1919, 440)
+        self.assertIsNone(self.share.target)
+
     def test_edge_outside_placed_range_does_not_cross(self):
         self.share.on_mouse_move(1919, 100)
         self.share.on_mouse_move(1919, 100)
@@ -87,12 +93,14 @@ class InputShareTests(unittest.TestCase):
 
     def test_moving_left_off_phone_returns_to_monitor(self):
         self.share.switch_to("phone1", entry=(1921, 540))
+        time.sleep(0.05)
         self.assertTrue(self.share.on_mouse_move(960 - 50, 540))
         self.assertIsNone(self.share.target)
         self.assertLess(self.cursor[-1][0], 1920)
 
     def test_moves_are_sent_while_remote(self):
         self.share.switch_to("phone1")
+        time.sleep(0.05)
         self.share.on_mouse_move(970, 545)
         self.assertTrue(self.wait_for(lambda: any(p.get("ev") == "move" for p in self.sent)))
 

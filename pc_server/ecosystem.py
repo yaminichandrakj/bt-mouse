@@ -382,6 +382,7 @@ class InputShare:
         self._buttons_down = set()
         self._edge_hits = 0
         self._last_local = None
+        self._settle_until = 0.0
         self._pending_move = None
         self._last_move_sent = 0.0
         self._queue = queue.Queue(maxsize=2000)
@@ -428,6 +429,8 @@ class InputShare:
                     self.rx, self.ry = sw / 2, sh / 2
                 self.park = self.get_park() if self.get_park else (0, 0)
                 self.set_cursor(*self.park)
+                # Events already queued from before the cursor jumped to the park point are stale.
+                self._settle_until = time.monotonic() + 0.03
                 self._enqueue(device_id, {"type": "control_state", "active": True, "controller": self.pc_name})
                 self._queue_move(force=True)
             self._edge_hits = 0
@@ -463,8 +466,10 @@ class InputShare:
                 return self.target is not None
             px, py = self.park
             dx, dy = x - px, y - py
-            if dx == 0 and dy == 0:
+            if (dx == 0 and dy == 0) or time.monotonic() < self._settle_until:
                 return True
+            dx = max(-200, min(200, dx))
+            dy = max(-200, min(200, dy))
             dev = self.registry.get(self.target)
             if not dev:
                 self.switch_to(None)
@@ -498,13 +503,15 @@ class InputShare:
             dx = x - last[0] if last else 0
             dy = y - last[1] if last else 0
             probe = None
-            if x >= mon.right - 1 and dx >= 0:
+            # A clipped push into the edge repeats the same point; sliding along the edge does not count.
+            still = dx == 0 and dy == 0
+            if x >= mon.right - 1 and (dx > 0 or still):
                 probe = (mon.right + 1, y)
-            elif x <= mon.x and dx <= 0:
+            elif x <= mon.x and (dx < 0 or still):
                 probe = (mon.x - 2, y)
-            elif y >= mon.bottom - 1 and dy >= 0:
+            elif y >= mon.bottom - 1 and (dy > 0 or still):
                 probe = (x, mon.bottom + 1)
-            elif y <= mon.y and dy <= 0:
+            elif y <= mon.y and (dy < 0 or still):
                 probe = (x, mon.y - 2)
             if probe is None or self.layout.monitor_at(*probe) is not None:
                 self._edge_hits = 0
