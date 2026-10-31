@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -319,6 +320,46 @@ class StreamTests(unittest.TestCase):
         # A device cannot publish frames for someone else's stream.
         hub.handle("stream_frame", {"stream_id": "phone:screen", "frame": "evil", "client_session": "st"}, tab.append)
         self.assertFalse(any(p.get("frame") == "evil" for p in tab))
+
+
+@unittest.skipUnless(__import__("secure").HAS_CRYPTO, "PyNaCl not installed")
+class SecureSessionTests(unittest.TestCase):
+    def test_handshake_and_round_trip(self):
+        from secure import ClientSession, SessionStore
+        store = SessionStore()
+        phone = ClientSession("123456")
+        ack = store.handshake(phone.hello(), "123456")
+        self.assertTrue(phone.finish(ack))
+        inner, sealer = store.open(phone.wrap({"type": "clipboard_push", "text": "secret"}))
+        self.assertEqual(inner["text"], "secret")
+        reply = sealer({"type": "pong"})
+        self.assertNotIn("pong", json.dumps(reply))
+        self.assertEqual(phone.unwrap(reply)["type"], "pong")
+
+    def test_wrong_pin_and_tampering_are_rejected(self):
+        import base64
+        from secure import ClientSession, SessionStore
+        store = SessionStore()
+        self.assertIsNone(store.handshake(ClientSession("000000").hello(), "123456"))
+        phone = ClientSession("123456")
+        phone.finish(store.handshake(phone.hello(), "123456"))
+        packet = phone.wrap({"type": "ping"})
+        blob = bytearray(base64.b64decode(packet["c"]))
+        blob[-1] ^= 1
+        packet["c"] = base64.b64encode(bytes(blob)).decode()
+        self.assertEqual(store.open(packet), (None, None))
+        self.assertEqual(store.open({"enc": "unknown", "c": packet["c"]}), (None, None))
+
+    def test_sealed_file_chunk_fits_one_datagram(self):
+        from secure import ClientSession, SessionStore
+        store = SessionStore()
+        phone = ClientSession("123456")
+        phone.finish(store.handshake(phone.hello(), "123456"))
+        _, sealer = store.open(phone.wrap({"type": "ping"}))
+        import base64 as b64
+        chunk = {"type": "file_chunk", "transfer_id": "a" * 16, "index": 99999,
+                 "data": b64.b64encode(os.urandom(CHUNK_SIZE)).decode()}
+        self.assertLess(len(json.dumps(sealer(chunk)).encode()), 65000)
 
 
 class FamilyKeyTests(unittest.TestCase):
