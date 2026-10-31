@@ -68,7 +68,8 @@ class LibrarySync:
                 continue
             key = (device_id, name)
             with self._lock:
-                if now - self._requested.get(key, 0) < 600:
+                last = self._requested.get(key)
+                if last is not None and now - last < 600:
                     continue
                 self._requested[key] = now
             self.registry.send(device_id, {"type": "library_fetch", "id": item.get("id") or name})

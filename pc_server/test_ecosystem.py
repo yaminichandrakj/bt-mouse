@@ -124,7 +124,7 @@ class InputShareTests(unittest.TestCase):
 
     def test_link_loss_returns_control(self):
         self.share.switch_to("phone1")
-        self.registry._devices["phone1"]["last_seen"] = 0
+        self.registry._devices["phone1"]["last_seen"] = ecosystem.NEVER
         self.assertTrue(self.wait_for(lambda: self.share.target is None))
 
     def test_vk_to_char(self):

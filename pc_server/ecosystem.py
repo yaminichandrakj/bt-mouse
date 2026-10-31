@@ -18,6 +18,9 @@ from streams import StreamHub
 from sync import SyncHub
 
 
+NEVER = float("-inf")
+
+
 def _data_dir():
     base = Path(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")) / "BTMouse"
     try:
@@ -52,7 +55,7 @@ class DeviceRegistry:
         session = str(data.get("client_session") or "")
         with self._lock:
             dev = self._devices.setdefault(device_id, {"device_id": device_id})
-            was_online = time.monotonic() - dev.get("last_seen", 0) <= self.ONLINE_TIMEOUT
+            was_online = time.monotonic() - dev.get("last_seen", NEVER) <= self.ONLINE_TIMEOUT
             before = (dev.get("name"), dev.get("caps"), dev.get("screen_w"), dev.get("screen_h"))
             dev.update({
                 "name": str(data.get("name") or "Android device")[:60],
@@ -91,7 +94,7 @@ class DeviceRegistry:
             device_id = self._session_to_device.get(str(session))
             dev = self._devices.get(device_id) if device_id else None
             if dev is not None:
-                dev["last_seen"] = 0.0
+                dev["last_seen"] = NEVER
         self._changed()
 
     def get(self, device_id):
@@ -101,7 +104,7 @@ class DeviceRegistry:
 
     def is_online(self, device_id):
         dev = self.get(device_id)
-        return bool(dev) and time.monotonic() - dev.get("last_seen", 0) <= self.ONLINE_TIMEOUT
+        return bool(dev) and time.monotonic() - dev.get("last_seen", NEVER) <= self.ONLINE_TIMEOUT
 
     def online_devices(self):
         now = time.monotonic()
@@ -109,7 +112,7 @@ class DeviceRegistry:
             return [
                 {k: v for k, v in dev.items() if k != "respond"}
                 for dev in self._devices.values()
-                if now - dev.get("last_seen", 0) <= self.ONLINE_TIMEOUT
+                if now - dev.get("last_seen", NEVER) <= self.ONLINE_TIMEOUT
             ]
 
     def all_devices(self):
@@ -698,7 +701,7 @@ class InputShare:
             target = self.target
             if target is not None and not self.registry.is_online(target):
                 dev = self.registry.get(target)
-                if not dev or time.monotonic() - dev.get("last_seen", 0) > self.LINK_TIMEOUT:
+                if not dev or time.monotonic() - dev.get("last_seen", NEVER) > self.LINK_TIMEOUT:
                     self.switch_to(None)
 
     def status(self):
