@@ -246,6 +246,11 @@ Everything below shipped together in **v1.6.0** instead of five separate release
 | Automatic device network | Built: the PC's family key (`family.json`) goes to every paired device; each Android device advertises `_lanyard._udp` over mDNS and links to family members (`PeerLinks`, the smaller id dials). PIN pairing for devices with no PC (`Family.adoptFromPeer` / per-peer token). |
 | Direct watching | Frames go owner → watcher over the best route: hub link, peer link, or relayed by the PC. |
 
-Still later: H.264, audio streams, the PC dialling out, and links between networks without the PC (internet relay).
+Also in v1.8.0: mirrored screens carry their sound (AudioPlaybackCapture, 16 kHz mono, `stream_audio`), and mirroring runs at 12 fps.
+
+Still later:
+- **H.264 mirroring.** Deferred on purpose: encoder-to-decoder bugs would show as black or frozen screens and can't be checked without devices. The plan is MediaCodec encode fed from the captured bitmaps through the encoder's input surface, sent only to Android viewers that ask for `codec: h264` (opt-in), with JPEG kept for the PC and as the fallback, and keyframe requests on packet loss.
+- The PC dialling out.
+- Links between networks without the PC (internet relay).
 
 Checklist additions for v1.8.0: (29) Mirror & control phone from tab and tab from phone, with touch; (30) the PC's Mirror window; (31) two devices paired to the PC see each other in Your devices with nothing scanned, and stay linked with the PC off; (32) PIN pairing between two devices that were never paired to the PC.
