@@ -269,7 +269,8 @@ object PeerLinks {
             link.lastHeard = System.currentTimeMillis()
             when (json.get("type")?.asString) {
                 "connect_ack" -> ack.complete(json)
-                "pong", "device_hello_ack", "path_switch_ack" -> Unit
+                // The PC's lists stay authoritative; a direct link only adds this one device.
+                "pong", "device_hello_ack", "path_switch_ack", "streams_update" -> Unit
                 "auth_error" -> drop(link.deviceId)
                 "devices_update" -> {
                     // The hub lists itself first: that is the peer's own name and abilities.

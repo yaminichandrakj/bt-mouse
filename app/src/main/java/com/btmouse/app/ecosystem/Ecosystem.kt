@@ -120,9 +120,16 @@ object Ecosystem {
                     // The PC may have restarted: say again what this device is sharing.
                     if (ScreenShare.active.value) announceStream("screen", "Screen", true)
                     if (cameraAnnounced) announceStream("camera", "Camera", true)
-                    watching?.let { watch(it) }
                     delay(10_000)
                 }
+            }
+        }
+
+        // Keep telling the device we watch that we are still here, with or without a PC.
+        scope.launch {
+            while (true) {
+                delay(8_000)
+                watching?.let { watch(it) }
             }
         }
 
@@ -350,7 +357,7 @@ object Ecosystem {
         }
         if (kind == "screen") {
             val now = System.currentTimeMillis()
-            directWatchers.entries.removeIf { now - it.value > 25_000 }
+            if (directWatchers.entries.removeIf { now - it.value > 25_000 }) updateScreenViewers()
             directWatchers.keys.forEach { watcher ->
                 sendTo(watcher, payload.deepCopy())
             }
