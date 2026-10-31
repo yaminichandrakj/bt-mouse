@@ -121,6 +121,8 @@ fun DevicesScreen(
     }
 
     val liveStreams by Ecosystem.streams.collectAsState()
+    val hubOn by com.btmouse.app.ecosystem.AndroidHub.enabled.collectAsState()
+    val hubClients by com.btmouse.app.ecosystem.AndroidHub.connected.collectAsState()
     val sharingScreen by ScreenShare.active.collectAsState()
     val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
@@ -229,7 +231,7 @@ fun DevicesScreen(
             if (sharingScreen) {
                 PillButton("Stop sharing", { CompanionSessionService.stopProjection(context) }, style = PillStyle.Danger)
             } else {
-                PillButton("Share screen", { captureLauncher.launch(ScreenShare.captureIntent(context)) }, enabled = connected)
+                PillButton("Share screen", { captureLauncher.launch(ScreenShare.captureIntent(context)) }, enabled = connected || hubOn)
             }
             if (liveStreams.isNotEmpty()) {
                 Spacer(Modifier.height(14.dp))
@@ -245,6 +247,40 @@ fun DevicesScreen(
             } else {
                 Spacer(Modifier.height(8.dp))
                 Caption("When another device shares its screen or camera, it shows up here.")
+            }
+        }
+
+        SectionHeader("No PC? Connect a tablet to this phone")
+        PanelCard {
+            ToggleRow(
+                "Let my other Android devices connect here",
+                "The tablet's trackpad and keyboard then drive this phone, and the two share the clipboard, files and this screen.",
+                hubOn
+            ) { com.btmouse.app.ecosystem.AndroidHub.setEnabled(it) }
+            if (hubOn) {
+                val code = remember(hubOn) { com.btmouse.app.ecosystem.AndroidHub.pairingCode() }
+                Spacer(Modifier.height(14.dp))
+                if (code == null) {
+                    Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the tablet), then reopen this page.", color = AccentAmber)
+                } else {
+                    val qr = remember(code) { qrBitmap(code, 600) }
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        androidx.compose.foundation.Image(
+                            qr, "Pairing code for this phone",
+                            Modifier.size(220.dp).clip(RoundedCornerShape(12.dp))
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Caption(
+                        "On the tablet: Lanyard › Connect › Scan PC QR code, and scan this. " +
+                            "PIN ${com.btmouse.app.ecosystem.AndroidHub.pin()}. The tablet then treats this phone as its PC; " +
+                            "scan your PC's code again to switch back."
+                    )
+                }
+                if (hubClients.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Caption("Connected here: " + hubClients.joinToString { it.name }, color = StatusGreen)
+                }
             }
         }
 
@@ -605,4 +641,13 @@ fun StreamViewerScreen(stream: LiveStream, onClose: () -> Unit) {
             }
         }
     }
+}
+
+
+private fun qrBitmap(text: String, size: Int): androidx.compose.ui.graphics.ImageBitmap {
+    val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
+    val pixels = IntArray(size * size) { i ->
+        if (matrix.get(i % size, i / size)) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+    }
+    return android.graphics.Bitmap.createBitmap(pixels, size, size, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
 }

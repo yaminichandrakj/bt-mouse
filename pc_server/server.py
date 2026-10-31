@@ -3419,7 +3419,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.6.0"
+                    "version": "1.7.0"
                 }
             else:
                 self._record_auth_failure(addr)

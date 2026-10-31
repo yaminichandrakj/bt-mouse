@@ -432,8 +432,11 @@ class ConnectionCoordinator(
         }
     }
 
+    private fun wantsPcLink(): Boolean = settings.stayConnected.value && isPaired() && !intentionalDisconnect
+
     /** True when the phone should keep itself connected in the background. */
-    fun shouldStayConnected(): Boolean = settings.stayConnected.value && isPaired() && !intentionalDisconnect
+    fun shouldStayConnected(): Boolean =
+        (settings.stayConnected.value && isPaired() && !intentionalDisconnect) || com.btmouse.app.ecosystem.AndroidHub.enabled.value
 
     /**
      * "Stay connected": connect at start, reconnect whenever a network comes back, and
@@ -443,10 +446,10 @@ class ConnectionCoordinator(
         stayConnectedJob?.cancel()
         stayConnectedJob = scope.launch {
             delay(1500)
-            if (shouldStayConnected() && !isConnected.value) connectSavedPc()
+            if (wantsPcLink() && !isConnected.value) connectSavedPc()
             while (true) {
                 delay(60_000)
-                if (shouldStayConnected() && !isConnected.value && reconnectJob?.isActive != true) {
+                if (wantsPcLink() && !isConnected.value && reconnectJob?.isActive != true) {
                     bringUpAllLinks()
                 }
             }
@@ -462,7 +465,7 @@ class ConnectionCoordinator(
                 scope.launch {
                     // Give DHCP and routes a moment before probing the PC.
                     delay(2000)
-                    if (!shouldStayConnected()) return@launch
+                    if (!wantsPcLink()) return@launch
                     val links = linkStates.value
                     if (!isConnected.value || links.wifi == LinkState.OFF) bringUpAllLinks()
                 }
@@ -734,7 +737,8 @@ class ConnectionCoordinator(
             ) { hasActiveMedia, connected, bgEnabled, stay, _ ->
                 listOf(hasActiveMedia, connected, bgEnabled, stay)
             }.collect { (hasActiveMedia, connected, bgEnabled, stay) ->
-                val keepAlive = stay && isPaired() && !intentionalDisconnect
+                val keepAlive = (stay && isPaired() && !intentionalDisconnect) ||
+                    com.btmouse.app.ecosystem.AndroidHub.enabled.value
                 if ((bgEnabled && hasActiveMedia) || keepAlive) {
                     CompanionSessionService.start(context)
                 } else if (!hasActiveMedia && !connected) {

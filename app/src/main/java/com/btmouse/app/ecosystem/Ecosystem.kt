@@ -81,6 +81,7 @@ object Ecosystem {
     val watchedFrame: StateFlow<StreamFrame?> = _watchedFrame.asStateFlow()
     @Volatile private var watching: String? = null
     @Volatile private var cameraViewers = 0
+    @Volatile private var pcScreenViewers = 0
     private var cameraAnnounced = false
 
     private val _lastClipboard = MutableStateFlow<String?>(null)
@@ -99,6 +100,7 @@ object Ecosystem {
         initialized = true
         appContext = context.applicationContext
         files = FileTransfers(appContext, scope) { send(it) }
+        AndroidHub.init(appContext, scope)
 
         scope.launch {
             coordinator.isConnected.collectLatest { connected ->
@@ -165,7 +167,14 @@ object Ecosystem {
 
     // --- outgoing ------------------------------------------------------
     fun send(obj: JsonObject) {
+        // Devices connected straight to this phone (no PC) are reached through its hub.
+        val to = obj.get("to")?.takeIf { !it.isJsonNull }?.asString
+        if (to != null && AndroidHub.sendTo(to, obj)) return
         coordinator?.sendJsonObject(obj)
+    }
+
+    fun onHubClientsChanged() {
+        mergeDevices()
     }
 
     /** Address a message to another device; the PC needs no ``to``. */
@@ -229,7 +238,10 @@ object Ecosystem {
                 val id = json.get("stream_id")?.asString ?: ""
                 val n = json.get("viewers")?.asInt ?: 0
                 when {
-                    id.endsWith(":screen") -> ScreenShare.viewers = n
+                    id.endsWith(":screen") -> {
+                        pcScreenViewers = n
+                        ScreenShare.viewers = n
+                    }
                     id.endsWith(":camera") -> cameraViewers = n
                 }
             }
@@ -240,9 +252,25 @@ object Ecosystem {
         return true
     }
 
+    private var pcDevices: List<PeerDevice> = emptyList()
+
+    /** Devices known through the PC plus devices connected straight to this phone's hub. */
+    private fun mergeDevices() {
+        val hub = AndroidHub.connected.value.mapNotNull { c ->
+            val id = c.deviceId ?: return@mapNotNull null
+            PeerDevice(
+                id = id, name = c.name, kind = c.kind, screenW = c.screenW, screenH = c.screenH,
+                canBeControlled = c.caps.get("control")?.asBoolean ?: false,
+                acceptsFiles = c.caps.get("files")?.asBoolean ?: true
+            )
+        }
+        val ids = hub.map { it.id }.toSet()
+        _devices.value = pcDevices.filter { it.id !in ids } + hub
+    }
+
     private fun parseDevices(list: JsonArray?) {
         val me = selfId
-        _devices.value = list?.mapNotNull { el ->
+        pcDevices = list?.mapNotNull { el ->
             val o = el.asJsonObject
             val id = o.get("device_id")?.asString ?: return@mapNotNull null
             if (id == me) return@mapNotNull null
@@ -257,6 +285,7 @@ object Ecosystem {
                 acceptsFiles = caps?.get("files")?.asBoolean ?: true
             )
         }?.sortedBy { if (it.isPc) 0 else 1 } ?: emptyList()
+        mergeDevices()
     }
 
     // --- streams -------------------------------------------------------
@@ -286,18 +315,21 @@ object Ecosystem {
             addProperty("label", label)
             addProperty("active", active)
         })
+        AndroidHub.announceStreams()
     }
 
     /** One picture from this device's screen or camera; dropped when nobody watches. */
     fun publishFrame(kind: String, jpeg: ByteArray, width: Int, height: Int) {
         if (kind == "camera" && cameraViewers <= 0) return
-        send(JsonObject().apply {
+        val payload = JsonObject().apply {
             addProperty("type", "stream_frame")
             addProperty("stream_id", "$selfId:$kind")
             addProperty("frame", android.util.Base64.encodeToString(jpeg, android.util.Base64.NO_WRAP))
             addProperty("width", width)
             addProperty("height", height)
-        })
+        }
+        AndroidHub.publishFrame(kind, payload)
+        if (kind != "screen" || pcScreenViewers > 0) send(payload)
     }
 
     fun onCameraFrame(jpeg: ByteArray, width: Int, height: Int) {
@@ -397,11 +429,13 @@ object Ecosystem {
         val id = clipId(clipped)
         if (id == lastClipId && !force) return false
         lastClipId = id
-        send(JsonObject().apply {
+        val push = JsonObject().apply {
             addProperty("type", "clipboard_push")
             addProperty("text", clipped)
             addProperty("id", id)
-        })
+        }
+        AndroidHub.broadcast(push.deepCopy().apply { addProperty("from_name", DeviceIdentity.name(appContext)) })
+        send(push)
         return true
     }
 

@@ -41,6 +41,13 @@ object ScreenShare {
     private var reader: ImageReader? = null
     private var thread: HandlerThread? = null
     private var lastSent = 0L
+    /** Latest picture, for a hub client's Screen preview. */
+    @Volatile var lastJpeg: ByteArray? = null
+        private set
+    @Volatile var lastWidth = 0
+        private set
+    @Volatile var lastHeight = 0
+        private set
     private var appContext: Context? = null
 
     /** True while the service must run with the mediaProjection type. */
@@ -110,7 +117,7 @@ object ScreenShare {
         val image = runCatching { r.acquireLatestImage() }.getOrNull() ?: return
         try {
             val now = SystemClock.elapsedRealtime()
-            if (viewers <= 0 || now - lastSent < 1000L / FPS) return
+            if (viewers + AndroidHub.screenViewers() <= 0 || now - lastSent < 1000L / FPS) return
             lastSent = now
             val plane = image.planes[0]
             val pixelStride = plane.pixelStride
@@ -126,7 +133,12 @@ object ScreenShare {
                 jpeg = encode(bmp)
             }
             bmp.recycle()
-            if (jpeg.size <= MAX_JPEG_BYTES) Ecosystem.publishFrame("screen", jpeg, deviceW, deviceH)
+            if (jpeg.size <= MAX_JPEG_BYTES) {
+                lastJpeg = jpeg
+                lastWidth = deviceW
+                lastHeight = deviceH
+                Ecosystem.publishFrame("screen", jpeg, deviceW, deviceH)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Frame failed", e)
         } finally {
@@ -157,6 +169,7 @@ object ScreenShare {
         thread?.quitSafely()
         thread = null
         viewers = 0
+        lastJpeg = null
         if (wasActive) Ecosystem.announceStream("screen", "Screen", false)
     }
 }
