@@ -610,7 +610,11 @@ fun StreamViewerScreen(stream: LiveStream, onClose: () -> Unit) {
     val canControl = stream.kind == "screen" && devices.any { it.id == stream.owner && it.canBeControlled }
     DisposableEffect(stream.id) {
         Ecosystem.watch(stream.id)
-        onDispose { Ecosystem.unwatch() }
+        onDispose {
+            Ecosystem.unwatch()
+            // Touching the picture showed the "being controlled" frame there; clear it.
+            if (stream.kind == "screen") Ecosystem.stopControlling(stream.owner)
+        }
     }
     val bitmap = remember(frame) {
         frame?.let { f -> android.graphics.BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.size)?.asImageBitmap() }
