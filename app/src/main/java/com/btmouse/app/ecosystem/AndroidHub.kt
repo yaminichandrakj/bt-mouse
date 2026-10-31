@@ -51,7 +51,9 @@ object AndroidHub {
         @Volatile var screenH: Int = 0,
         @Volatile var caps: JsonObject = JsonObject(),
         @Volatile var lastSeen: Long = System.currentTimeMillis(),
-        @Volatile var session: String? = null
+        @Volatile var session: String? = null,
+        /** Family links seal traffic with this key, derived from the family handshake. */
+        @Volatile var linkKey: ByteArray? = null
     )
 
     private val gson = Gson()
@@ -78,6 +80,32 @@ object AndroidHub {
         mac.init(javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA256"))
         return mac.doFinal(message.toByteArray()).joinToString("") { "%02x".format(it) }
     }
+
+    fun hmacBytes(key: String, message: String): ByteArray {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA256"))
+        return mac.doFinal(message.toByteArray())
+    }
+
+    /** ChaCha20-Poly1305 with a random 12-byte nonce in front, as {"enc":"1","c":base64}. */
+    fun sealJson(key: ByteArray, text: String): JsonObject {
+        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
+        val cipher = javax.crypto.Cipher.getInstance("ChaCha20/Poly1305/NoPadding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "ChaCha20"),
+            javax.crypto.spec.IvParameterSpec(nonce))
+        return JsonObject().apply {
+            addProperty("enc", "1")
+            addProperty("c", Base64.encodeToString(nonce + cipher.doFinal(text.toByteArray()), Base64.NO_WRAP))
+        }
+    }
+
+    fun openSealed(key: ByteArray, obj: JsonObject): JsonObject? = runCatching {
+        val blob = Base64.decode(obj.get("c").asString, Base64.DEFAULT)
+        val cipher = javax.crypto.Cipher.getInstance("ChaCha20/Poly1305/NoPadding")
+        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "ChaCha20"),
+            javax.crypto.spec.IvParameterSpec(blob.copyOfRange(0, 12)))
+        gson.fromJson(String(cipher.doFinal(blob, 12, blob.size - 12)), JsonObject::class.java)
+    }.getOrNull()
 
     fun constantTimeEquals(a: String, b: String): Boolean =
         java.security.MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
@@ -223,7 +251,11 @@ object AndroidHub {
     private fun send(client: HubClient, obj: JsonObject) {
         val sock = socket ?: return
         if (!obj.has("from")) obj.addProperty("from", Ecosystem.selfId)
-        val bytes = obj.toString().toByteArray()
+        val linkKey = client.linkKey
+        // The connect answer stays readable: the other side only derives the key after checking it.
+        val text = if (linkKey != null && obj.get("type")?.asString != "connect_ack") sealJson(linkKey, obj.toString()).toString()
+        else obj.toString()
+        val bytes = text.toByteArray()
         if (bytes.size > 64000) return
         scope?.launch(Dispatchers.IO) {
             runCatching { sock.send(DatagramPacket(bytes, bytes.size, client.address)) }
@@ -270,12 +302,22 @@ object AndroidHub {
 
     // --- receiving -----------------------------------------------------
     private fun onPacket(text: String, from: InetSocketAddress) {
-        val json = gson.fromJson(text, JsonObject::class.java) ?: return
-        val type = json.get("type")?.asString ?: return
+        var json = gson.fromJson(text, JsonObject::class.java) ?: return
         val key = "${from.address.hostAddress}:${from.port}"
-        val token = json.get("token")?.asString?.trim()
         val ip = from.address.hostAddress ?: ""
         if (isBlocked(ip)) return
+        val sealed = json.has("enc")
+        if (sealed) {
+            // A family link's sealed packet: the session token outside, everything else inside.
+            val known = clients[key]
+            val outerToken = json.get("token")?.asString
+            val linkKey = known?.linkKey
+            if (known == null || linkKey == null || outerToken == null || known.session != outerToken) return
+            json = openSealed(linkKey, json) ?: return
+            json.addProperty("token", outerToken)
+        }
+        val type = json.get("type")?.asString ?: return
+        val token = json.get("token")?.asString?.trim()
         if (type == "family_challenge") {
             // Step 1 of joining as a family member: a one-time number to prove the key against.
             val nonce = randomHex(16)
@@ -287,9 +329,11 @@ object AndroidHub {
             return
         }
         val byPin = token == pin()
-        val bySession = token != null && clients[key]?.session?.let { it == token } == true
+        // A family link's session token was visible in the connect answer, so it only counts on sealed packets.
+        val bySession = token != null && sealed && clients[key]?.session?.let { it == token } == true
         var byProof = false
         var hubProof: String? = null
+        var newLinkKey: ByteArray? = null
         if (!byPin && !bySession && type == "connect") {
             // Step 2: the device proves it holds the family key without ever sending it.
             val (nonce, at) = challenges.remove(key) ?: (null to 0L)
@@ -300,6 +344,7 @@ object AndroidHub {
             ) {
                 byProof = true
                 hubProof = hmac(Family.key(), "hub|$nonce|$clientNonce")
+                newLinkKey = hmacBytes(Family.key(), "enc|$nonce|$clientNonce")
             }
         }
         if (!byPin && !bySession && !byProof) {
@@ -330,6 +375,7 @@ object AndroidHub {
                     // Later packets carry this session token; the hub's proof shows it really is family.
                     val session = randomHex(32)
                     client.session = session
+                    client.linkKey = newLinkKey
                     addProperty("session", session)
                     addProperty("hub_proof", hubProof)
                 }
