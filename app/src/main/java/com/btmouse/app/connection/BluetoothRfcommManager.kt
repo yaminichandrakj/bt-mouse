@@ -118,6 +118,9 @@ class BluetoothRfcommManager(
 
     private val sendQueue = Channel<String>(capacity = 256)
     private val gson = Gson()
+    /** Set by the coordinator: the pairing PIN that authenticates the encryption handshake. */
+    var pinSupplier: () -> String = { "" }
+    private val secure = SecureTransport { pinSupplier() }
 
     init {
         startSenderQueue()
@@ -184,7 +187,9 @@ class BluetoothRfcommManager(
                     addProperty("type", "connect")
                     addProperty("client", "Android Phone (BT)")
                 }
+                secure.reset()
                 sendJson(handshake, includeSeq = false)
+                if (pinSupplier().length == 6) secure.begin()?.let { sendJson(it, includeSeq = false) }
                 queryMedia()
                 startHeartbeat()
 
@@ -258,6 +263,7 @@ class BluetoothRfcommManager(
         _runningProcesses.value = emptyList()
         _installedApps.value = emptyList()
         _statusMessage.value = "Bluetooth disconnected"
+        secure.reset()
     }
 
     override fun notifyPathSwitch() {
@@ -267,7 +273,18 @@ class BluetoothRfcommManager(
 
     private fun processIncomingPacket(line: String) {
         try {
-            val root = gson.fromJson(line, JsonObject::class.java) ?: return
+            val parsed = gson.fromJson(line, JsonObject::class.java) ?: return
+            val root = secure.unwrap(parsed) ?: return
+            if (root.get("type")?.asString == "key_exchange_ack") {
+                secure.onAck(root)
+                return
+            }
+            if (root.get("type")?.asString == "secure_reset") {
+                // The PC lost our session (it restarted): exchange keys again.
+                secure.reset()
+                secure.begin()?.let { sendJson(it, includeSeq = false) }
+                return
+            }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
             recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
             val type = root.get("type")?.asString ?: ""
@@ -525,7 +542,7 @@ class BluetoothRfcommManager(
                 }
             }
         }
-        sendQueue.trySend(obj.toString())
+        sendQueue.trySend(secure.wrap(obj.toString()))
     }
 
     override fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int, hScroll: Int) {

@@ -58,6 +58,8 @@ object PeerLinks {
         @Volatile var lastHeard = System.currentTimeMillis()
         var job: Job? = null
         var challenge: CompletableDeferred<JsonObject>? = null
+        /** Set once the family handshake succeeds: everything after is sealed with it. */
+        @Volatile var key: ByteArray? = null
     }
 
     private val gson = Gson()
@@ -246,6 +248,7 @@ object PeerLinks {
 
         var connectPacket = JsonObject().apply { addProperty("type", "connect"); addProperty("client", "Lanyard peer") }
         var expectedHubProof: String? = null
+        var linkKey: ByteArray? = null
         if (pinToken == null) {
             var nonceReply: JsonObject? = null
             repeat(3) {
@@ -260,6 +263,7 @@ object PeerLinks {
             connectPacket.addProperty("client_nonce", clientNonce)
             connectPacket.addProperty("proof", AndroidHub.hmac(key, "client|$nonce|$clientNonce"))
             expectedHubProof = AndroidHub.hmac(key, "hub|$nonce|$clientNonce")
+            linkKey = AndroidHub.hmacBytes(key, "enc|$nonce|$clientNonce")
         }
         var reply: JsonObject? = null
         // A proof is single-use, so a family connect is sent once; a PIN connect may retry.
@@ -278,6 +282,7 @@ object PeerLinks {
                 return fail("${device.name} could not prove it is one of your devices")
             }
             link.token = session
+            link.key = linkKey
         }
         run {
             if (pairing && pinToken != null) {
@@ -314,7 +319,11 @@ object PeerLinks {
             } catch (_: Exception) {
                 return
             }
-            val json = runCatching { gson.fromJson(String(packet.data, 0, packet.length), JsonObject::class.java) }.getOrNull() ?: continue
+            val raw = runCatching { gson.fromJson(String(packet.data, 0, packet.length), JsonObject::class.java) }.getOrNull() ?: continue
+            val json = if (raw.has("enc")) {
+                val key = link.key ?: continue
+                AndroidHub.openSealed(key, raw) ?: continue
+            } else raw
             link.lastHeard = System.currentTimeMillis()
             when (json.get("type")?.asString) {
                 "connect_ack" -> ack.complete(json)
@@ -342,8 +351,13 @@ object PeerLinks {
     }
 
     private fun sendRaw(link: Link, obj: JsonObject) {
-        obj.addProperty("token", link.token)
-        val bytes = obj.toString().toByteArray()
+        val key = link.key
+        val packet = if (key != null) {
+            AndroidHub.sealJson(key, obj.toString()).apply { addProperty("token", link.token) }
+        } else {
+            obj.apply { addProperty("token", link.token) }
+        }
+        val bytes = packet.toString().toByteArray()
         if (bytes.size > 64000) return
         runCatching { link.socket.send(DatagramPacket(bytes, bytes.size, link.address)) }
     }

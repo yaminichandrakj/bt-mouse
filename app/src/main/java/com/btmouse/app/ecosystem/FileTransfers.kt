@@ -143,7 +143,22 @@ class FileTransfers(
                 }
             }
             publish(TransferInfo(id, name, 0, peerName, true, "preparing", 0f))
-            // A local copy gives a seekable file whatever the source app hands us.
+            // Most apps hand over a seekable file: read it in place, with no copy.
+            val direct = runCatching { openDirect(uri) }.getOrNull()
+            if (direct != null) {
+                val (size, sha) = direct
+                val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()))
+                outgoing[id] = t
+                try {
+                    runSend(t, { directChannel(uri) }, sha, library, clipboard)
+                } catch (e: Exception) {
+                    publish(TransferInfo(id, name, size, peerName, true, "failed", 0f, e.message ?: "Failed"))
+                } finally {
+                    outgoing.remove(id)
+                }
+                return@launch
+            }
+            // Otherwise a local copy gives a seekable file whatever the source app hands us.
             val local = File(File(context.cacheDir, "outgoing").apply { mkdirs() }, "$id.bin")
             try {
                 val digest = MessageDigest.getInstance("SHA-256")
@@ -162,7 +177,7 @@ class FileTransfers(
                 val size = local.length()
                 val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()))
                 outgoing[id] = t
-                runSend(t, local, sha, library, clipboard)
+                runSend(t, { RandomAccessFile(local, "r").channel }, sha, library, clipboard)
             } catch (e: Exception) {
                 publish(TransferInfo(id, name, local.length(), peerName, true, "failed", 0f, e.message ?: "Failed"))
             } finally {
@@ -172,7 +187,32 @@ class FileTransfers(
         }
     }
 
-    private suspend fun runSend(t: Outgoing, file: File, sha: String, library: Boolean, clipboard: Boolean = false) {
+    private fun directChannel(uri: Uri): FileChannel {
+        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: throw IllegalStateException("Could not open the file")
+        return android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).channel
+    }
+
+    /** Size and SHA-256 of a file read in place; null-equivalent (exception) when it can't seek. */
+    private fun openDirect(uri: Uri): Pair<Long, String> {
+        directChannel(uri).use { channel ->
+            val size = channel.size()
+            if (size <= 0) throw IllegalStateException("Unknown size")
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteBuffer.allocate(256 * 1024)
+            var pos = 0L
+            while (pos < size) {
+                buffer.clear()
+                val n = channel.read(buffer, pos)
+                if (n <= 0) break
+                digest.update(buffer.array(), 0, n)
+                pos += n
+            }
+            if (pos != size) throw IllegalStateException("Short read")
+            return size to digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    }
+
+    private suspend fun runSend(t: Outgoing, source: () -> FileChannel, sha: String, library: Boolean, clipboard: Boolean = false) {
         val offer = JsonObject().apply {
             addProperty("type", "file_offer")
             addProperty("transfer_id", t.id)
@@ -193,10 +233,9 @@ class FileTransfers(
             sendRaw(addressed(offer.deepCopy(), t.peer))
             repeat(20) { if (!t.accepted) delay(100) }
         }
-        tryHttpUpload(t, file)
+        tryHttpUpload(t, source)
         val sentAt = HashMap<Int, Long>()
-        RandomAccessFile(file, "r").use { raf ->
-            val channel: FileChannel = raf.channel
+        source().use { channel ->
             val buffer = ByteBuffer.allocate(CHUNK_SIZE)
             var lastPublish = 0L
             while (t.done.size < t.chunks) {
@@ -244,7 +283,7 @@ class FileTransfers(
     }
 
     /** LAN fast path: PUT the rest of the file to the PC. Any failure leaves the chunk path to finish. */
-    private fun tryHttpUpload(t: Outgoing, file: File) {
+    private fun tryHttpUpload(t: Outgoing, source: () -> FileChannel) {
         val port = t.uploadPort ?: return
         val token = t.uploadToken ?: return
         val host = Ecosystem.pcLanHost() ?: return
@@ -256,16 +295,17 @@ class FileTransfers(
             override fun contentType() = null
             override fun contentLength() = length
             override fun writeTo(sink: okio.BufferedSink) {
-                RandomAccessFile(file, "r").use { raf ->
-                    raf.seek(offset)
-                    val buf = ByteArray(256 * 1024)
+                source().use { channel ->
+                    val buf = ByteBuffer.allocate(256 * 1024)
                     var sent = 0L
                     var lastPublish = 0L
                     while (sent < length) {
                         if (t.cancelled) throw java.io.IOException("Cancelled")
-                        val n = raf.read(buf, 0, minOf(buf.size.toLong(), length - sent).toInt())
-                        if (n < 0) break
-                        sink.write(buf, 0, n)
+                        buf.clear()
+                        buf.limit(minOf(buf.capacity().toLong(), length - sent).toInt())
+                        val n = channel.read(buf, offset + sent)
+                        if (n <= 0) break
+                        sink.write(buf.array(), 0, n)
                         sent += n
                         t.lastProgress = System.currentTimeMillis()
                         val now = System.currentTimeMillis()

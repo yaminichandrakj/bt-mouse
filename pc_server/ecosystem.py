@@ -353,6 +353,46 @@ def vk_to_char(vk, shift=False, caps=False):
     return None
 
 
+def layout_char(vk, shift=False, altgr=False):
+    """The character this key types on the PC's current keyboard layout (Windows), else US."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            state = (ctypes.c_ubyte * 256)()
+            if shift:
+                state[0x10] = 0x80
+            if altgr:
+                state[0x11] = state[0x12] = state[0xA2] = state[0xA5] = 0x80
+            if user32.GetKeyState(0x14) & 1:
+                state[0x14] = 0x01
+            hwnd = user32.GetForegroundWindow()
+            thread = user32.GetWindowThreadProcessId(hwnd, None)
+            hkl = user32.GetKeyboardLayout(thread)
+            scan = user32.MapVirtualKeyExW(vk, 0, hkl)
+            buf = ctypes.create_unicode_buffer(8)
+            # Flag 0x4: do not change the keyboard state (no dead-key side effects on the PC).
+            n = user32.ToUnicodeEx(vk, scan, state, buf, 8, 0x4, hkl)
+            if n > 0:
+                text = buf.value[:n]
+                if text and all(c.isprintable() for c in text):
+                    return text
+            if n < 0:
+                return None
+        except Exception:
+            pass
+    if altgr:
+        return None
+    caps = False
+    if os.name == "nt":
+        try:
+            import ctypes
+            caps = bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
+        except Exception:
+            pass
+    return vk_to_char(vk, shift=shift, caps=caps)
+
+
 # ----------------------------------------------------------------------
 # Keyboard and mouse sharing
 # ----------------------------------------------------------------------
@@ -390,6 +430,7 @@ class InputShare:
         self._pending_move = None
         self._last_move_sent = 0.0
         self._queue = queue.Queue(maxsize=2000)
+        self.alive = True
         self._worker = threading.Thread(target=self._send_loop, name="InputShareSend", daemon=True)
         self._worker.start()
         self._watchdog = threading.Thread(target=self._watch_loop, name="InputShareWatch", daemon=True)
@@ -662,12 +703,18 @@ class InputShare:
         if code is None:
             return
         shift = "shift" in self._mods
+        # AltGr (right Alt, sent with Ctrl) types characters; it is not a shortcut.
+        altgr = 0xA5 in self._held
+        shortcut = ({"win"} & self._mods) or ("alt" in self._mods and not altgr) or ("ctrl" in self._mods and not altgr)
         char = None
-        if down and not ({"ctrl", "alt", "win"} & self._mods):
-            char = vk_to_char(vk, shift=shift)
+        meta = self._meta_state()
+        if altgr:
+            meta &= ~(META_CTRL | META_ALT)
+        if down and not shortcut:
+            char = layout_char(vk, shift=shift, altgr=altgr)
         self._flush_move()
         self._enqueue(device_id, {"type": "remote_input", "ev": "key", "code": code, "down": bool(down),
-                                  "meta": self._meta_state(), "char": char})
+                                  "meta": meta, "char": char})
 
     # --- sending -------------------------------------------------------
     def _queue_move(self, force=False):
@@ -689,7 +736,7 @@ class InputShare:
             pass
 
     def _send_loop(self):
-        while True:
+        while self.alive:
             try:
                 device_id, payload = self._queue.get(timeout=self.MOVE_INTERVAL)
             except queue.Empty:
@@ -700,7 +747,7 @@ class InputShare:
             self.registry.send(device_id, payload)
 
     def _watch_loop(self):
-        while True:
+        while self.alive:
             time.sleep(0.5)
             target = self.target
             if target is not None:
@@ -909,6 +956,13 @@ class Ecosystem:
             if not self.sync.http.start():
                 self.sync.http = None
         return self.hooks.start()
+
+    def shutdown(self):
+        """For good (the window replaces the server): end every background thread too."""
+        self.stop()
+        self.share.alive = False
+        self.streams.alive = False
+        self.library.alive = False
 
     def stop(self):
         self.share.release()

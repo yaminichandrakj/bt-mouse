@@ -256,6 +256,15 @@ fun MainScreen(
             }
         }
 
+        val setupDone by settings.setupDone.collectAsState()
+        if (!setupDone && overlay != Overlay.Connect) {
+            com.btmouse.app.ui.screens.SetupScreen(
+                coordinator, settings,
+                onOpenConnect = { overlay = Overlay.Connect },
+                onDone = { settings.setSetupDone(true) }
+            )
+        }
+
         watching?.let { stream ->
             Box(Modifier.fillMaxSize().background(Ink).statusBarsPadding().navigationBarsPadding()) {
                 StreamViewerScreen(stream) { watching = null }

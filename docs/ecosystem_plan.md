@@ -254,3 +254,25 @@ Still later:
 - Links between networks without the PC (internet relay).
 
 Checklist additions for v1.8.0: (29) Mirror & control phone from tab and tab from phone, with touch; (30) the PC's Mirror window; (31) two devices paired to the PC see each other in Your devices with nothing scanned, and stay linked with the PC off; (32) PIN pairing between two devices that were never paired to the PC.
+
+## Build status (v1.9.0)
+
+| Item | Status |
+|---|---|
+| Encryption | Built: `secure.py` / `SecureTransport.kt` (X25519 + PIN-MAC handshake, ChaCha20-Poly1305), on every PC link; family links sealed with a key from the challenge handshake. Interop checked against the JDK's crypto (same calls the app uses). |
+| H.264 mirroring | Built as opt-in beta between Android devices (`H264Encoder` / `H264Viewer`); JPEG stays the default and the PC path. |
+| Setup guide | Built (`SetupScreen.kt`). |
+| Layout-aware typing, in-place file sending, clean server restart | Built. |
+
+Still later:
+- Linking devices on different networks without the PC (internet relay).
+- The PC dialling out to phones.
+- H.264 in the PC Mirror window (needs a decoder such as PyAV).
+- Release signing: move the keystore and its passwords out of the repository into GitHub secrets (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`). The owner has to do this.
+
+v1.9.0 checklist additions:
+- (33) Capture Wi-Fi traffic or watch the PC's Activity log: after connecting, packets are `{"enc": ...}`.
+- (34) Restart the PC app while a phone is connected; it reconnects encrypted within seconds.
+- (35) Smooth mirroring on: phone → tablet plays smoothly; turning it off falls back to pictures.
+- (36) The setup guide appears on a fresh install and each step turns green.
+- (37) Type on a non-US layout (and with AltGr) from the laptop into the phone.

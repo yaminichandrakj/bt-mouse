@@ -298,7 +298,13 @@ class RemoteControlService : AccessibilityService() {
         }
         val keyboard = RemoteKeyboardService.instance
         if (keyboard != null && keyboard.isTypingTarget()) {
-            keyboard.sendKey(code, down, meta)
+            // Printable keys arrive with the character the sender's own layout makes; type that
+            // exactly (é, ß, @ on AltGr...). Everything else goes as a real key event.
+            if (char != null && char.isNotEmpty()) {
+                if (down) keyboard.commitText(char)
+            } else {
+                keyboard.sendKey(code, down, meta)
+            }
             return
         }
         if (!down) return

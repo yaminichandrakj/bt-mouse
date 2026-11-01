@@ -409,6 +409,7 @@ class ConnectionCoordinator(
         wifiClientManager.clientSessionId = clientSessionId
         wifiClientManager.nextSeqSupplier = { commandSequence.getAndIncrement() }
         bluetoothRfcommManager.clientSessionId = clientSessionId
+        bluetoothRfcommManager.pinSupplier = { settings.serverPin.value }
         bluetoothRfcommManager.nextSeqSupplier = { commandSequence.getAndIncrement() }
         remoteWanManager.clientSessionId = clientSessionId
         remoteWanManager.nextSeqSupplier = { commandSequence.getAndIncrement() }

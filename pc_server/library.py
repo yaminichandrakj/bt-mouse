@@ -35,6 +35,7 @@ class LibrarySync:
         self.sync = sync
         self.media_dirs_fn = media_dirs_fn
         self.auto_copy = True
+        self.alive = True
         self.remote_items = {}
         self._requested = {}
         self._lock = threading.Lock()
@@ -81,7 +82,7 @@ class LibrarySync:
 
     def _loop(self):
         time.sleep(15)
-        while True:
+        while self.alive:
             if self.auto_copy:
                 try:
                     self.request_all()
