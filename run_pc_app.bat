@@ -3,8 +3,16 @@ title Starting BT Mouse Companion...
 cd /d "%~dp0"
 
 :: 1. Launch standalone windowless .exe if present (opens directly to desktop & system tray with zero terminal)
+if exist "%~dp0pc_server\dist\Lanyard-Companion.exe" (
+    start "" "%~dp0pc_server\dist\Lanyard-Companion.exe"
+    exit /b 0
+)
 if exist "%~dp0pc_server\dist\BT-Mouse-Companion.exe" (
     start "" "%~dp0pc_server\dist\BT-Mouse-Companion.exe"
+    exit /b 0
+)
+if exist "%~dp0Lanyard-Companion.exe" (
+    start "" "%~dp0Lanyard-Companion.exe"
     exit /b 0
 )
 if exist "%~dp0BT-Mouse-Companion.exe" (

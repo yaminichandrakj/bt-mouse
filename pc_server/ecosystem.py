@@ -407,6 +407,7 @@ class InputShare:
     MOVE_INTERVAL = 0.008
     LINK_TIMEOUT = 4.0
     EDGE_PUSHES = 2
+    EDGE_DRIFT = 4
 
     def __init__(self, registry, layout, set_cursor=None, get_park=None, pc_name="Laptop"):
         self.registry = registry
@@ -548,15 +549,17 @@ class InputShare:
             dx = x - last[0] if last else 0
             dy = y - last[1] if last else 0
             probe = None
-            # A clipped push into the edge repeats the same point; sliding along the edge does not count.
-            still = dx == 0 and dy == 0
-            if x >= mon.right - 1 and (dx > 0 or still):
+            # A clipped push into the edge stays pinned on that axis, usually with a little
+            # drift along it; sliding along the edge on purpose moves further than that.
+            pinned_x = dx == 0 and abs(dy) <= self.EDGE_DRIFT
+            pinned_y = dy == 0 and abs(dx) <= self.EDGE_DRIFT
+            if x >= mon.right - 1 and (dx > 0 or pinned_x):
                 probe = (mon.right + 1, y)
-            elif x <= mon.x and (dx < 0 or still):
+            elif x <= mon.x and (dx < 0 or pinned_x):
                 probe = (mon.x - 2, y)
-            elif y >= mon.bottom - 1 and (dy > 0 or still):
+            elif y >= mon.bottom - 1 and (dy > 0 or pinned_y):
                 probe = (x, mon.bottom + 1)
-            elif y <= mon.y and (dy < 0 or still):
+            elif y <= mon.y and (dy < 0 or pinned_y):
                 probe = (x, mon.y - 2)
             if probe is None or self.layout.monitor_at(*probe) is not None:
                 self._edge_hits = 0

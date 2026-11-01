@@ -12,8 +12,8 @@ android {
         applicationId = "com.btmouse.app"
         minSdk = 28
         targetSdk = 34
-        versionCode = 34
-        versionName = "1.9.0"
+        versionCode = 35
+        versionName = "1.9.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -29,16 +29,12 @@ android {
             val kAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() }
             val kPassword = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() }
 
+            // The release key lives only in CI secrets (or a local copy outside git); never default its passwords.
             if (keystoreFile.exists() && ksPassword != null && kAlias != null && kPassword != null) {
                 storeFile = keystoreFile
                 storePassword = ksPassword
                 keyAlias = kAlias
                 keyPassword = kPassword
-            } else if (keystoreFile.exists()) {
-                storeFile = keystoreFile
-                storePassword = ksPassword ?: "btmouse123"
-                keyAlias = kAlias ?: "btmouse"
-                keyPassword = kPassword ?: "btmouse123"
             } else {
                 initWith(getByName("debug"))
             }

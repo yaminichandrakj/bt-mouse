@@ -874,7 +874,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.9.0")
+        self.assertEqual(app_gui.APP_VERSION, "1.9.1")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -1048,7 +1048,25 @@ class CompanionUpdateScriptTests(unittest.TestCase):
 
     def test_retries_while_the_exe_is_still_locked(self):
         script = self.build()
-        self.assertIn("Retry { Move-Item -LiteralPath $target -Destination $backup -Force } 'Moving the old version aside' 60", script)
+        self.assertIn("Retry { Move-Item -LiteralPath $current -Destination $backup -Force } 'Moving the old version aside' 60", script)
+
+    def test_installs_under_the_new_name_and_restores_the_old_one(self):
+        script = update_script.build_update_script(
+            wait_pids=(1,), target=r"C:\d\Lanyard-Companion.exe", current=r"C:\d\BT-Mouse-Companion.exe",
+            staged=r"C:\t\new.exe", replacement=r"C:\d\.new.exe", backup=r"C:\d\.backup.exe",
+            ready_marker=r"C:\t\ready.txt", error_log=r"C:\t\err.log", step_log=r"C:\t\steps.log",
+            expected_version="1.9.1",
+        )
+        self.assertIn(r"$current = 'C:\d\BT-Mouse-Companion.exe'", script)
+        self.assertIn("Move-Item -LiteralPath $replacement -Destination $target -Force", script)
+        self.assertIn("Move-Item -LiteralPath $backup -Destination $current", script)
+
+    def test_update_script_is_not_launched_detached(self):
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        launch = gui[gui.index("No DETACHED_PROCESS"):gui.index("_show_update_installing(tag_name))")]
+        self.assertNotIn('"DETACHED_PROCESS", 0)', launch)
+        self.assertIn("CREATE_NO_WINDOW", launch)
+        self.assertIn("CREATE_NO_WINDOW", launch)
 
     def test_keeps_a_slow_starting_new_version_instead_of_rolling_back(self):
         script = self.build()
@@ -1114,7 +1132,7 @@ class CompanionLayoutTests(unittest.TestCase):
 
     def test_bundled_inter_fonts_ship_with_the_companion(self):
         here = Path(__file__).parent
-        spec = (here / "BT-Mouse-Companion.spec").read_text(encoding="utf-8")
+        spec = (here / "Lanyard-Companion.spec").read_text(encoding="utf-8")
         for name in ("inter_regular.ttf", "inter_medium.ttf", "inter_semibold.ttf"):
             self.assertTrue((here / "fonts" / name).is_file(), name)
             self.assertIn(f"fonts/{name}", spec)

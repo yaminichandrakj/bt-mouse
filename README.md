@@ -102,7 +102,7 @@ You have **3 convenient ways** to build the `.apk`:
    git init
    git add .
    git commit -m "Initial commit of BT Mouse app"
-   git remote add origin https://github.com/<your-username>/bt-mouse.git
+   git remote add origin https://github.com/<your-username>/lanyard.git
    git push -u origin main
    ```
 2. In your GitHub repository, click the **Actions** tab.

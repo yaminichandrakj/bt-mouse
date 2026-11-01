@@ -78,7 +78,6 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
@@ -161,6 +160,9 @@ import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+
+/** A quick app on screen: saved on the PC ([onPc]) or kept on this phone only. */
+private data class QuickTile(val name: String, val cmd: String, val iconBase64: String, val brandKey: String, val onPc: Boolean)
 
 @Composable
 fun QuickAppsSection(
@@ -273,7 +275,7 @@ fun QuickAppsSection(
                             modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(filteredApps) { app ->
+                            items(filteredApps, key = { it.path.lowercase() }) { app ->
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
@@ -317,24 +319,11 @@ fun QuickAppsSection(
                                             ) {
                                                 IconLabel(
                                                     if (app.isQuick) Icons.Filled.Check else Icons.Filled.Add,
-                                                    "PC",
+                                                    if (app.isQuick) "Added" else "Add",
                                                     color = if (app.isQuick) AccentEmerald else AccentCyan,
                                                     fontSize = 12.sp,
                                                     iconSize = 12.dp
                                                 )
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    val exists = customApps.any { it.cmd == app.path }
-                                                    if (!exists) {
-                                                        val updated = customApps + CustomAppEntry(app.name, app.path)
-                                                        settings.setCustomAppsJson(Gson().toJson(updated))
-                                                    }
-                                                    showBrowseDialog = false
-                                                },
-                                                modifier = Modifier.size(32.dp)
-                                            ) {
-                                                Icon(Icons.Default.PushPin, contentDescription = "Pin", tint = AccentEmerald, modifier = Modifier.size(16.dp))
                                             }
                                             IconButton(
                                                 onClick = {
@@ -510,11 +499,21 @@ fun QuickAppsSection(
             }
         }
 
-        // Custom Pinned Apps Section
-        if (customApps.isNotEmpty()) {
-            IconLabel(Icons.Filled.PushPin, "Pinned quick apps", color = AccentEmerald, fontWeight = FontWeight.Medium, fontSize = 13.sp, iconSize = 16.dp)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                customApps.chunked(2).forEach { rowApps ->
+        // One list: apps saved on the PC (shown on every phone) and this phone's own shortcuts.
+        val tiles = quickApps.map { QuickTile(it.name, it.path, it.iconBase64, it.brandKey, onPc = true) } +
+            customApps.filter { ca -> quickApps.none { it.path.equals(ca.cmd, ignoreCase = true) } }
+                .map { QuickTile(it.name, it.cmd, it.iconBase64, it.brandKey, onPc = false) }
+        Text("Your quick apps", color = TextSecondary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+        if (connectionMessage.startsWith("Loading installed PC apps")) {
+            Text(connectionMessage, color = TextMuted, fontSize = 13.sp)
+        } else if (connectionMessage.startsWith("Saved ") || connectionMessage.startsWith("Could not update PC Quick Apps")) {
+            Text(connectionMessage, color = if (connectionMessage.startsWith("Saved ")) AccentEmerald else AccentRose, fontSize = 13.sp)
+        }
+        if (tiles.isEmpty()) {
+            Text("Add apps with Browse PC apps or Custom app.", color = TextMuted, fontSize = 13.sp)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                tiles.chunked(2).forEach { rowApps ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -526,45 +525,45 @@ fun QuickAppsSection(
                                     .clickable { coordinator.launchApp(app.cmd) },
                                 colors = CardDefaults.cardColors(containerColor = DarkSurface),
                                 shape = RoundedCornerShape(12.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, AccentEmerald.copy(alpha = 0.5f))
+                                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                        val customIconB64 = app.iconBase64.ifBlank {
-                                            appIcons[app.cmd]
-                                                ?: appIcons[app.cmd.lowercase()]
-                                                ?: appIcons[app.name.lowercase()]
-                                                ?: installedApps.firstOrNull {
-                                                    it.path.equals(app.cmd, ignoreCase = true) ||
-                                                        it.name.equals(app.name, ignoreCase = true)
-                                                }?.iconBase64.orEmpty()
-                                        }
-                                        AppOrPlatformIconBadge(
-                                            name = app.name,
-                                            pathOrCmd = app.cmd,
-                                            iconBase64 = customIconB64,
-                                            brandKey = app.brandKey,
-                                            size = 36.dp,
-                                            cornerRadius = 10.dp
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(app.name, color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 12.sp, maxLines = 1)
-                                            Text(app.cmd, color = TextSecondary, fontSize = 9.sp, maxLines = 1)
-                                        }
+                                    val iconB64 = app.iconBase64.ifBlank {
+                                        appIcons[app.cmd]
+                                            ?: appIcons[app.cmd.lowercase()]
+                                            ?: appIcons[app.name.lowercase()]
+                                            ?: installedApps.firstOrNull {
+                                                it.path.equals(app.cmd, ignoreCase = true) ||
+                                                    it.name.equals(app.name, ignoreCase = true)
+                                            }?.iconBase64.orEmpty()
+                                    }
+                                    AppOrPlatformIconBadge(
+                                        name = app.name,
+                                        pathOrCmd = app.cmd,
+                                        iconBase64 = iconB64,
+                                        brandKey = app.brandKey,
+                                        size = 36.dp,
+                                        cornerRadius = 10.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(app.name, color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                        Text(if (app.onPc) "Open on PC" else "This phone", color = TextSecondary, fontSize = 12.sp, maxLines = 1)
                                     }
                                     IconButton(
                                         onClick = {
-                                            val updated = customApps.filterNot { it.cmd == app.cmd }
-                                            settings.setCustomAppsJson(Gson().toJson(updated))
+                                            if (app.onPc) {
+                                                coordinator.updateQuickApps(quickApps.map { it.path }.filterNot { it == app.cmd })
+                                            } else {
+                                                settings.setCustomAppsJson(Gson().toJson(customApps.filterNot { it.cmd == app.cmd }))
+                                            }
                                         },
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Default.Close, contentDescription = "Unpin", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                        Icon(Icons.Default.Close, contentDescription = "Remove ${app.name}", tint = TextMuted, modifier = Modifier.size(16.dp))
                                     }
                                 }
                             }
@@ -575,62 +574,6 @@ fun QuickAppsSection(
                     }
                 }
             }
-        }
-
-        Text("Quick apps on your PC", color = TextSecondary, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-        if (connectionMessage.startsWith("Loading installed PC apps")) {
-            Text(connectionMessage, color = TextMuted, fontSize = 13.sp)
-        } else if (connectionMessage.startsWith("Saved ") || connectionMessage.startsWith("Could not update PC Quick Apps")) {
-            Text(connectionMessage, color = if (connectionMessage.startsWith("Saved ")) AccentEmerald else AccentRose, fontSize = 13.sp)
-        }
-        if (quickApps.isEmpty()) {
-            Text("Add apps here or in Lanyard for PC. Only apps installed on that PC are shown.",
-                color = TextMuted, fontSize = 13.sp)
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                quickApps.chunked(2).forEach { rowApps ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    rowApps.forEach { app ->
-                        Card(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { coordinator.launchApp(app.path) },
-                            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                            shape = RoundedCornerShape(12.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val quickIconB64 = app.iconBase64.ifBlank {
-                                    appIcons[app.path] ?: appIcons[app.name.lowercase()].orEmpty()
-                                }
-                                AppOrPlatformIconBadge(
-                                    name = app.name,
-                                    pathOrCmd = app.path,
-                                    iconBase64 = quickIconB64,
-                                    brandKey = app.brandKey,
-                                    size = 38.dp,
-                                    cornerRadius = 10.dp
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(app.name, color = TextPrimary, fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
-                                    Text("Open on PC", color = TextSecondary, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-                    if (rowApps.size == 1) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-        }
         }
     }
 }

@@ -49,7 +49,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='BT-Mouse-Companion',
+    name='Lanyard-Companion',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

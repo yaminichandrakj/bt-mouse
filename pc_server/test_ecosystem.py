@@ -81,6 +81,13 @@ class InputShareTests(unittest.TestCase):
         self.assertLess(self.share.rx, 5)
         self.assertAlmostEqual(self.share.ry, 2400 * 260 / 600, delta=5)
 
+    def test_pushing_edge_with_drift_enters_phone(self):
+        self.share.on_mouse_move(1910, 500)
+        self.share.on_mouse_move(1919, 501)
+        self.share.on_mouse_move(1919, 503)
+        self.share.on_mouse_move(1919, 504)
+        self.assertEqual(self.share.target, "phone1")
+
     def test_sliding_along_edge_does_not_cross(self):
         self.share.on_mouse_move(1919, 400)
         self.share.on_mouse_move(1919, 420)

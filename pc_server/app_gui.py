@@ -104,8 +104,11 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.9.0"
-GITHUB_REPOSITORY = "yaminichandrakj/bt-mouse"
+APP_VERSION = "1.9.1"
+GITHUB_REPOSITORY = "yaminichandrakj/lanyard"
+COMPANION_EXE_NAME = "Lanyard-Companion.exe"
+# Releases up to v1.9.0 shipped the companion under its old name.
+LEGACY_COMPANION_EXE_NAMES = ("BT-Mouse-Companion.exe",)
 MAX_COMPANION_UPDATE_BYTES = 180 * 1024 * 1024
 COMPANION_UPDATE_ERROR_LOG = Path(tempfile.gettempdir()) / "btmouse-update-error.log"
 COMPANION_UPDATE_STEP_LOG = Path(tempfile.gettempdir()) / "btmouse-update.log"
@@ -2796,7 +2799,7 @@ class CompanionApp(QMainWindow):
             api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
             request = urllib.request.Request(
                 api_url,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "BT-Mouse-Companion-Updater"},
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "Lanyard-Companion-Updater"},
             )
             with urllib.request.urlopen(request, timeout=20) as response:
                 release = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
@@ -2814,7 +2817,8 @@ class CompanionApp(QMainWindow):
                 )
                 return
 
-            asset = next((item for item in release.get("assets", []) if item.get("name") == "BT-Mouse-Companion.exe"), None)
+            assets = {item.get("name"): item for item in release.get("assets", [])}
+            asset = next((assets[n] for n in (COMPANION_EXE_NAME,) + LEGACY_COMPANION_EXE_NAMES if n in assets), None)
             if not asset or not asset.get("browser_download_url"):
                 raise ValueError("The latest release does not include the Windows companion executable.")
 
@@ -2892,13 +2896,13 @@ class CompanionApp(QMainWindow):
                 raise ValueError("The update URL is not a trusted GitHub release link.")
             request = urllib.request.Request(
                 download_url,
-                headers={"User-Agent": "BT-Mouse-Companion-Updater", "Accept": "application/octet-stream"},
+                headers={"User-Agent": "Lanyard-Companion-Updater", "Accept": "application/octet-stream"},
             )
             total = int(asset["size"])
             downloaded = 0
             last_percent = -1
             temp_dir = Path(tempfile.gettempdir())
-            staged_path = temp_dir / f"BT-Mouse-Companion-{tag_name}.exe"
+            staged_path = temp_dir / f"Lanyard-Companion-{tag_name}.exe"
             with urllib.request.urlopen(request, timeout=60) as response, staged_path.open("wb") as output:
                 while True:
                     if self._update_cancel.is_set():
@@ -2922,13 +2926,18 @@ class CompanionApp(QMainWindow):
                     raise ValueError("The downloaded file is not a valid Windows executable.")
 
             executable = Path(sys.executable).resolve()
+            # An EXE still named BT-Mouse-Companion.exe is replaced by Lanyard-Companion.exe beside it.
+            installed = executable
+            if executable.name.lower() in (n.lower() for n in LEGACY_COMPANION_EXE_NAMES):
+                installed = executable.with_name(COMPANION_EXE_NAME)
             script_path = temp_dir / f"btmouse-update-{os.getpid()}.ps1"
             script = build_update_script(
                 wait_pids=companion_update_wait_pids(),
-                target=executable,
+                target=installed,
+                current=executable,
                 staged=staged_path,
-                replacement=executable.parent / f".BT-Mouse-Companion-{os.getpid()}.new.exe",
-                backup=executable.parent / f".BT-Mouse-Companion-{os.getpid()}.backup.exe",
+                replacement=executable.parent / f".Lanyard-Companion-{os.getpid()}.new.exe",
+                backup=executable.parent / f".Lanyard-Companion-{os.getpid()}.backup.exe",
                 ready_marker=temp_dir / f"btmouse-update-ready-{os.getpid()}.txt",
                 error_log=COMPANION_UPDATE_ERROR_LOG,
                 step_log=COMPANION_UPDATE_STEP_LOG,
@@ -2936,11 +2945,16 @@ class CompanionApp(QMainWindow):
             )
             # BOM so Windows PowerShell 5.1 reads non-ASCII paths (e.g. user names) correctly.
             script_path.write_text(script, encoding="utf-8-sig")
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-            subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
-                creationflags=flags,
-            )
+            # No DETACHED_PROCESS: PowerShell exits at once without a console and never runs the script.
+            command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                       "-WindowStyle", "Hidden", "-File", str(script_path)]
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+            try:
+                # Leave any job object the companion runs in, so closing it does not end the swap.
+                subprocess.Popen(command, creationflags=flags | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000), **quiet)
+            except OSError:
+                subprocess.Popen(command, creationflags=flags, **quiet)
             self._run_on_ui(lambda: self._show_update_installing(tag_name))
         except _UpdateCancelled:
             if staged_path:

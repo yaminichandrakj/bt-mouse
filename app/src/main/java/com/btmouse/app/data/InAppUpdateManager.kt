@@ -45,7 +45,7 @@ class InAppUpdateManager(private val context: Context) {
     private val tag = "InAppUpdateManager"
     private var awaitingInstallPermission = false
     private val repoOwner = "yaminichandrakj"
-    private val repoName = "bt-mouse"
+    private val repoName = "lanyard"
     val currentVersion: String
         get() = try {
             val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -82,7 +82,7 @@ class InAppUpdateManager(private val context: Context) {
                 connectTimeout = 8000
                 readTimeout = 8000
                 setRequestProperty("Accept", "application/vnd.github.v3+json")
-                setRequestProperty("User-Agent", "BT-Mouse-Android-App")
+                setRequestProperty("User-Agent", "Lanyard-Android-App")
             }
 
             if (connection.responseCode != 200) {
@@ -150,8 +150,8 @@ class InAppUpdateManager(private val context: Context) {
     suspend fun downloadAndInstall(release: ReleaseInfo) = withContext(Dispatchers.IO) {
         try {
             val updatesDir = File(context.cacheDir, "updates").apply { mkdirs() }
-            val apkFile = File(updatesDir, "BT-Mouse-${release.tagName}.apk")
-            val partialFile = File(updatesDir, "BT-Mouse-${release.tagName}.apk.part")
+            val apkFile = File(updatesDir, "Lanyard-${release.tagName}.apk")
+            val partialFile = File(updatesDir, "Lanyard-${release.tagName}.apk.part")
 
             val url = URL(release.downloadUrl)
             val connection = (url.openConnection() as HttpURLConnection).apply {
