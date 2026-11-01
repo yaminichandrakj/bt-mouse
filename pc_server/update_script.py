@@ -16,12 +16,14 @@ def _ps_quote(value) -> str:
 
 
 def build_update_script(wait_pids, target, staged, replacement, backup,
-                        ready_marker, error_log, step_log, expected_version) -> str:
+                        ready_marker, error_log, step_log, expected_version, current=None) -> str:
+    """``current`` is the running EXE when the update installs under a new name (``target``)."""
     pids = ", ".join(str(int(p)) for p in wait_pids) or "0"
     return (
         "$ErrorActionPreference = 'Stop'\n"
         f"$pidsToWait = @({pids})\n"
         f"$target = {_ps_quote(target)}\n"
+        f"$current = {_ps_quote(current or target)}\n"
         f"$staged = {_ps_quote(staged)}\n"
         f"$replacement = {_ps_quote(replacement)}\n"
         f"$backup = {_ps_quote(backup)}\n"
@@ -52,7 +54,7 @@ def build_update_script(wait_pids, target, staged, replacement, backup,
         "  }\n"
         "  Log 'Companion closed'\n"
         "  Retry { Copy-Item -LiteralPath $staged -Destination $replacement -Force } 'Copying the update' 30\n"
-        "  Retry { Move-Item -LiteralPath $target -Destination $backup -Force } 'Moving the old version aside' 60\n"
+        "  Retry { Move-Item -LiteralPath $current -Destination $backup -Force } 'Moving the old version aside' 60\n"
         "  Log 'Old version moved aside'\n"
         "  Retry { Move-Item -LiteralPath $replacement -Destination $target -Force } 'Installing the new version' 30\n"
         "  Log 'New version installed; starting it'\n"
@@ -85,13 +87,14 @@ def build_update_script(wait_pids, target, staged, replacement, backup,
         "    try {\n"
         "      Retry {\n"
         "        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force }\n"
-        "        Move-Item -LiteralPath $backup -Destination $target\n"
+        "        Move-Item -LiteralPath $backup -Destination $current\n"
         "      } 'Restoring the previous version' 30\n"
         "      Log 'Previous version restored'\n"
         "    } catch { Log ('Restore failed: ' + $_.Exception.Message) }\n"
         "  }\n"
         "  Remove-Item -LiteralPath $replacement -Force -ErrorAction SilentlyContinue\n"
         "  $failure | Out-File -LiteralPath $log -Encoding utf8\n"
-        "  Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -ErrorAction SilentlyContinue\n"
+        "  $restart = if (Test-Path -LiteralPath $current) { $current } else { $target }\n"
+        "  Start-Process -FilePath $restart -WorkingDirectory (Split-Path -Parent $restart) -ErrorAction SilentlyContinue\n"
         "}\n"
     )
