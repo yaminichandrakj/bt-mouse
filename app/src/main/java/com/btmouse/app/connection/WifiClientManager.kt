@@ -70,6 +70,7 @@ class WifiClientManager(
     override val runningProcesses: StateFlow<List<ProcessInfo>> = _runningProcesses.asStateFlow()
 
     private val _installedApps = MutableStateFlow<List<AppInfo>>(emptyList())
+    private val appListAssembler = AppListAssembler()
     override val installedApps: StateFlow<List<AppInfo>> = _installedApps.asStateFlow()
 
     private val _appIcons = MutableStateFlow<Map<String, String>>(emptyMap())
@@ -333,8 +334,9 @@ class WifiClientManager(
                     _appIcons.value = iconMap
                     // Long app lists arrive in parts; part 0 starts a fresh list.
                     val part = json.get("part")?.asInt ?: 0
-                    _installedApps.value = if (part > 0) (_installedApps.value + list).distinctBy { it.path.lowercase() } else list
+                    val parts = json.get("parts")?.asInt ?: 1
                     val loading = json.get("loading")?.asBoolean ?: false
+                    appListAssembler.add(part, parts, list, _installedApps.value, loading)?.let { _installedApps.value = it }
                     val message = json.get("message")?.asString.orEmpty()
                     _statusMessage.value = when {
                         loading -> "Loading installed PC apps…"

@@ -40,6 +40,28 @@ data class AppInfo(
     val brandKey: String = ""
 )
 
+/**
+ * Puts an app list sent in parts back together. A list already on screen is swapped
+ * only once every part is in, so it never empties and refills while someone scrolls it.
+ */
+class AppListAssembler {
+    private val pending = mutableListOf<AppInfo>()
+
+    /**
+     * The list to show now, or null to keep showing [current]. A [loading] list is the PC's
+     * stand-in (often just the quick apps) while it rescans; it only fills an empty screen.
+     */
+    fun add(part: Int, parts: Int, chunk: List<AppInfo>, current: List<AppInfo>, loading: Boolean = false): List<AppInfo>? {
+        if (loading && current.isNotEmpty()) return null
+        if (part <= 0) pending.clear()
+        pending += chunk
+        val complete = part >= parts - 1
+        if (!complete && current.isNotEmpty()) return null
+        val merged = pending.distinctBy { it.path.lowercase() }
+        return if (merged == current) null else merged
+    }
+}
+
 data class CustomAppEntry(
     val name: String = "",
     val cmd: String = "",
