@@ -2412,6 +2412,9 @@ class CompanionApp(QMainWindow):
                 self.server.auth_token = new_token
                 if hasattr(self.server, "ws_server") and self.server.ws_server:
                     self.server.ws_server.auth_token = new_token
+                # Encrypted sessions were agreed under the old PIN: every device has to redo it.
+                if getattr(self.server, "secure_sessions", None):
+                    self.server.secure_sessions.clear()
             self.generate_qr()
             self.generate_wan_qr()
             QMessageBox.information(self, "PIN Updated", "The new 6-digit pairing PIN is now active.")
