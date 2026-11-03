@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import video
 from ecosystem import Rect
 
 MONITOR_FILL = QColor("#1F1F21")
@@ -229,6 +231,7 @@ class StreamWindow(QWidget):
     """Watch a phone or tablet stream. On a screen stream, click, drag and scroll to use the device."""
 
     frame_ready = Signal(bytes, int, int)
+    picture_ready = Signal(bytes, int, int, int, int)
 
     def __init__(self, ecosystem, stream):
         super().__init__(None, Qt.WindowType.Window)
@@ -271,17 +274,99 @@ class StreamWindow(QWidget):
         self._img_size = (0, 0)
         self._dev_size = (0, 0)
         self.frame_ready.connect(self._show_frame)
+        self.picture_ready.connect(self._show_picture)
         self._key = f"window-{id(self)}"
         ecosystem.streams.watch_local(stream["id"], self._key, self._on_payload)
+        self._start_video()
         if self.can_control:
             self.eco.registry.send(self.owner, {"type": "control_state", "active": True,
                                                 "controller": self.eco.share.pc_name})
+
+    # --- smooth video (H.264, decoded with PyAV) ---------------------------
+    VIDEO_GIVE_UP = 30.0   # no video by then (an older phone app): stay on JPEG pictures
+
+    def _start_video(self):
+        """Ask the phone for real video. JPEG pictures keep coming until the first video
+        picture shows, and come back if the video stops."""
+        self._video = None
+        self._assembler = None
+        self._video_lock = threading.Lock()
+        self._last_video = 0.0
+        self._video_on = False
+        if self.stream["kind"] != "screen" or not video.available():
+            return
+        try:
+            self._video = video.H264Decoder(self.picture_ready.emit, on_error=self._video_failed,
+                                            on_need_key=self._ask_key)
+        except Exception:
+            return
+        self._assembler = video.H264Assembler(self._video.feed, self._ask_key)
+        self._video_started = time.monotonic()
+        self.eco.streams.request_h264(self.stream["id"], True)
+        self._video_timer = QTimer(self)
+        self._video_timer.timeout.connect(self._video_tick)
+        self._video_timer.start(4000)
+
+    def _ask_key(self):
+        self.eco.streams.request_keyframe(self.stream["id"])
+
+    def _video_tick(self):
+        if self._video is None:
+            return
+        now = time.monotonic()
+        self.eco.streams.request_h264(self.stream["id"], True)  # the phone forgets quiet watchers
+        if self._video_on and now - self._last_video > 3.0:
+            # Video stalled: take pictures again until it comes back.
+            self._video_on = False
+            self.eco.streams.set_local_jpeg(self.stream["id"], self._key, True)
+        elif not self._video_on and self._last_video == 0.0 and now - self._video_started > self.VIDEO_GIVE_UP:
+            self._stop_video()
+
+    def _video_failed(self, _exc):
+        QTimer.singleShot(0, self._stop_video)
+
+    def _stop_video(self):
+        if self._video is None:
+            return
+        self._video.close()
+        self._video = None
+        self._assembler = None
+        self._video_on = False
+        self.eco.streams.request_h264(self.stream["id"], False)
+        self.eco.streams.set_local_jpeg(self.stream["id"], self._key, True)
+        timer = getattr(self, "_video_timer", None)
+        if timer:
+            timer.stop()
+
+    def _show_picture(self, rgb, w, h, dev_w, dev_h):
+        from PySide6.QtGui import QImage, QPixmap
+        image = QImage(rgb, w, h, 3 * w, QImage.Format.Format_RGB888)
+        pix = QPixmap.fromImage(image.copy())
+        if pix.isNull():
+            return
+        self._last_video = time.monotonic()
+        if not self._video_on:
+            self._video_on = True
+            self.eco.streams.set_local_jpeg(self.stream["id"], self._key, False)
+        self._pixmap = pix
+        self._img_size = (w, h)
+        dev = self.eco.registry.get(self.owner) or {}
+        self._dev_size = (dev_w or dev.get("screen_w") or w, dev_h or dev.get("screen_h") or h)
+        self._render()
 
     def _on_payload(self, payload):
         import base64
         if payload.get("type") == "stream_audio":
             self._play_audio(payload.get("pcm"))
             return
+        if payload.get("type") == "stream_h264":
+            assembler = self._assembler
+            if assembler is not None:
+                with self._video_lock:
+                    assembler.accept(payload)
+            return
+        if self._video_on and time.monotonic() - self._last_video < 1.5:
+            return  # video is playing; the occasional leftover JPEG would only flicker
         try:
             data = base64.b64decode(payload.get("frame") or "")
         except Exception:
@@ -397,6 +482,7 @@ class StreamWindow(QWidget):
             self._send({"ev": "wheel", "dy": event.angleDelta().y() / 120.0, "dx": event.angleDelta().x() / 120.0}, pt)
 
     def closeEvent(self, event):
+        self._stop_video()
         self.eco.streams.unwatch_local(self.stream["id"], self._key)
         self._closed = True
         out = getattr(self, "_audio_out", None)
@@ -526,6 +612,8 @@ def build_devices_page(app):
     live_row.addWidget(btn_watch)
     btn_mirror = QPushButton("Mirror a phone or tablet…")
     live_row.addWidget(btn_mirror)
+    btn_lock = QPushButton("Lock a phone or tablet…")
+    live_row.addWidget(btn_lock)
     live_note = QLabel("Start Share screen or Camera on a phone or tablet (Devices › Live). "
                        "Phone screens can be used with this mouse right in the window.")
     live_note.setWordWrap(True)
@@ -658,6 +746,28 @@ def build_devices_page(app):
         win.show()
 
     btn_mirror.clicked.connect(mirror)
+
+    def lock_device():
+        devices = [d for d in eco().registry.online_devices() if d.get("caps", {}).get("lock")]
+        if not devices:
+            app.log("No connected phone or tablet can be locked. Turn on Lanyard control "
+                    "(Accessibility) on it, on Android 9 or later.")
+            return
+        dlg = QDialog(app)
+        dlg.setWindowTitle("Lock a device")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Lock which device? It goes to its lock screen right away."))
+        for dev in devices:
+            b = QPushButton(dev.get("name", "Device"))
+            b.clicked.connect(lambda _c=False, d=dev: (dlg.accept(), send_lock(d)))
+            lay.addWidget(b)
+        dlg.exec()
+
+    def send_lock(dev):
+        eco().registry.send(dev["device_id"], {"type": "lock_device", "from_name": eco().share.pc_name})
+        app.log(f"Locked {dev.get('name', 'the device')}.")
+
+    btn_lock.clicked.connect(lock_device)
     app.list_streams.itemDoubleClicked.connect(lambda _i: watch())
     return page
 

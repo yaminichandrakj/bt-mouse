@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenInNew
@@ -76,6 +78,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.connection.RecordingEntry
+import com.btmouse.app.ecosystem.Ecosystem
+import com.btmouse.app.ecosystem.Gallery
+import com.btmouse.app.ecosystem.PeerLibrary
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.ChipIcon
 import com.btmouse.app.ui.components.IconLabel
@@ -407,6 +412,8 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             }
         }
 
+        PeerLibrarySection(selectedCategory, coordinator.settings)
+
         if (status.isNotBlank()) Text(status, color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Medium)
 
         if (filteredRecordings.isEmpty()) {
@@ -450,6 +457,134 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                         } catch (_: Exception) {}
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Recordings on the user's other phones and tablets, played straight from them: no PC
+ * needed. Fetched once into this phone's own folders, then opened in the player.
+ */
+@Composable
+private fun PeerLibrarySection(category: String, settings: SettingsRepository) {
+    val context = LocalContext.current
+    val shareGallery by settings.shareGallery.collectAsState()
+    val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { it }) {
+            settings.setShareGallery(true)
+            Ecosystem.sendHello()
+        }
+    }
+    val devices by Ecosystem.devices.collectAsState()
+    val all by PeerLibrary.items.collectAsState()
+    val loading by PeerLibrary.loading.collectAsState()
+    val ready by PeerLibrary.ready.collectAsState()
+    val saved by PeerLibrary.saved.collectAsState()
+    val transfers by Ecosystem.files.transfers.collectAsState()
+    val phones = devices.filter { !it.isPc }
+    var expanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(phones.map { it.id }) {
+        if (phones.isNotEmpty()) PeerLibrary.refresh(context)
+    }
+    LaunchedEffect(ready) {
+        val (uri, mime) = ready ?: return@LaunchedEffect
+        PeerLibrary.consumed()
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        }
+    }
+    if (phones.isEmpty()) return
+
+    val items = if (category == "all") all else all.filter { it.category == category }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(24.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconLabel(Icons.Filled.PhoneAndroid, "On your other devices", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium, iconSize = 18.dp)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "Refresh", color = AccentCyan, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { PeerLibrary.refresh(context) }.padding(6.dp)
+                )
+            }
+            // Save all is for recordings; a whole photo gallery is copied one by one, on purpose.
+            val unsaved = items.count { it.name !in saved && !it.gallery }
+            if (unsaved > 0) {
+                Text(
+                    "Save all $unsaved recordings to this phone", color = AccentCyan, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                        .clickable { PeerLibrary.saveAll(context, category.takeIf { it != "all" }) }.padding(6.dp)
+                )
+            }
+            loading?.let { Text("Getting $it…", color = AccentCyan, fontSize = 13.sp) }
+            if (items.isEmpty()) {
+                Text("Nothing here yet. Recordings made on ${phones.joinToString { it.name }} show up here.", color = TextMuted, fontSize = 13.sp)
+            }
+            val shown = if (expanded) items else items.take(5)
+            shown.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        when (item.type) { "audio" -> Icons.Filled.Mic; "snapshot" -> Icons.Filled.PhotoCamera; "photo" -> Icons.Filled.Image; else -> Icons.Filled.Videocam },
+                        contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val size = if (item.size < 1024 * 1024) "${item.size / 1024} KB" else "%.1f MB".format(item.size / (1024.0 * 1024.0))
+                        val progress = transfers.lastOrNull { !it.outgoing && it.name == item.name && it.state == "receiving" }
+                        val where = when {
+                            progress != null -> "Saving… ${(progress.progress * 100).toInt()}%"
+                            item.name in saved -> "Saved on this phone"
+                            else -> item.deviceName
+                        }
+                        Text("$where  ·  $size", color = TextMuted, fontSize = 12.sp)
+                    }
+                    if (item.name !in saved) {
+                        androidx.compose.material3.IconButton(onClick = { PeerLibrary.save(context, item) }) {
+                            Icon(Icons.Filled.Download, contentDescription = "Save ${item.name} to this phone", tint = AccentCyan)
+                        }
+                    }
+                    Button(
+                        onClick = { PeerLibrary.play(context, item) },
+                        enabled = loading == null,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
+                    ) {
+                        IconLabel(Icons.Filled.PlayArrow, if (item.category == "snapshot") "Open" else "Play", fontWeight = FontWeight.Medium, iconSize = 16.dp)
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Share this phone's photos and videos", color = TextPrimary, fontSize = 13.sp)
+                    Text("Your other phones and tablets can browse and save them at full quality.", color = TextMuted, fontSize = 12.sp)
+                }
+                androidx.compose.material3.Switch(
+                    checked = shareGallery && Gallery.hasPermission(context),
+                    onCheckedChange = { on ->
+                        if (!on) {
+                            settings.setShareGallery(false)
+                        } else if (Gallery.hasPermission(context)) {
+                            settings.setShareGallery(true)
+                        } else {
+                            galleryPermission.launch(Gallery.permissions())
+                        }
+                    }
+                )
+            }
+            if (items.size > 5) {
+                Text(
+                    if (expanded) "Show fewer" else "Show all ${items.size}", color = AccentCyan, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { expanded = !expanded }.padding(6.dp)
+                )
             }
         }
     }

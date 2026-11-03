@@ -115,7 +115,8 @@ fun SetupScreen(
             detail = "Settings › Accessibility › Lanyard control › On. Needed for the laptop's mouse and for Mirror & control.",
             action = "Open settings"
         ) { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-        Step(
+        // Android 13+ types every key through Lanyard control, so the keyboard is only needed before that.
+        if (Build.VERSION.SDK_INT < 33) Step(
             done = keyboardOk,
             title = "Turn on the Lanyard keyboard",
             detail = "Lets the laptop type anything here. Switch to it when you type from the laptop.",

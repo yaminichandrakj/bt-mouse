@@ -78,7 +78,8 @@
 ### 🖥️ 7. Companion Controls
 * Search and launch discovered Start Menu apps, inspect running processes and PC stats, and use supported media, power, camera, and microphone controls.
 * Camera snapshots are size-limited over Wi-Fi. Live camera streaming is available over RFCOMM/WebSocket, not UDP Wi-Fi.
-* Workstation unlock automation is unavailable.
+* **Lock and unlock the PC**: Lock from the phone, then tap **Unlock** to sign back in with your fingerprint. Turn it on once in Lanyard for PC › Settings › Unlock with your phone (one administrator prompt). It unlocks a locked PC, not one that has just restarted.
+* **Lock the phone from the PC**: Devices › Lock a phone or tablet (needs Lanyard control turned on in Accessibility).
 
 ---
 
@@ -229,4 +230,4 @@ BT Mouse/
 * **Remote connections**: Internet access requires a `wss://` endpoint. The companion's built-in WebSocket listener is unencrypted and intended for local use behind a properly configured TLS proxy for remote access.
 * **Bluetooth HID**: Direct HID uses the operating system's Bluetooth pairing and link security.
 * **Privacy**: Local HID and companion modes do not require a cloud service. Remote WAN mode sends control traffic over the Internet to the endpoint you configure.
-* **Unlock**: The app does not store or inject workstation passwords and cannot automate secure-desktop unlock.
+* **Unlock**: Your Windows password is kept only on the phone, sealed by an Android Keystore key that needs your fingerprint or screen lock for every use. It is sent only when you tap Unlock, only over paired Bluetooth or an encrypted session, and over the internet only if you allow it on the PC. The PC hands it straight to Lanyard's lock-screen sign-in option (a Windows credential provider), which checks that the request comes from your own Windows account; Windows then checks the password. After three wrong passwords the PC pauses unlock for a minute. See `docs/laptop_unlock_feasibility.md`.

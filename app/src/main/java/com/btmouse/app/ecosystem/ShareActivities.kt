@@ -2,6 +2,7 @@ package com.btmouse.app.ecosystem
 
 import android.app.Activity
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -167,6 +168,45 @@ class ClipboardSendActivity : Activity() {
         }
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         finish()
+    }
+}
+
+/**
+ * Copies made in other apps. Android only lets the focused app (or the active keyboard)
+ * read the clipboard, so when Lanyard control sees something being copied it opens
+ * [ClipboardPeekActivity] for an instant: invisible, no animation, gone straight away.
+ */
+object ClipboardCatcher {
+    @Volatile private var last = 0L
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+    fun copied(context: Context) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - last < 1500 || !Ecosystem.wantsCopiesCaught()) return
+        last = now
+        // Let the copy finish (and its toolbar close) before taking focus.
+        main.postDelayed({
+            runCatching {
+                context.startActivity(
+                    Intent(context, ClipboardPeekActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                    )
+                )
+            }
+        }, 300)
+    }
+}
+
+/** Reads the clipboard during its one moment of focus and closes; nothing is shown. */
+class ClipboardPeekActivity : Activity() {
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) return
+        Ecosystem.pushClipboardIfNew()
+        finish()
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
     }
 }
 

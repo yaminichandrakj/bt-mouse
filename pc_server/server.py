@@ -26,6 +26,7 @@ from pathlib import Path
 
 from ecosystem import Ecosystem
 from secure import SessionStore
+import unlock as phone_unlock
 
 
 def _pairing_pin_config_path():
@@ -86,6 +87,7 @@ def capture_selected_media_preview():
 
 
 SCREEN_PREVIEW_SETTINGS_PATH = PAIRING_PIN_PATH.with_name("screen_preview.json")
+UNLOCK_SETTINGS_PATH = PAIRING_PIN_PATH.with_name("unlock.json")
 INSTALLED_APPS_LIMIT = 1000
 # Keep each app-list message well inside one UDP datagram (60000 bytes).
 APP_LIST_PART_BYTES = 42000
@@ -151,6 +153,21 @@ def save_screen_preview_allowed(allowed):
     temporary = SCREEN_PREVIEW_SETTINGS_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps({"allowed": bool(allowed)}), encoding="utf-8")
     os.replace(temporary, SCREEN_PREVIEW_SETTINGS_PATH)
+
+
+def load_unlock_over_internet():
+    """Whether the phone may unlock this PC over the internet link. Off unless the user turned it on."""
+    try:
+        return bool(json.loads(UNLOCK_SETTINGS_PATH.read_text(encoding="utf-8")).get("internet", False))
+    except Exception:
+        return False
+
+
+def save_unlock_over_internet(allowed):
+    UNLOCK_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = UNLOCK_SETTINGS_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"internet": bool(allowed)}), encoding="utf-8")
+    os.replace(temporary, UNLOCK_SETTINGS_PATH)
 
 
 def _draw_cursor(image, x, y):
@@ -2432,6 +2449,9 @@ class RemoteWebSocketServer:
         self.command_handler = command_handler
         self.on_client_callback = on_client_callback
         self.auth_token = auth_token
+        # With a device group the PC's dispatcher only accepts member sessions, so the
+        # tunnel itself needs no PIN (see Server._is_authorized).
+        self.group_mode = False
         self.clients = set()
         self.running = False
         self.loop = None
@@ -2490,7 +2510,7 @@ class RemoteWebSocketServer:
                 if not authenticated:
                     if cmd_type == "auth":
                         token = str(data.get("token", "")).strip()
-                        if self.auth_token and hmac.compare_digest(token, str(self.auth_token)):
+                        if self.group_mode or (self.auth_token and hmac.compare_digest(token, str(self.auth_token))):
                             authenticated = True
                             self.clients.add(websocket)
                             if self.on_client_callback:
@@ -2922,6 +2942,8 @@ class PhoneCameraHttpServer:
 
 class Server:
     ecosystem = None
+    group = None
+    on_group_changed = None
     secure_sessions = None
 
     def __init__(self, port=53530, discovery_port=53535, ws_port=53531, auth_token=None):
@@ -2986,6 +3008,9 @@ class Server:
         self._last_screen_query_at = 0.0
         self._screen_sharing_stopped = False
         self.screen_preview_allowed = load_screen_preview_allowed()
+        self.unlock_over_internet = load_unlock_over_internet()
+        self._unlock_failures = []
+        self._unlock_busy = threading.Lock()
         self.auto_record_audio_with_video = True
         self._camera_auto_audio_recording = False
         self.on_pc_cam_frame_callback = None
@@ -3012,6 +3037,21 @@ class Server:
         # Phones and tablets this PC's keyboard and mouse can move to
         self.ecosystem = Ecosystem(pc_name=socket.gethostname())
         self.secure_sessions = SessionStore()
+        # Device group (group.py): with it, only devices in the group can use this PC, each
+        # one proven by its own keys. The pairing PIN no longer lets anything in.
+        self.group = None
+        self._secure_nudged = {}
+        try:
+            from group import HAS_CRYPTO as _group_crypto
+            # LANYARD_NO_GROUP=1 keeps the old PIN-only behaviour (the PIN-era tests use it).
+            if _group_crypto and os.environ.get("LANYARD_NO_GROUP") != "1":
+                from ecosystem import device_group
+                self.group = device_group()
+        except Exception as exc:
+            print(f"[!] Device group unavailable: {exc}")
+        self.on_group_changed = None
+        if getattr(self, "ws_server", None) is not None:
+            self.ws_server.group_mode = self.group is not None
 
         # Callbacks for PC Companion GUI
         self.on_packet_callback = None
@@ -3019,13 +3059,118 @@ class Server:
         self.on_status_callback = None
         self.on_phone_cam_callback = None
 
-    def _is_authorized(self, addr, data):
+    def _is_authorized(self, addr, data, session_device=None):
+        if self.group is not None:
+            # Only a group member's encrypted session counts. Bluetooth stays trusted: the
+            # OS pairing already proved the phone is yours.
+            return session_device is not None or bool(addr and addr[0] == "Bluetooth")
         if addr and addr[0] in ("Bluetooth", "WebSocket"):
             return True
         if not addr:
             return False
         req_token = str(data.get("token", data.get("auth_token", ""))).strip()
         return bool(req_token) and hmac.compare_digest(req_token, self.auth_token)
+
+    # ------------------------------------------------------------------
+    # Device group: joining, member handshakes, removals
+    # ------------------------------------------------------------------
+    def _handle_group_preauth(self, cmd_type, data, addr, respond, session_device):
+        """Messages a device may send before it's in a member session. True when handled."""
+        if cmd_type == "key_exchange":
+            if data.get("v") != 2:
+                respond({"type": "auth_error", "message": "Update Lanyard on this device, then scan the QR on the PC's Connect page."})
+                return True
+            reply = self.secure_sessions.handshake_v2(data, self.group)
+            if reply:
+                respond(reply)
+                if reply.get("ok"):
+                    dev = self.group.members()
+                    name = next((m["name"] for m in dev if m["id"] == data.get("id")), "Android device")
+                    self.connected_client = f"{name} ({addr[0]})" if addr else name
+                    self._note_client_activity(addr, name)
+                    if self.on_client_callback:
+                        self.on_client_callback(self.connected_client, True)
+            return True
+        if cmd_type == "group_join":
+            if not self._auth_attempt_allowed(addr):
+                return True
+            reply, added = self.group.accept_join(data)
+            if not reply.get("ok"):
+                self._record_auth_failure(addr)
+            respond(reply)
+            if added:
+                print(f"[+] {added['name']} joined this PC's device group")
+                self._after_group_change({"type": "group_update", "roster": self.group.roster})
+            return True
+        if cmd_type in ("connect", "client_connect") and session_device is None:
+            # Only says the PC is here. Nothing works until the member handshake succeeds.
+            respond({"type": "connect_ack", "success": True, "server_name": socket.gethostname(),
+                     "secure": "group", "group_id": self.group.group_id})
+            return True
+        return False
+
+    def _on_member_group_update(self, data, session_device):
+        """A member changed the group (removed a device, restored from words)."""
+        result = self.group.apply_update(data)
+        if result is None:
+            # Stale or not valid: tell the sender what's current.
+            if session_device and self.ecosystem:
+                self.ecosystem.registry.send(session_device, self.group.update_for(session_device))
+            return
+        print(f"[*] Device group updated by {session_device or 'a member'} ({result})")
+        self._after_group_change(data, relayed_from=session_device)
+
+    def remove_group_member(self, device_id):
+        """Remove a device from the group (from the PC's Devices page)."""
+        if self.group is None:
+            return False
+        upd = self.group.remove(device_id)
+        if not upd:
+            return False
+        self._after_group_change(upd)
+        return True
+
+    def _after_group_change(self, upd, relayed_from=None):
+        members = {m["id"] for m in self.group.members()}
+        if self.ecosystem:
+            for dev in self.ecosystem.registry.online_devices():
+                device_id = dev["device_id"]
+                if device_id not in members:
+                    self.ecosystem.registry.send(device_id, {"type": "group_update", "roster": self.group.roster})
+                    self.secure_sessions.drop_device(device_id)
+                elif device_id != relayed_from:
+                    self.ecosystem.registry.send(device_id, upd)
+        self.secure_sessions.drop_except(members)
+        threading.Thread(target=self._upload_group_backup, name="GroupBackup", daemon=True).start()
+        cb = self.on_group_changed
+        if cb:
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def _upload_group_backup(self):
+        """Keep the sealed recovery backup on the user's Worker (if one is set up)."""
+        worker = (self.ecosystem.relay_url if self.ecosystem else "") or ""
+        if not worker or self.group is None:
+            return
+        try:
+            import urllib.request
+            record = self.group.backup_record()
+            req = urllib.request.Request(f"{worker.rstrip('/')}/g/{record['id']}", method="PUT",
+                                         data=json.dumps(record).encode("utf-8"),
+                                         headers={"content-type": "application/json", "user-agent": "Lanyard"})
+            urllib.request.urlopen(req, timeout=10).read()
+        except Exception as exc:
+            print(f"[-] Could not save the group backup: {exc}")
+
+    def group_offer(self):
+        """Fields for the live join QR (a new one-time code each call)."""
+        if self.group is None:
+            return None
+        self.group.relay_url = (self.ecosystem.relay_url if self.ecosystem else "") or ""
+        _tid, fields = self.group.new_offer()
+        return fields
 
     def _auth_attempt_allowed(self, addr):
         if not addr:
@@ -3363,7 +3508,10 @@ class Server:
     def handle_packet(self, data, addr=None, responder=None):
         if not isinstance(data, dict):
             return
+        encrypted = False
+        session_device = None
         if "enc" in data and self.secure_sessions is not None:
+            session_device = self.secure_sessions.device_of(data.get("enc"))
             # Encrypted session: read it, and seal everything sent back on it.
             inner, sealer = self.secure_sessions.open(data)
             if inner is None:
@@ -3381,6 +3529,7 @@ class Server:
                 plain_responder = lambda payload: self._send_udp_json(payload, addr)  # noqa: E731
             responder = lambda payload: plain_responder(sealer(payload))  # noqa: E731
             data = inner
+            encrypted = True
         cmd_type = data.get("type")
 
         def respond(payload):
@@ -3425,10 +3574,15 @@ class Server:
 
             threading.Thread(target=_run, name="MediaCommand", daemon=True).start()
 
+        if self.group is not None and self._handle_group_preauth(cmd_type, data, addr, respond, session_device):
+            return
+        if session_device and cmd_type == "device_hello":
+            data["device_id"] = session_device  # a member speaks only for itself
+
         if cmd_type in ("connect", "client_connect"):
             if not self._auth_attempt_allowed(addr):
                 return
-            is_valid = self._is_authorized(addr, data)
+            is_valid = self._is_authorized(addr, data, session_device)
             if is_valid:
                 self.auth_failures.pop(addr[0], None)
                 client_name = str(data.get("client", "Android Client"))[:80]
@@ -3440,7 +3594,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.9.1"
+                    "version": "1.9.2"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -3451,10 +3605,22 @@ class Server:
         # Every UDP operation requires the pairing PIN. RFCOMM is trusted only
         # after the OS Bluetooth session is established; WebSocket is gated by
         # its own authenticated handshake before it calls this dispatcher.
-        if not self._is_authorized(addr, data):
+        if not self._is_authorized(addr, data, session_device):
+            if self.group is not None:
+                # Not in an encrypted member session yet: ask the device to start one (rate-limited).
+                key = addr[0] if addr else "?"
+                now = time.monotonic()
+                if now - self._secure_nudged.get(key, 0) > 2.0:
+                    self._secure_nudged[key] = now
+                    respond({"type": "secure_reset"})
+                return
             if self._auth_attempt_allowed(addr):
                 self._record_auth_failure(addr)
                 respond({"type": "auth_error", "message": "Pairing PIN required or invalid"})
+            return
+
+        if cmd_type == "group_update" and self.group is not None:
+            self._on_member_group_update(data, session_device)
             return
 
         self._refresh_camera_stream_lease(addr, data, respond)
@@ -3469,7 +3635,7 @@ class Server:
         if eco:
             eco.registry.note_packet(data, respond)
             if cmd_type == "device_hello":
-                eco.handle_hello(data, respond)
+                eco.handle_hello(data, respond, addr=addr)
                 return
             if cmd_type == "control_release":
                 eco.handle_release_request(data)
@@ -3718,7 +3884,7 @@ class Server:
             self._handle_system_power(action)
 
         elif cmd_type == "unlock":
-            respond({"type": "error", "message": "Workstation unlock is not supported"})
+            self._handle_unlock(data, addr, respond, encrypted)
 
         elif cmd_type in ("query_apps", "query_installed_apps", "list_apps"):
             self._respond_installed_apps_async(addr, responder)
@@ -4968,6 +5134,61 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
         print(f"[-] Blocked unrecognized or untrusted app launch: {app_id_clean}")
         return False
 
+    UNLOCK_FAILURE_WINDOW = 300.0
+    UNLOCK_FAILURE_LIMIT = 3
+    UNLOCK_COOLDOWN = 60.0
+
+    def set_unlock_over_internet(self, allowed):
+        self.unlock_over_internet = bool(allowed)
+        save_unlock_over_internet(allowed)
+
+    def _handle_unlock(self, data, addr, respond, encrypted):
+        """Unlock this PC with the Windows password the phone keeps behind its fingerprint."""
+        def answer(code):
+            respond({"type": "unlock_result", "code": code, "success": code == "ok",
+                     "message": phone_unlock.message(code)})
+
+        link = addr[0] if addr else ""
+        # Paired Bluetooth is encrypted by the radio; Wi-Fi and internet links must be sealed.
+        if link != "Bluetooth" and not encrypted:
+            return answer("insecure")
+        if link == "WebSocket" and not getattr(self, "unlock_over_internet", False):
+            return answer("internet_off")
+        password = data.get("password")
+        if not isinstance(password, str) or not password or len(password) > phone_unlock.PASSWORD_MAX:
+            return answer("bad_request")
+        now = time.time()
+        failures = [t for t in self._unlock_failures if now - t < self.UNLOCK_FAILURE_WINDOW]
+        self._unlock_failures = failures
+        if len(failures) >= self.UNLOCK_FAILURE_LIMIT and now - failures[-1] < self.UNLOCK_COOLDOWN:
+            return answer("cooldown")
+        if is_workstation_locked() is False:
+            return answer("not_locked")
+        if not self._unlock_busy.acquire(blocking=False):
+            return answer("busy")
+
+        def run():
+            try:
+                code = phone_unlock.unlock(password)
+                if code == "submitted":
+                    # The lock screen closed before it could answer; see whether it opened.
+                    for _ in range(10):
+                        if is_workstation_locked() is False:
+                            code = "ok"
+                            break
+                        time.sleep(0.4)
+                if code == "wrong_password":
+                    self._unlock_failures.append(time.time())
+                print(f"[+] Phone unlock over {link or 'Wi-Fi'}: {code}")
+                answer(code)
+            except Exception as exc:
+                print(f"[-] Phone unlock failed: {exc}")
+                answer("no_lock_screen")
+            finally:
+                self._unlock_busy.release()
+
+        threading.Thread(target=run, name="PhoneUnlock", daemon=True).start()
+
     def _handle_system_power(self, action):
         import subprocess
         try:
@@ -5157,7 +5378,7 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
 
         self.start_discovery_responder()
         try:
-            if self.ecosystem and self.ecosystem.start():
+            if self.ecosystem and self.ecosystem.start(port=self.port):
                 print("[*] Keyboard & mouse sharing: Ctrl+Alt+Right/Left switches device, Ctrl+Alt+Home returns")
         except Exception as e:
             print(f"[!] Keyboard & mouse sharing unavailable: {e}")

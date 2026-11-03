@@ -9,4 +9,14 @@ compatibility_flags = ["nodejs_compat"]
 # then paste the printed id below.
 [[kv_namespaces]]
 binding = "RENDEZVOUS"
-id = "PASTE_KV_NAMESPACE_ID_HERE"
+id = "548077de77af4ab3ae13da56168ae053"
+
+# Family relay: one Durable Object room per family forwards sealed messages between
+# phones on different networks. SQLite-backed classes work on the free plan.
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayRoom"
+
+[[migrations]]
+tag = "v1-relay"
+new_sqlite_classes = ["RelayRoom"]

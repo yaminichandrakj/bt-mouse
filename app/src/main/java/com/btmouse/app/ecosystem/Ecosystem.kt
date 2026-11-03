@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /** Another device in the ecosystem, as the PC last described it. */
 data class PeerDevice(
@@ -103,7 +105,10 @@ object Ecosystem {
         Family.init(appContext)
         PeerLinks.init(appContext, scope)
         AndroidHub.init(appContext, scope)
+        RelayLinks.init(appContext, scope, settings)
         scope.launch { PeerLinks.peers.collect { mergeDevices() } }
+        scope.launch { RelayLinks.peers.collect { mergeDevices() } }
+        scope.launch { files.transfers.collect { PeerLibrary.onTransfers(appContext, it) } }
 
         scope.launch {
             coordinator.isConnected.collectLatest { connected ->
@@ -164,6 +169,87 @@ object Ecosystem {
         }
     }
 
+    // --- device group ----------------------------------------------------------
+    /** Another member changed the group (someone joined, was removed, or it was restored). */
+    private fun onGroupUpdate(json: JsonObject) {
+        // Packets from the PC carry no "from".
+        val from = json.get("from")?.takeIf { !it.isJsonNull }?.asString ?: PC_ID
+        when (Group.applyUpdate(json)) {
+            // Pass it on so every member hears it; members that already have it ignore it.
+            "applied" -> broadcastGroup(json.deepCopy().apply { remove("from"); remove("to") }, except = from)
+            "removed" -> {
+                _lastClipboard.value = "This device was removed from your devices"
+                coordinator?.disconnectAll()
+            }
+        }
+    }
+
+    /** Send a group update to every member reachable right now: the PC, this hub's clients, peers and the relay. */
+    private fun broadcastGroup(update: JsonObject, except: String? = null) {
+        if (except != PC_ID && coordinator?.isConnected?.value == true) coordinator?.sendJsonObject(update.deepCopy())
+        AndroidHub.broadcast(update, except = except)
+        PeerLinks.peers.value.filter { it.id != except }.forEach { PeerLinks.sendTo(it.id, update.deepCopy()) }
+        RelayLinks.broadcast(update)
+    }
+
+    /** Someone joined through this phone's live code: tell the other members. */
+    fun onGroupJoined(name: String) {
+        _lastClipboard.value = "$name joined your devices"
+        broadcastGroup(Group.rosterUpdate())
+        uploadGroupBackup()
+    }
+
+    /** Remove a device: everyone else gets a new key it never sees. */
+    fun removeFromGroup(deviceId: String): Boolean {
+        val update = Group.remove(deviceId) ?: return false
+        broadcastGroup(update)
+        Group.relink()
+        uploadGroupBackup()
+        return true
+    }
+
+    /** Rejoin with the recovery words. Null on success, otherwise a message. */
+    suspend fun restoreGroup(words: String): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val worker = relayUrl() ?: return@withContext "Set up internet access in Lanyard for PC first: the backup lives on your Worker."
+        val gid = Group.groupIdForWords(words) ?: return@withContext "Those words don't check out. Look for a typo."
+        val blob = runCatching {
+            val body = okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder()
+                .url("$worker/g/${GroupCrypto.backupId(gid)}").build()).execute().use { if (it.isSuccessful) it.body?.string() else null }
+            com.google.gson.JsonParser.parseString(body ?: return@runCatching null).asJsonObject.get("blob").asString
+        }.getOrNull() ?: return@withContext "No backup found for these words on your Worker."
+        val update = Group.restore(words, blob) ?: return@withContext "The backup couldn't be opened with these words."
+        broadcastGroup(update)
+        Group.relink()
+        uploadGroupBackup()
+        null
+    }
+
+    /** Keep the sealed recovery backup on the user's Worker. */
+    fun uploadGroupBackup() {
+        val worker = relayUrl() ?: return
+        Thread {
+            runCatching {
+                val record = Group.backupRecord()
+                val body = record.toString().toRequestBody("application/json".toMediaTypeOrNull())
+                okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder()
+                    .url("$worker/g/${record.get("id").asString}").put(body).build()).execute().close()
+            }
+        }.start()
+    }
+
+    /** Lanyard for PC called this phone from [host]: connect to it now. */
+    fun onPcCall(host: String, port: Int) {
+        main.post { coordinator?.answerPcCall(host, port) }
+    }
+
+    /** The relay Worker this phone uses, to hand on to devices that pair with it. */
+    fun relayUrl(): String? = settings?.relayUrl?.value?.takeIf { it.isNotBlank() }
+        ?: settings?.rvWorker?.value?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+
+    fun adoptRelayUrl(url: String) {
+        if (url.isNotBlank() && settings?.relayUrl?.value.isNullOrBlank()) settings?.setRelayUrl(url)
+    }
+
     /** The PC's LAN address while the Wi-Fi link is up, for the HTTP file fast path. */
     fun pcLanHost(): String? {
         val c = coordinator ?: return null
@@ -180,6 +266,9 @@ object Ecosystem {
         // Devices connected straight to this phone (no PC) are reached through its hub.
         val to = obj.get("to")?.takeIf { !it.isJsonNull }?.asString
         if (to != null && (AndroidHub.sendTo(to, obj) || PeerLinks.sendTo(to, obj))) return
+        // Off the network the PC knows, or with no PC at all: go through the internet relay.
+        val viaPc = coordinator?.isConnected?.value == true && pcDevices.any { it.id == to }
+        if (to != null && !viaPc && RelayLinks.sendTo(to, obj)) return
         coordinator?.sendJsonObject(obj)
     }
 
@@ -213,7 +302,10 @@ object Ecosystem {
             addProperty("rotation", DeviceIdentity.rotationDegrees(appContext))
             add("caps", JsonObject().apply {
                 addProperty("control", allowControl && RemoteControlService.instance != null)
-                addProperty("keyboard", RemoteKeyboardService.instance != null)
+                addProperty("lock", allowControl && RemoteControlService.instance != null)
+                // Android 13+ types every key through Lanyard control, no keyboard switch needed.
+                addProperty("keyboard", RemoteKeyboardService.instance != null ||
+                    (android.os.Build.VERSION.SDK_INT >= 33 && RemoteControlService.instance != null))
                 addProperty("clipboard", settings?.clipboardSync?.value ?: true)
                 addProperty("files", true)
                 addProperty("clipboard_image", settings?.clipboardSync?.value ?: true)
@@ -228,8 +320,8 @@ object Ecosystem {
     private val handledTypes = setOf(
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
-        "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch",
-        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe"
+        "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch", "library_items",
+        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe", "group_update", "lock_device"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -242,6 +334,9 @@ object Ecosystem {
                 val gid = json.get("group_id")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
                 val gkey = json.get("group_key")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
                 if (gkey.isNotEmpty()) Family.adoptFromPc(gid, gkey)
+                json.get("relay_url")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }?.let {
+                    settings?.setRelayUrl(it)
+                }
             }
             "stream_watch" -> onStreamWatch(json)
             "stream_audio" -> onStreamAudio(json)
@@ -256,6 +351,9 @@ object Ecosystem {
             }
             "remote_input" -> if (settings?.allowRemoteControl?.value != false) {
                 RemoteControlService.instance?.handle(json)
+            }
+            "lock_device" -> if (settings?.allowRemoteControl?.value != false) {
+                RemoteControlService.instance?.lockScreen()
             }
             "clipboard_push" -> applyRemoteClipboard(json)
             "devices_update" -> parseDevices(json.getAsJsonArray("devices"))
@@ -274,6 +372,8 @@ object Ecosystem {
             }
             "library_list" -> Library.answerList(appContext, json) { send(it) }
             "library_fetch" -> Library.answerFetch(appContext, json)
+            "library_items" -> PeerLibrary.onItems(json)
+            "group_update" -> onGroupUpdate(json)
             else -> files.handle(type, json)
         }
         return true
@@ -294,7 +394,9 @@ object Ecosystem {
         val direct = hub + PeerLinks.peers.value.filter { p -> hub.none { it.id == p.id } }
         val ids = direct.map { it.id }.toSet()
         // A device reachable both ways keeps the PC's details but is listed once.
-        _devices.value = pcDevices.filter { it.id !in ids } + direct
+        val viaPc = pcDevices.filter { it.id !in ids }
+        val known = ids + viaPc.map { it.id }
+        _devices.value = viaPc + direct + RelayLinks.peers.value.filter { it.id !in known }
     }
 
     private fun parseDevices(list: JsonArray?) {
@@ -360,11 +462,13 @@ object Ecosystem {
         if (kind == "screen") {
             val now = System.currentTimeMillis()
             if (directWatchers.entries.removeIf { now - it.value > 25_000 }) updateScreenViewers()
-            directWatchers.keys.filter { it !in h264Watchers }.forEach { watcher ->
+            // The PC's own window can watch directly too; it gets one copy through the PC path below.
+            directWatchers.keys.filter { it !in h264Watchers && it != PC_ID }.forEach { watcher ->
                 sendTo(watcher, payload.deepCopy())
             }
         }
-        if (kind != "screen" || pcScreenViewers > 0) send(payload)
+        val pcWantsJpeg = directWatchers.containsKey(PC_ID) && PC_ID !in h264Watchers
+        if (kind != "screen" || pcScreenViewers > 0 || pcWantsJpeg) send(payload)
     }
 
     fun onCameraFrame(jpeg: ByteArray, width: Int, height: Int) {
@@ -378,9 +482,17 @@ object Ecosystem {
     fun watch(streamId: String) {
         val previous = watching
         if (previous != null && previous != streamId) unwatch()
-        if (previous != streamId) H264Viewer.reset(streamId)
+        if (previous != streamId) {
+            H264Viewer.reset(streamId)
+            watchStartedAt = System.currentTimeMillis()
+        }
         watching = streamId
-        val smooth = settings?.smoothMirroring?.value == true && !h264Broken
+        // No video a few seconds after asking (older app, no encoder): settle for pictures.
+        if (smoothFallbackFor != streamId && previous == streamId && H264Viewer.lastPartAt == 0L &&
+            System.currentTimeMillis() - watchStartedAt > 6_000 && _watchedFrame.value != null) {
+            smoothFallbackFor = streamId
+        }
+        val smooth = settings?.smoothMirroring?.value == true && !h264Broken && smoothFallbackFor != streamId
         sendTo(streamId.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
             addProperty("stream_id", streamId)
@@ -420,8 +532,8 @@ object Ecosystem {
             addProperty("stream_id", "$selfId:screen")
             addProperty("pcm", android.util.Base64.encodeToString(pcm, android.util.Base64.NO_WRAP))
         }
-        directWatchers.keys.forEach { sendTo(it, payload.deepCopy()) }
-        if (pcScreenViewers > 0) send(payload)
+        directWatchers.keys.filter { it != PC_ID }.forEach { sendTo(it, payload.deepCopy()) }
+        if (pcScreenViewers > 0 || directWatchers.containsKey(PC_ID)) send(payload)
     }
 
     private fun onStreamAudio(json: JsonObject) {
@@ -444,7 +556,7 @@ object Ecosystem {
         if (streamId != "$selfId:screen" || from == selfId) return
         if (json.get("on")?.asBoolean != false) {
             directWatchers[from] = System.currentTimeMillis()
-            if (json.get("codec")?.asString == "h264") {
+            if (json.get("codec")?.asString == "h264" && !H264Encoder.unavailable) {
                 if (h264Watchers.add(from)) H264Encoder.requestKeyframe()
             } else {
                 h264Watchers.remove(from)
@@ -458,6 +570,9 @@ object Ecosystem {
 
     private val h264Watchers = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var h264Broken = false
+    @Volatile private var watchStartedAt = 0L
+    /** A stream that sent no video when asked; watched as pictures from then on. */
+    @Volatile private var smoothFallbackFor: String? = null
 
     private fun updateScreenViewers() {
         h264Watchers.retainAll(directWatchers.keys)
@@ -465,8 +580,13 @@ object Ecosystem {
         ScreenShare.viewers = pcScreenViewers + directWatchers.size
     }
 
-    /** Someone watches this screen as H.264 video. */
-    fun wantsH264(): Boolean = h264Watchers.isNotEmpty()
+    /** Someone watches this screen as H.264 video (and this phone can encode it). */
+    fun wantsH264(): Boolean = h264Watchers.isNotEmpty() && !H264Encoder.unavailable
+
+    /** No encoder here: the video watchers get pictures instead. */
+    fun onH264EncoderUnavailable() {
+        h264Watchers.clear()
+    }
 
     /** Viewers that still want JPEG pictures (the PC, older apps, smooth mirroring off). */
     fun jpegViewers(): Int = pcScreenViewers + directWatchers.keys.count { it !in h264Watchers }
@@ -549,6 +669,18 @@ object Ecosystem {
         }
     }
 
+    /** Whether this phone lets its other devices browse its photo gallery. */
+    fun sharesGallery(): Boolean = settings?.shareGallery?.value == true
+
+    /** Whether a copy seen in another app should be read and sent (see ClipboardCatcher). */
+    fun wantsCopiesCaught(): Boolean {
+        val s = settings ?: return false
+        if (!initialized || !s.clipboardSync.value || !s.catchCopies.value) return false
+        // The Lanyard keyboard already sees every copy while it's the active keyboard.
+        if (RemoteKeyboardService.active.value) return false
+        return coordinator?.isConnected?.value == true || _devices.value.isNotEmpty()
+    }
+
     /** Send the clipboard if it changed. Only works while the app or the Lanyard keyboard has focus. */
     fun pushClipboardIfNew(force: Boolean = false): Boolean {
         if (!initialized || (settings?.clipboardSync?.value == false && !force)) return false
@@ -584,7 +716,10 @@ object Ecosystem {
             addProperty("text", clipped)
             addProperty("id", id)
         }
-        AndroidHub.broadcast(push.deepCopy().apply { addProperty("from_name", DeviceIdentity.name(appContext)) })
+        val named = push.deepCopy().apply { addProperty("from_name", DeviceIdentity.name(appContext)) }
+        AndroidHub.broadcast(named)
+        // Devices on other networks too; a copy that also arrives another way is ignored by its id.
+        RelayLinks.broadcast(named)
         send(push)
         return true
     }

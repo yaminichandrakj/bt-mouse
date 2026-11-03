@@ -70,6 +70,7 @@ import com.btmouse.app.ecosystem.DeviceIdentity
 import com.btmouse.app.ecosystem.Ecosystem
 import com.btmouse.app.ecosystem.LiveStream
 import com.btmouse.app.ecosystem.PeerDevice
+import com.btmouse.app.ecosystem.RelayLinks
 import com.btmouse.app.ecosystem.ScreenShare
 import com.btmouse.app.service.CompanionSessionService
 import com.btmouse.app.ecosystem.TransferInfo
@@ -89,6 +90,7 @@ import com.btmouse.app.ui.theme.OnInkMuted
 import com.btmouse.app.ui.theme.Panel
 import com.btmouse.app.ui.theme.StatusGreen
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -126,10 +128,53 @@ fun DevicesScreen(
     val liveStreams by Ecosystem.streams.collectAsState()
     val hubOn by com.btmouse.app.ecosystem.AndroidHub.enabled.collectAsState()
     val nearby by com.btmouse.app.ecosystem.PeerLinks.nearby.collectAsState()
-    var pairing by remember { mutableStateOf<com.btmouse.app.ecosystem.NearbyDevice?>(null) }
-    var pinInput by remember { mutableStateOf("") }
-    var pairMessage by remember { mutableStateOf<String?>(null) }
+    val relayOn by settings.internetRelay.collectAsState()
+    val relayOnline by RelayLinks.online.collectAsState()
+    val relayPeers by RelayLinks.peers.collectAsState()
+    val relayUrl by settings.relayUrl.collectAsState()
+    val rvWorker by settings.rvWorker.collectAsState()
+    val groupMembers by com.btmouse.app.ecosystem.Group.members.collectAsState()
+    val wordsPending by com.btmouse.app.ecosystem.Group.wordsPending.collectAsState()
+    val selfId = remember { DeviceIdentity.id(context) }
     var showQr by remember { mutableStateOf(false) }
+    var joinCode by remember { mutableStateOf<String?>(null) }
+    var joinMessage by remember { mutableStateOf<String?>(null) }
+    var removing by remember { mutableStateOf<com.btmouse.app.ecosystem.GroupMember?>(null) }
+    var showWords by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(false) }
+    var restoreWords by remember { mutableStateOf("") }
+    var restoreMessage by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    // The live code: a new one-time code every 20 s while it's on screen.
+    LaunchedEffect(showQr, hubOn) {
+        while (showQr) {
+            joinCode = com.btmouse.app.ecosystem.AndroidHub.joinCode()
+            delay(com.btmouse.app.ecosystem.Group.OFFER_REFRESH_MS)
+        }
+        joinCode = null
+    }
+
+    fun scanJoinCode() {
+        val options = com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
+            .build()
+        com.google.mlkit.vision.codescanner.GmsBarcodeScanning.getClient(context, options).startScan()
+            .addOnSuccessListener { barcode ->
+                val raw = barcode.rawValue.orEmpty()
+                val obj = runCatching { com.google.gson.JsonParser.parseString(raw).asJsonObject }.getOrNull()
+                if (obj?.get("type")?.asString != "lanyard_join") {
+                    joinMessage = "That isn't a Lanyard code."
+                    return@addOnSuccessListener
+                }
+                joinMessage = "Joining…"
+                scope.launch {
+                    val error = com.btmouse.app.ecosystem.GroupJoin.join(obj, settings)
+                    joinMessage = error ?: "Joined ${obj.get("name")?.asString ?: "the group"}."
+                    if (error == null && obj.get("pc")?.asBoolean == true) coordinator.connectSavedPc()
+                }
+            }
+    }
     val sharingScreen by ScreenShare.active.collectAsState()
     val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
@@ -190,20 +235,30 @@ fun DevicesScreen(
                 detail = "Settings › Accessibility › Lanyard › On. Draws the pointer and taps for you.",
                 action = "Open settings"
             ) { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            Spacer(Modifier.height(10.dp))
-            SetupStep(
-                done = keyboardEnabled,
-                title = "2. Turn on the Lanyard keyboard",
-                detail = "Lets the laptop type anywhere, including arrows, Backspace and shortcuts.",
-                action = "Open settings"
-            ) { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            Spacer(Modifier.height(10.dp))
-            SetupStep(
-                done = keyboardSelected,
-                title = "3. Switch to it while you type from the laptop",
-                detail = "Without it, plain letters still work through step 1.",
-                action = "Choose keyboard"
-            ) { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
+            // Android 13+ lets Lanyard control type every key itself; the keyboard steps are only for older phones.
+            val typesByItself = android.os.Build.VERSION.SDK_INT >= 33
+            if (typesByItself) {
+                Spacer(Modifier.height(10.dp))
+                Caption(
+                    if (accessibilityOn) "Typing from the laptop works in every app, arrows and shortcuts included. No keyboard to switch."
+                    else "Once step 1 is on, typing from the laptop works in every app, arrows and shortcuts included."
+                )
+            } else {
+                Spacer(Modifier.height(10.dp))
+                SetupStep(
+                    done = keyboardEnabled,
+                    title = "2. Turn on the Lanyard keyboard",
+                    detail = "Lets the laptop type anywhere, including arrows, Backspace and shortcuts.",
+                    action = "Open settings"
+                ) { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                Spacer(Modifier.height(10.dp))
+                SetupStep(
+                    done = keyboardSelected,
+                    title = "3. Switch to it while you type from the laptop",
+                    detail = "Without it, plain letters still work through step 1. Android 13 and later don't need this.",
+                    action = "Choose keyboard"
+                ) { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
+            }
             Spacer(Modifier.height(14.dp))
             Caption(
                 "On the laptop, push the mouse off the screen edge where this device sits in Lanyard › Devices, " +
@@ -218,12 +273,23 @@ fun DevicesScreen(
                 Ecosystem.sendHello()
             }
             Spacer(Modifier.height(10.dp))
+            val catchCopies by settings.catchCopies.collectAsState()
+            ToggleRow(
+                "Send copies from other apps",
+                "When you copy in another app, Lanyard opens for a split second to pick it up. Needs Lanyard control.",
+                catchCopies
+            ) { settings.setCatchCopies(it) }
+            Spacer(Modifier.height(10.dp))
             Caption(
-                "From the laptop it arrives instantly. From this device it is sent while Lanyard is open, while the " +
-                    "Lanyard keyboard is active, from Share › Lanyard, or with the Send clipboard tile in Quick Settings."
+                if (catchCopies && accessibilityOn)
+                    "From the laptop it arrives instantly. From this device, copies are sent by themselves. If one is missed, " +
+                        "use Share › Lanyard or the Send clipboard tile in Quick Settings."
+                else
+                    "From the laptop it arrives instantly. From this device it is sent while Lanyard is open, while the " +
+                        "Lanyard keyboard is active, from Share › Lanyard, or with the Send clipboard tile in Quick Settings."
             )
             Spacer(Modifier.height(10.dp))
-            PillButton("Send clipboard now", { Ecosystem.pushClipboardIfNew(force = true) }, enabled = connected)
+            PillButton("Send clipboard now", { Ecosystem.pushClipboardIfNew(force = true) }, enabled = connected || devices.isNotEmpty())
         }
 
         SectionHeader("Live")
@@ -236,7 +302,7 @@ fun DevicesScreen(
             )
             Spacer(Modifier.height(10.dp))
             val smooth by settings.smoothMirroring.collectAsState()
-            ToggleRow("Smooth mirroring (beta)", "Real video when watching another phone or tablet. Turn off if the picture stays black.", smooth) {
+            ToggleRow("Smooth mirroring", "Real video when watching another phone or tablet. Switches to pictures by itself if video can't play.", smooth) {
                 settings.setSmoothMirroring(it)
             }
             Spacer(Modifier.height(10.dp))
@@ -262,54 +328,97 @@ fun DevicesScreen(
             }
         }
 
-        SectionHeader("Nearby")
+        SectionHeader("Your devices group")
         PanelCard {
             ToggleRow(
                 "Find my devices on this Wi-Fi",
-                "Phones and tablets paired with the same PC link to each other by themselves. No codes to scan.",
+                "Devices in your group link to each other by themselves on the same network.",
                 hubOn
             ) { com.btmouse.app.ecosystem.AndroidHub.setEnabled(it) }
-            if (hubOn) {
-                Spacer(Modifier.height(12.dp))
-                Text("This device's PIN: ${com.btmouse.app.ecosystem.AndroidHub.pin()}", color = OnInk, fontSize = 16.sp)
-                Caption("Without a PC, pair once: pick this device on the other one and type this PIN. It is remembered.")
-                if (nearby.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    nearby.forEach { n ->
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                            Column(Modifier.weight(1f)) {
-                                Text(n.name, color = OnInk, fontSize = 15.sp)
-                                Caption("Not paired yet")
-                            }
-                            PillButton("Pair", { pairing = n; pinInput = "" }, height = 38.dp)
-                        }
+            Spacer(Modifier.height(12.dp))
+            groupMembers.forEach { m ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(m.name, color = OnInk, fontSize = 15.sp)
+                        Caption(when {
+                            m.id == selfId -> "This device"
+                            m.kind == "pc" -> "PC"
+                            m.kind == "tablet" -> "Tablet"
+                            else -> "Phone"
+                        })
                     }
-                }
-                pairMessage?.let { Spacer(Modifier.height(8.dp)); Caption(it, color = AccentAmber) }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    if (showQr) "Hide QR code" else "Show a QR code instead",
-                    color = OnInk, fontSize = 14.sp,
-                    modifier = Modifier.clickable { showQr = !showQr }.padding(vertical = 6.dp)
-                )
-                if (showQr) {
-                    val code = remember(hubOn) { com.btmouse.app.ecosystem.AndroidHub.pairingCode() }
-                    if (code == null) {
-                        Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the tablet).", color = AccentAmber)
-                    } else {
-                        val qr = remember(code) { qrBitmap(code, 600) }
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            androidx.compose.foundation.Image(qr, "Pairing code for this device", Modifier.size(200.dp).clip(RoundedCornerShape(12.dp)))
-                        }
-                        Caption("For a tablet with no PC: Connect › Scan PC QR code. It then uses this device as its PC.")
-                    }
+                    if (m.id != selfId) PillButton("Remove", { removing = m }, height = 38.dp, style = PillStyle.Danger)
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton(if (showQr) "Hide code" else "Add a device", { showQr = !showQr }, style = PillStyle.Primary)
+                PillButton("Scan a code", { scanJoinCode() })
+            }
+            if (showQr) {
+                Spacer(Modifier.height(12.dp))
+                val code = joinCode
+                if (code == null) {
+                    Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the other device).", color = AccentAmber)
+                } else {
+                    val qr = remember(code) { qrBitmap(code, 600) }
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        androidx.compose.foundation.Image(qr, "Code to add a device", Modifier.size(220.dp).clip(RoundedCornerShape(12.dp)))
+                    }
+                    Caption("On the other phone or tablet: Devices › Scan a code. The code changes every 20 seconds and works once.")
+                }
+            }
+            joinMessage?.let { Spacer(Modifier.height(8.dp)); Caption(it, color = AccentAmber) }
+            if (nearby.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Caption("Not in your group yet: ${nearby.joinToString { it.name }}. Add them with a code.")
+            }
+            Spacer(Modifier.height(14.dp))
+            if (wordsPending) {
+                Text("Write down your recovery words", color = OnInk, fontSize = 15.sp)
+                Caption("They bring your devices back together if you ever lose all of them. Shown once, kept only on this device until you're done.")
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PillButton("Show words", { showWords = true })
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            Text(
+                "Restore with recovery words",
+                color = OnInk, fontSize = 14.sp,
+                modifier = Modifier.clickable { restoring = true }.padding(vertical = 6.dp)
+            )
+        }
+
+        SectionHeader("Away from home")
+        PanelCard {
+            ToggleRow(
+                "Reach my devices over the internet",
+                "When your phones and tablets are on different networks, they still find each other, with or without the laptop.",
+                relayOn
+            ) { settings.setInternetRelay(it) }
+            Spacer(Modifier.height(10.dp))
+            val hasRelay = relayUrl.isNotBlank() || rvWorker.isNotBlank()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(if (relayOn && relayOnline) StatusGreen else AccentAmber, size = 10.dp)
+                Spacer(Modifier.width(10.dp))
+                Caption(
+                    when {
+                        !relayOn -> "Off. Only devices on the same Wi-Fi or connected to your laptop are reachable."
+                        !hasRelay -> "Set up internet access once in Lanyard for PC (Remote access). Every device paired with it learns the address."
+                        !relayOnline -> "Connecting…"
+                        relayPeers.isEmpty() -> "Ready. Your other devices show up here when they're online."
+                        else -> "Ready. ${relayPeers.size} device${if (relayPeers.size == 1) "" else "s"} reachable over the internet."
+                    }
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Caption("Everything sent this way is encrypted with your devices' shared key. The relay can't read it.")
         }
 
         SectionHeader("Your devices")
         if (devices.isEmpty()) {
-            Caption(if (connected) "Looking for your devices…" else "Connect to your PC, or pair a nearby device above.")
+            Caption(if (connected) "Looking for your devices…" else "Connect to your PC, pair a nearby device above, or turn on internet reach.")
         }
         devices.forEach { device ->
             PanelCard(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
@@ -323,7 +432,10 @@ fun DevicesScreen(
                         contentDescription = null, tint = OnInk, modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(device.name, color = OnInk, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text(device.name, color = OnInk, fontSize = 16.sp)
+                        if (relayPeers.any { it.id == device.id }) Caption("Over the internet")
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -350,31 +462,82 @@ fun DevicesScreen(
         Spacer(Modifier.height(24.dp))
     }
 
-    pairing?.let { target ->
+    removing?.let { m ->
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pairing = null },
-            title = { Text("Pair with ${target.name}") },
+            onDismissRequest = { removing = null },
+            title = { Text("Remove ${m.name}?") },
+            text = { Text("It's locked out straight away: your other devices switch to a new key it never gets. To add it again, scan a fresh code.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    removing = null
+                    joinMessage = if (com.btmouse.app.ecosystem.Ecosystem.removeFromGroup(m.id)) "Removed ${m.name}." else "Couldn't remove ${m.name}."
+                }) { Text("Remove") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { removing = null }) { Text("Cancel") } }
+        )
+    }
+
+    if (showWords) {
+        val words = remember { com.btmouse.app.ecosystem.Group.pendingWords.orEmpty().split(" ") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showWords = false },
+            title = { Text("Your recovery words") },
             text = {
                 Column {
-                    Text("Type the PIN shown on ${target.name} under Devices › Nearby.")
+                    Text("Write these 24 words down, in order, and keep them somewhere safe.")
                     Spacer(Modifier.height(10.dp))
-                    androidx.compose.material3.OutlinedTextField(
-                        value = pinInput,
-                        onValueChange = { pinInput = it.filter(Char::isDigit).take(6) },
-                        singleLine = true,
-                        label = { Text("PIN") }
-                    )
+                    words.chunked(3).forEachIndexed { row, three ->
+                        Text(
+                            three.mapIndexed { i, w -> "${row * 3 + i + 1}. $w" }.joinToString("    "),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 14.sp
+                        )
+                    }
                 }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
-                    val pin = pinInput
-                    pairing = null
-                    pairMessage = "Pairing with ${target.name}…"
-                    com.btmouse.app.ecosystem.PeerLinks.pairWithPin(target, pin) { _, message -> pairMessage = message }
-                }, enabled = pinInput.length == 6) { Text("Pair") }
+                    showWords = false
+                    com.btmouse.app.ecosystem.Group.wordsSeen()
+                }) { Text("I've written them down") }
             },
-            dismissButton = { androidx.compose.material3.TextButton(onClick = { pairing = null }) { Text("Cancel") } }
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { showWords = false }) { Text("Later") } }
+        )
+    }
+
+    if (restoring) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { restoring = false },
+            title = { Text("Restore your devices") },
+            text = {
+                Column {
+                    Text("Type your 24 recovery words. This device rejoins your group and the others get a new key.")
+                    Spacer(Modifier.height(10.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = restoreWords,
+                        onValueChange = { restoreWords = it },
+                        label = { Text("Recovery words") },
+                        minLines = 3
+                    )
+                    restoreMessage?.let { Spacer(Modifier.height(8.dp)); Text(it, color = AccentAmber) }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    restoreMessage = "Restoring…"
+                    scope.launch {
+                        val error = com.btmouse.app.ecosystem.Ecosystem.restoreGroup(restoreWords)
+                        if (error == null) {
+                            restoring = false
+                            restoreWords = ""
+                            restoreMessage = null
+                            joinMessage = "Restored. Your devices are back together."
+                        } else {
+                            restoreMessage = error
+                        }
+                    }
+                }, enabled = restoreWords.trim().split(Regex("\\s+")).size == 24) { Text("Restore") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { restoring = false }) { Text("Cancel") } }
         )
     }
 }

@@ -1,5 +1,38 @@
 # Phone-Based Laptop Unlock Feasibility & Platform Determination (Phase 6)
 
+> **Update 2026-11-03: superseded. Phone unlock is now built (Approach A).**
+> The October assessment below is kept for the record. We reversed it and chose a
+> credential provider, because it is the only way Windows offers to unlock a
+> consumer PC. The risks it names are handled like this:
+>
+> - **LogonUI stability.** `pc_server/unlock_provider/provider.cpp` is small. It has
+>   no input fields and no network code, links the C runtime statically, and never
+>   blocks a LogonUI call (the pipe runs on its own thread). If it fails, Windows
+>   still shows its own password and PIN options, because Lanyard filters nothing.
+> - **Install and trust.** Setup is opt-in from Lanyard for PC › Settings. It asks for
+>   administrator permission once and copies the DLL to `%ProgramFiles%\Lanyard`
+>   (only administrators can write there, which matters because LogonUI runs it as
+>   SYSTEM). Turn off removes the registry keys and the file.
+> - **Credentials.** Windows still checks a real password (LSA via Negotiate). The
+>   password is never cached on the PC. The phone keeps it sealed with an Android
+>   Keystore AES-GCM key that needs a fingerprint or screen lock for every use and is
+>   invalidated when a new fingerprint is enrolled.
+> - **Transport.** The PC accepts an `unlock` packet only over paired Bluetooth or an
+>   encrypted session (X25519 + ChaCha20-Poly1305). Over the internet link it accepts
+>   one only if the PC owner allowed it. Three wrong passwords in five minutes pause
+>   unlock for a minute.
+> - **Local hand-off.** The companion writes to `\\.\pipe\LanyardUnlock-<session>`. It
+>   first checks that SYSTEM or Administrators owns the pipe, so a program that
+>   squats on the name gets nothing. The provider impersonates the caller and only
+>   accepts a password for that caller's own SID. It then auto-submits through
+>   `CredentialsChanged` → `GetSerialization` (`KerbWorkstationUnlockLogon` for local
+>   and domain accounts, `CredPackAuthenticationBuffer` for Microsoft and work
+>   accounts) and returns the `ReportResult` status to the phone.
+>
+> Limits: it unlocks a locked session only. After a restart or sign-out no companion
+> is running to receive the request. Microsoft accounts need the account password,
+> not the Windows Hello PIN.
+
 **Document Status:** Concluded Architecture & Security Assessment  
 **Date:** 2026-10-24  
 **Product:** BT Mouse & PC Companion  

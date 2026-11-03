@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.sensors.AirMouseManager
+import com.btmouse.app.ui.components.rememberPcUnlock
 import com.btmouse.app.ui.components.ActionTile
 import com.btmouse.app.ui.components.MouseButtonsBar
 import com.btmouse.app.ui.components.PillButton
@@ -75,6 +76,7 @@ fun ControlTab(
     val stats by coordinator.systemStats.collectAsState()
     val connected by coordinator.isConnected.collectAsState()
     var lockedPending by remember { mutableStateOf(false) }
+    val pcUnlock = rememberPcUnlock(coordinator, notify)
 
     // Keep the play, mute and lock buttons true to the PC while this tab is open.
     LaunchedEffect(connected) {
@@ -181,10 +183,10 @@ fun ControlTab(
             )
             ActionTile(
                 if (locked) Icons.Default.Lock else Icons.Default.LockOpen,
-                if (locked) "Locked" else "Lock PC",
+                if (locked) "Unlock" else "Lock PC",
                 {
                     if (locked) {
-                        notify("Unlock it on the PC itself")
+                        pcUnlock.start()
                     } else {
                         coordinator.systemPower("lock")
                         lockedPending = true

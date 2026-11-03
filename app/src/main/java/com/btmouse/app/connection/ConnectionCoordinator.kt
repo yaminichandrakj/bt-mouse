@@ -489,8 +489,34 @@ class ConnectionCoordinator(
         connectSavedPc()
     }
 
+    /**
+     * The PC called this phone (a signed `pc_call` on the hub port): connect now instead of
+     * waiting for the next retry, and follow it if its address changed. Ignored while
+     * connected, after the user chose Disconnect, or before this phone was ever paired.
+     */
+    fun answerPcCall(host: String, port: Int) {
+        if (isConnected.value || intentionalDisconnect) return
+        if (!isPaired()) return
+        if (host.isNotBlank() && host != settings.wifiHost.value) settings.setWifiHost(host)
+        if (port in 1..65535 && port != settings.wifiPort.value) settings.setWifiPort(port)
+        connectSavedPc()
+    }
+
     override fun sendJsonObject(obj: com.google.gson.JsonObject) {
         currentCompanionConnection.sendJsonObject(obj)
+    }
+
+    override val canSendSecrets: Boolean get() = currentCompanionConnection.canSendSecrets
+
+    /** Hands the Windows password to the PC's lock screen. False when the link isn't encrypted yet. */
+    fun unlockPc(password: String): Boolean {
+        val link = currentCompanionConnection
+        if (!link.canSendSecrets) return false
+        link.sendJsonObject(com.google.gson.JsonObject().apply {
+            addProperty("type", "unlock")
+            addProperty("password", password)
+        })
+        return true
     }
 
     /**
@@ -590,6 +616,8 @@ class ConnectionCoordinator(
     }
 
     private fun isPaired(): Boolean {
+        // Joined the PC's device group (live QR), or an older PIN pairing.
+        if (com.btmouse.app.ecosystem.Group.hasPc()) return true
         val pin = settings.serverPin.value.trim()
         return pin.length == 6 && pin.all { it.isDigit() }
     }

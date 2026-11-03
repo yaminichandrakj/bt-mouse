@@ -407,6 +407,32 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(fetches, ["new.mp4"])
             self.assertEqual(hub.library_dir("x.wav"), dirs["audios"])
 
+    def test_lists_files_only_on_devices_and_fetches_big_ones_on_request(self):
+        from library import LibrarySync
+        with tempfile.TemporaryDirectory() as d:
+            dirs = {"videos": Path(d) / "V", "audios": Path(d) / "A", "snapshots": Path(d) / "S"}
+            for p in dirs.values():
+                p.mkdir()
+            (dirs["videos"] / "have.mp4").write_bytes(b"123")
+            registry = DeviceRegistry()
+            phone = []
+            hello(registry, "phone", "sp", sink=phone)
+            hub = SyncHub(registry)
+            lib = LibrarySync(registry, hub, lambda: dirs)
+            changes = []
+            lib.on_change = lambda: changes.append(1)
+            hub.extra_handlers.append(lib.handle)
+            big = LibrarySync.MAX_AUTO_BYTES + 1
+            items = [{"id": "have.mp4", "name": "have.mp4", "size": 3}, {"id": "huge.mp4", "name": "huge.mp4", "size": big}]
+            hub.handle("library_items", {"items": items, "client_session": "sp"}, phone.append)
+            self.assertEqual(changes, [1])
+            # Too big to copy by itself, so it's listed as still on the phone...
+            self.assertFalse(any(p.get("type") == "library_fetch" for p in phone))
+            self.assertEqual([(dev, i["name"]) for dev, _n, i in lib.missing()], [("phone", "huge.mp4")])
+            # ...and copied when asked.
+            self.assertTrue(lib.fetch("phone", "huge.mp4"))
+            self.assertEqual([p["id"] for p in phone if p.get("type") == "library_fetch"], ["huge.mp4"])
+
 
 if __name__ == "__main__":
     unittest.main()

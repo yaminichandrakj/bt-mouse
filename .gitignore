@@ -24,3 +24,5 @@ pc_server/build/
 pc_server/dist/
 *.zip
 *.p12
+pc_server/unlock_provider/build/
+pc_server/LanyardUnlock.dll

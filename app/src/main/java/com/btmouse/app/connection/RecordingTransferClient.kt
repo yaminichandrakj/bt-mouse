@@ -444,6 +444,23 @@ class RecordingTransferClient(context: Context) {
         return entries.sortedByDescending { it.modified }
     }
 
+    init {
+        synchronized(instances) { instances.add(java.lang.ref.WeakReference(this)) }
+    }
+
+    companion object {
+        private val instances = mutableListOf<java.lang.ref.WeakReference<RecordingTransferClient>>()
+
+        /** A file landed in Videos / Audios / Snapshots from elsewhere (another phone): list it. */
+        fun localFilesChanged() {
+            val live = synchronized(instances) {
+                instances.removeAll { it.get() == null }
+                instances.mapNotNull { it.get() }
+            }
+            live.forEach { client -> synchronized(client) { client.publishRecordings() } }
+        }
+    }
+
     private fun publishRecordings() {
         val local = scanLocalFiles().associateBy { it.id }
         val merged = remoteFiles.map { remote ->

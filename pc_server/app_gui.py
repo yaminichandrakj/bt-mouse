@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.9.2"
 GITHUB_REPOSITORY = "yaminichandrakj/lanyard"
 COMPANION_EXE_NAME = "Lanyard-Companion.exe"
 # Releases up to v1.9.0 shipped the companion under its old name.
@@ -1028,6 +1028,9 @@ class CompanionApp(QMainWindow):
     def _init_server(self):
         self.media_dirs = get_btmouse_media_dirs()
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
+        if self.server.ecosystem:
+            self.server.ecosystem.relay_url = self.remote_identity.worker_url
+        self.server.on_group_changed = lambda: self._run_on_ui(self._refresh_group_ui)
         self.available_apps = []
         self.quick_apps = []
         self.adapters = self.server.get_all_ips()
@@ -1065,6 +1068,10 @@ class CompanionApp(QMainWindow):
         if self.server.ecosystem and hasattr(self, "bridge"):
             from devices_page import wire_ecosystem
             self._run_on_ui(lambda: wire_ecosystem(self))
+            # The Library lists every device's recordings: refresh when a list or a file arrives.
+            refresh_library = lambda *_a: self._run_on_ui(self._refresh_recordings_soon)  # noqa: E731
+            self.server.ecosystem.library.on_change = refresh_library
+            self.server.ecosystem.sync.on_library_file = refresh_library
         self.server.on_status_callback = self._on_status
         self.server.on_pc_cam_frame_callback = self._on_pc_cam_frame_received
         if hasattr(self.server, "phone_camera_receiver") and self.server.phone_camera_receiver:
@@ -1251,6 +1258,44 @@ class CompanionApp(QMainWindow):
         if not allowed:
             self.screen_banner.hide()
 
+    def _set_unlock_over_internet(self, allowed):
+        if self.server:
+            self.server.set_unlock_over_internet(allowed)
+
+    def _refresh_phone_unlock(self, note=None):
+        import unlock as phone_unlock
+        state = phone_unlock.status()
+        text, button = {
+            "ready": ("Ready. Lock this PC, then tap Unlock in Lanyard on your phone.", "Turn off"),
+            "outdated": ("On, from an older Lanyard. Update it so unlock keeps working.", "Update"),
+            "not_installed": ("Off. Turn it on to unlock this PC from your phone.", "Turn on"),
+            "unavailable": ("This copy of Lanyard doesn't include phone unlock.", None),
+            "unsupported": ("Phone unlock works only on Windows.", None),
+        }[state]
+        self._phone_unlock_state = state
+        self.lbl_unlock_status.setText(note or text)
+        self.btn_unlock_setup.setVisible(button is not None)
+        self.btn_unlock_setup.setEnabled(True)
+        if button:
+            self.btn_unlock_setup.setText(button)
+        self.chk_unlock_internet.setEnabled(state in ("ready", "outdated"))
+
+    def _toggle_phone_unlock(self):
+        import unlock as phone_unlock
+        removing = getattr(self, "_phone_unlock_state", "") == "ready"
+        self.btn_unlock_setup.setEnabled(False)
+        self.lbl_unlock_status.setText("Waiting for Windows…")
+
+        def _worker():
+            ok, detail = phone_unlock.uninstall() if removing else phone_unlock.install()
+            if ok:
+                self.log("Turned off phone unlock." if removing else "Turned on phone unlock.")
+            else:
+                self.log(f"Phone unlock setup failed: {detail}")
+            self._run_on_ui(lambda: self._refresh_phone_unlock(None if ok else detail))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _build_statusbar(self, root_layout):
         """Kept for callers that update the footer text; the footer itself is no longer shown."""
         self.lbl_footer_left = QLabel(f"Lanyard for PC v{APP_VERSION}")
@@ -1317,13 +1362,44 @@ class CompanionApp(QMainWindow):
         pc.setContentsMargins(24, 24, 24, 24)
         pc.setSpacing(28)
 
+        qr_col = QVBoxLayout()
+        qr_col.setSpacing(6)
         self.qr_label = QLabel()
         self.qr_label.setFixedSize(196, 196)
         self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr_label.setStyleSheet("background-color: #FFFFFF; border-radius: 14px; padding: 12px;")
-        pc.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignTop)
+        qr_col.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.lbl_qr_live = QLabel("")
+        self.lbl_qr_live.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_qr_live.setStyleSheet("color: #8E8E8E; font-size: 12px;")
+        qr_col.addWidget(self.lbl_qr_live)
+        qr_col.addStretch()
+        pc.addLayout(qr_col)
 
-        pin_col = QVBoxLayout()
+        # Device group: who's in, remove, recovery words (replaces the PIN when available).
+        self.group_box = QWidget()
+        gb = QVBoxLayout(self.group_box)
+        gb.setContentsMargins(0, 0, 0, 0)
+        gb.setSpacing(6)
+        gb.addWidget(self._section_label("Your devices"))
+        lbl_group_d = QLabel("Scan the code with Lanyard on a phone or tablet to add it. The code changes every "
+                             "20 seconds and works once, so a photo of it is useless. Remove a device here and "
+                             "it's locked out straight away.")
+        lbl_group_d.setWordWrap(True)
+        lbl_group_d.setStyleSheet("color: #8E8E8E; font-size: 13px;")
+        gb.addWidget(lbl_group_d)
+        self.group_members_box = QVBoxLayout()
+        self.group_members_box.setSpacing(4)
+        gb.addLayout(self.group_members_box)
+        self.btn_group_words = make_button("Write down recovery words", "key")
+        self.btn_group_words.clicked.connect(self._show_recovery_words)
+        gb.addWidget(self.btn_group_words, 0, Qt.AlignmentFlag.AlignLeft)
+        gb.addStretch()
+        pc.addWidget(self.group_box, 1)
+
+        self.pin_box = QWidget()
+        pin_col = QVBoxLayout(self.pin_box)
+        pin_col.setContentsMargins(0, 0, 0, 0)
         pin_col.setSpacing(6)
         pin_col.addWidget(self._section_label("Pairing PIN"))
         self.lbl_wifi_pin = QLabel(self.auth_token)
@@ -1355,8 +1431,13 @@ class CompanionApp(QMainWindow):
         pin_row.addStretch()
         pin_col.addLayout(pin_row)
         pin_col.addStretch()
-        pc.addLayout(pin_col, 1)
+        pc.addWidget(self.pin_box, 1)
         layout.addWidget(pair_card)
+        # The live code changes every 20 s.
+        self.qr_timer = QTimer(self)
+        self.qr_timer.timeout.connect(self.generate_qr)
+        self.qr_timer.start(int(1000 * 20))
+        self._refresh_group_ui()
 
         layout.addSpacing(12)
         layout.addWidget(self._section_label("Ways to connect"))
@@ -1526,7 +1607,7 @@ class CompanionApp(QMainWindow):
     # Page 3: Media Library (Videos / Audios / Snapshots in Separate Folders)
     # ------------------------------------------------------------------
     def _create_recordings_page(self):
-        page, layout = self._page("Library", "Recordings and snapshots from your webcam and phone.", max_width=1100)
+        page, layout = self._page("Library", "Recordings and snapshots from your webcam, phones and tablets. Files still on a device are listed under its name; Open downloads them.", max_width=1100)
 
         card = QFrame()
         card.setObjectName("Card")
@@ -1786,6 +1867,34 @@ class CompanionApp(QMainWindow):
         self.chk_startup.toggled.connect(self._set_startup_enabled)
         pc.addWidget(self.chk_startup)
         layout.addWidget(pref_card)
+
+        layout.addSpacing(8)
+        layout.addWidget(self._section_label("Unlock with your phone"))
+        unlock_card = QFrame()
+        unlock_card.setObjectName("Card")
+        ul = QVBoxLayout(unlock_card)
+        ul.setContentsMargins(20, 16, 20, 16)
+        ul.setSpacing(12)
+        urow = QHBoxLayout()
+        self.lbl_unlock_status = QLabel()
+        self.lbl_unlock_status.setWordWrap(True)
+        urow.addWidget(self.lbl_unlock_status, 1)
+        self.btn_unlock_setup = QPushButton()
+        self.btn_unlock_setup.clicked.connect(self._toggle_phone_unlock)
+        urow.addWidget(self.btn_unlock_setup)
+        ul.addLayout(urow)
+        lbl_un = QLabel("Your Windows password stays on your phone behind its fingerprint and is sent only when "
+                        "you tap Unlock. Windows asks for administrator permission once to add Lanyard to the "
+                        "lock screen. It unlocks a locked PC, not one that has just restarted.")
+        lbl_un.setWordWrap(True)
+        lbl_un.setStyleSheet("color: #8E8E8E; font-size: 13px;")
+        ul.addWidget(lbl_un)
+        self.chk_unlock_internet = QCheckBox("Also allow unlocking over the internet")
+        self.chk_unlock_internet.setChecked(bool(getattr(self.server, "unlock_over_internet", False)))
+        self.chk_unlock_internet.toggled.connect(self._set_unlock_over_internet)
+        ul.addWidget(self.chk_unlock_internet)
+        layout.addWidget(unlock_card)
+        self._refresh_phone_unlock()
 
         layout.addSpacing(8)
         layout.addWidget(self._section_label("Recording"))
@@ -2206,10 +2315,40 @@ class CompanionApp(QMainWindow):
                 except OSError:
                     continue
 
+        # Recordings still only on a phone or tablet: listed here, downloaded on Open.
+        library = getattr(getattr(self.server, "ecosystem", None), "library", None) if self.server else None
+        if library is not None:
+            type_for = {"audio": ("Audios", "Audio", "mic"), "snapshot": ("Snapshots", "Snapshot", "photo")}
+            for device_id, device_name, item in library.missing():
+                folder_name, type_name, icon = type_for.get(item.get("type"), ("Videos", "Video", "video"))
+                size = int(item.get("size") or 0)
+                mtime = float(item.get("modified") or 0)
+                records.append({
+                    "path": None, "remote": (device_id, item.get("id") or item["name"]),
+                    "name": Path(str(item["name"])).name, "folder": f"On {device_name}",
+                    "size": size,
+                    "size_str": f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB",
+                    "mtime": mtime,
+                    "date_str": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d  %I:%M %p") if mtime else "",
+                    "is_video": folder_name == "Videos", "is_audio": folder_name == "Audios",
+                    "is_snapshot": folder_name == "Snapshots",
+                    "type_name": type_name, "type_icon": icon, "ext": Path(str(item["name"])).suffix.lower(),
+                })
+
         records.sort(key=lambda r: r["mtime"], reverse=True)
         self._all_recordings = records
         self._total_recordings_bytes = total_bytes
         self._filter_and_render_recordings()
+
+    def _refresh_recordings_soon(self):
+        """Many devices answer at once; refresh the Library once for all of them."""
+        timer = getattr(self, "_library_refresh_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.refresh_recordings)
+            self._library_refresh_timer = timer
+        timer.start(600)
 
     def _filter_and_render_recordings(self):
         if not hasattr(self, "tree_recordings"):
@@ -2270,21 +2409,40 @@ class CompanionApp(QMainWindow):
         except Exception:
             pass
 
-    def _get_selected_recording_path(self):
+    def _get_selected_recording(self):
         row = self.tree_recordings.currentRow()
         items = getattr(self, "_displayed_recordings", [])
         if 0 <= row < len(items):
-            return items[row]["path"]
+            return items[row]
         return None
 
+    def _get_selected_recording_path(self):
+        rec = self._get_selected_recording()
+        return rec["path"] if rec else None
+
+    def _download_remote_recording(self, rec):
+        device_id, item_id = rec["remote"]
+        library = self.server.ecosystem.library
+        if library.fetch(device_id, item_id):
+            self.lbl_selected_recording_info.setText(f"Downloading {rec['name']} from {rec['folder'][3:]}… It shows here when it's done.")
+        else:
+            self.lbl_selected_recording_info.setText(f"{rec['folder'][3:]} isn't connected right now.")
+
     def _on_tree_recording_selected(self):
-        path = self._get_selected_recording_path()
-        if path and Path(path).is_file():
+        rec = self._get_selected_recording()
+        path = rec["path"] if rec else None
+        if rec and rec.get("remote"):
+            self.lbl_selected_recording_info.setText(f"On {rec['folder'][3:]}. Open downloads it to this PC.")
+        elif path and Path(path).is_file():
             self.lbl_selected_recording_info.setText(f"Selected: {path}")
         else:
             self.lbl_selected_recording_info.setText("Select an item to play, inspect in Explorer, or delete.")
 
     def open_selected_recording(self):
+        rec = self._get_selected_recording()
+        if rec and rec.get("remote"):
+            self._download_remote_recording(rec)
+            return
         path = self._get_selected_recording_path()
         if not path or not Path(path).is_file():
             QMessageBox.information(self, "Media Library", "Select a recording or snapshot first.")
@@ -2364,6 +2522,13 @@ class CompanionApp(QMainWindow):
             "pin": self.auth_token,
             "token": self.auth_token,
         }
+        offer = self.server.group_offer() if self.server and getattr(self.server, "group", None) else None
+        if offer:
+            # Device group: a one-time join code replaces the PIN, which no longer lets anything in.
+            payload.update({"type": "lanyard_join", "v": 3, "pc": True})
+            payload.update(offer)
+            payload.pop("pin", None)
+            payload.pop("token", None)
         if self.remote_identity.worker_url and self.remote_identity.public_b64:
             payload["rv"] = {
                 "worker": self.remote_identity.worker_url,
@@ -2375,6 +2540,78 @@ class CompanionApp(QMainWindow):
     def generate_qr(self):
         if hasattr(self, "qr_label"):
             self._set_qr_pixmap(self.qr_label, self.pairing_payload(), 172)
+            if hasattr(self, "lbl_qr_live"):
+                live = bool(self.server and getattr(self.server, "group", None))
+                self.lbl_qr_live.setText("New code every 20 s · works once" if live else "")
+
+    # ------------------------------------------------------------------
+    # Device group
+    # ------------------------------------------------------------------
+    def _refresh_group_ui(self):
+        group = getattr(self.server, "group", None) if self.server else None
+        if not hasattr(self, "group_box"):
+            return
+        self.group_box.setVisible(group is not None)
+        self.pin_box.setVisible(group is None)
+        if group is None:
+            return
+        while self.group_members_box.count():
+            item = self.group_members_box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for m in sorted(group.members(), key=lambda m: (m["id"] != "pc", m["name"].lower())):
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            kind = {"pc": "This PC", "tablet": "Tablet"}.get(m.get("kind"), "Phone")
+            lbl = QLabel(f"{m['name']}  ·  {kind}")
+            rl.addWidget(lbl, 1)
+            if m["id"] != "pc":
+                btn = QPushButton("Remove")
+                btn.setObjectName("DangerBtn")
+                btn.clicked.connect(lambda _c=False, mid=m["id"], name=m["name"]: self._remove_group_member(mid, name))
+                rl.addWidget(btn)
+            self.group_members_box.addWidget(row)
+        self.btn_group_words.setVisible(bool(group.pending_words))
+        if hasattr(self, "lbl_sidebar_ip"):
+            n = len(group.members())
+            self.lbl_sidebar_ip.setText(f"{self.current_ip}  ·  {n} device{'s' if n != 1 else ''}")
+        self.generate_qr()
+        # Offer the words once, when someone is actually looking (not minimised, not a test run).
+        if (group.pending_words and not getattr(self, "_words_offered", False) and self.isVisible()
+                and not self.isMinimized() and QApplication.platformName() != "offscreen"):
+            self._words_offered = True
+            QTimer.singleShot(800, self._show_recovery_words)
+
+    def _remove_group_member(self, device_id, name):
+        ans = QMessageBox.question(
+            self, "Remove device",
+            f"Remove {name}? It's locked out straight away and needs a new code to join again.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ans == QMessageBox.StandardButton.Yes and self.server and self.server.remove_group_member(device_id):
+            self.log(f"Removed {name} from your devices.")
+            self._refresh_group_ui()
+
+    def _show_recovery_words(self):
+        group = getattr(self.server, "group", None) if self.server else None
+        if group is None or not group.pending_words:
+            return
+        words = group.pending_words.split()
+        grid = "\n".join("    ".join(f"{i + j + 1:>2}. {words[i + j]:<10}" for j in range(4)) for i in range(0, 24, 4))
+        box = QMessageBox(self)
+        box.setWindowTitle("Your recovery words")
+        box.setText("Write these 24 words down and keep them somewhere safe. They bring your devices back "
+                    "together if you ever lose all of them. They're shown only once and never leave this PC.")
+        box.setInformativeText(grid)
+        box.setStyleSheet("QLabel { font-family: Consolas, monospace; }")
+        done = box.addButton("I've written them down", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        group.words_seen()
+        self._refresh_group_ui()
+        if box.clickedButton() is not done:
+            self.log("Recovery words skipped. Without them, losing every device means starting a new group.")
         if hasattr(self, "lbl_wan_url"):
             self.lbl_wan_url.setText(f"ws://{self.current_ip}:{self.ws_port}")
 
@@ -2432,6 +2669,8 @@ class CompanionApp(QMainWindow):
                                 "(for example https://btmouse-rv.<you>.workers.dev).")
             return
         self.remote_identity.set_worker_url(url)
+        if self.server and self.server.ecosystem:
+            self.server.ecosystem.relay_url = url
         self.generate_wan_qr()
         if url:
             QMessageBox.information(self, "Saved",

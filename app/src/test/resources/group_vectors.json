@@ -1,0 +1,59 @@
+{
+ "hkdf": {
+  "ikm": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "info": "lanyard-test",
+  "out": "604bc5090537480f64cba32a87b3fa1ef7081d32b5e1b7190e02620bcc471c3f"
+ },
+ "words_zero": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+ "words": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
+ "secret": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+ "group_id": "9c20837a1459b8ea",
+ "rec_sign_pub": "3jRfdZ7bFKek0D3GCkV4WvUzz+l4m+Fu5kCyCMp5tq0=",
+ "rec_dh_pub": "n5d/5qGftge439woDmB9QBJyxT8svmxNh9CuHxr1Plo=",
+ "backup_id": "286cbeff20d49bd1379011b47d21db1f",
+ "epoch_key": "1111111111111111111111111111111111111111111111111111111111111111",
+ "epoch_check": "3aff358b9c33a7e7bf313d360c6a9de4",
+ "seed_a": "0707070707070707070707070707070707070707070707070707070707070707",
+ "dh_a": "0909090909090909090909090909090909090909090909090909090909090909",
+ "roster": {
+  "group_id": "9c20837a1459b8ea",
+  "version": 3,
+  "epoch": 2,
+  "epoch_check": "3aff358b9c33a7e7bf313d360c6a9de4",
+  "rec_sign": "3jRfdZ7bFKek0D3GCkV4WvUzz+l4m+Fu5kCyCMp5tq0=",
+  "rec_dh": "n5d/5qGftge439woDmB9QBJyxT8svmxNh9CuHxr1Plo=",
+  "members": [
+   {
+    "id": "pc",
+    "name": "Laptop",
+    "kind": "pc",
+    "sign": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "dh": "V9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE="
+   },
+   {
+    "id": "a1b2",
+    "name": "Pixel ✓",
+    "kind": "phone",
+    "sign": "bnoc3Smwt4/ROvTFWY/v9O8qlxZuPKby5Pv8zYBQW/E=",
+    "dh": "9bLW5g+Ud+MQwpgtqqbJE2wQihd3xZR+RI+jfWgXRVc="
+   }
+  ],
+  "signer": "pc",
+  "sig": "neRQMvwDURrC1cQewON0IamqPZ12yfGtUAoxWdiq7GhJHWTp57gsWNuimlHJLh+RKAeEdl7P1aJ/e45l0fDyDw=="
+ },
+ "roster_bytes": "lanyard-roster-v1\n9c20837a1459b8ea\n3\n2\n3aff358b9c33a7e7bf313d360c6a9de4\n3jRfdZ7bFKek0D3GCkV4WvUzz+l4m+Fu5kCyCMp5tq0=\nn5d/5qGftge439woDmB9QBJyxT8svmxNh9CuHxr1Plo=\na1b2\tphone\tbnoc3Smwt4/ROvTFWY/v9O8qlxZuPKby5Pv8zYBQW/E=\t9bLW5g+Ud+MQwpgtqqbJE2wQihd3xZR+RI+jfWgXRVc=\tUGl4ZWwg4pyT\npc\tpc\t6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=\tV9tLNZ8jrl4Ubk4lEgVnBHIlBjSMFQwUdT0Mkz0E1CE=\tTGFwdG9w\n",
+ "sealed": {
+  "blob": "eDgiOwAazE2eia+SDgpU9ZexxAyBRXlALaDQK3D+PCGNA6BMMN9WUg9TxmxcVbNsS3GKhZNmwPwQ0VrDmdfqfFK8PMQAg24i8ek=",
+  "info": "lanyard-epoch|9c20837a1459b8ea|2",
+  "plain": "epoch key here"
+ },
+ "hello_bytes": "lanyard-hs-c|9c20837a1459b8ea|a1b2|Y2xpZW50",
+ "transcript": "lanyard-hs|v2|9c20837a1459b8ea|a1b2|pc|Y2xpZW50|c2VydmVy",
+ "session_key": "9580a919f46dc9939869ebf86d9fbc98d1b69ccfc5e8eafaab618395881b2a5f",
+ "shared": "2222222222222222222222222222222222222222222222222222222222222222",
+ "token": "33333333333333333333333333333333",
+ "token_id": "a088eff91e38dff1",
+ "join_transcript": "lanyard-join-v1|a088eff91e38dff1|aW52|am9pbg==|a1b2|bnoc3Smwt4/ROvTFWY/v9O8qlxZuPKby5Pv8zYBQW/E=|9bLW5g+Ud+MQwpgtqqbJE2wQihd3xZR+RI+jfWgXRVc=",
+ "join_key": "69f921d74ec1685510a2d5493a4d030f19ed9118190233c026f99d82e00ac4a0",
+ "join_proof": "8d91d0a3fd6c55a9d8cc6628cd4cd96c555d60a8c12b57d80adfdac9b0de7281"
+}

@@ -28,6 +28,10 @@ import java.io.ByteArrayOutputStream
 object ScreenShare {
     private const val TAG = "ScreenShare"
     private const val TARGET_WIDTH = 720
+    /** Short side captured while someone watches as video: sharp text, still light to encode. */
+    private const val VIDEO_WIDTH = 1080
+    @Volatile private var captureShort = 0
+    private var frameBitmap: Bitmap? = null
     private const val FPS = 12
     // Sealed and base64 twice it must still fit one 64 KB datagram.
     private const val MAX_JPEG_BYTES = 30_000
@@ -43,7 +47,7 @@ object ScreenShare {
     private var thread: HandlerThread? = null
     private var lastSent = 0L
     private var lastVideo = 0L
-    private const val VIDEO_FPS = 24
+    private const val VIDEO_FPS = 30
     /** Latest picture, for a hub client's Screen preview. */
     @Volatile var lastJpeg: ByteArray? = null
         private set
@@ -134,7 +138,9 @@ object ScreenShare {
         val mp = projection ?: return
         val looper = thread?.looper ?: return
         val (sw, sh) = DeviceIdentity.screenSize(context)
-        val scale = TARGET_WIDTH.toFloat() / minOf(sw, sh)
+        val short = minOf(minOf(sw, sh), if (Ecosystem.wantsH264()) VIDEO_WIDTH else TARGET_WIDTH)
+        captureShort = if (Ecosystem.wantsH264()) VIDEO_WIDTH else TARGET_WIDTH
+        val scale = short.toFloat() / minOf(sw, sh)
         val w = ((sw * scale).toInt() / 2) * 2
         val h = ((sh * scale).toInt() / 2) * 2
         val r = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
@@ -165,22 +171,41 @@ object ScreenShare {
             val h264Due = Ecosystem.wantsH264() && now - lastVideo >= 1000L / VIDEO_FPS
             val jpegDue = Ecosystem.jpegViewers() + AndroidHub.screenViewers() > 0 && now - lastSent >= 1000L / FPS
             if (!Ecosystem.wantsH264() && H264Encoder.running) H264Encoder.stop()
+            // Capture sharper while someone watches as video, lighter otherwise.
+            val wantShort = if (Ecosystem.wantsH264()) VIDEO_WIDTH else TARGET_WIDTH
+            val ctx = appContext
+            if (ctx != null && wantShort != captureShort) {
+                captureShort = wantShort
+                thread?.looper?.let { Handler(it).post { runCatching { createDisplay(ctx) } } }
+            }
             if (!h264Due && !jpegDue) return
             val plane = image.planes[0]
             val pixelStride = plane.pixelStride
             val rowPadding = plane.rowStride - pixelStride * image.width
-            val padded = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
+            // One bitmap reused for every frame: at 30 fps a new one each time keeps the GC busy.
+            val fullW = image.width + rowPadding / pixelStride
+            val padded = frameBitmap?.takeIf { it.width == fullW && it.height == image.height && !it.isRecycled }
+                ?: Bitmap.createBitmap(fullW, image.height, Bitmap.Config.ARGB_8888).also {
+                    frameBitmap?.recycle()
+                    frameBitmap = it
+                }
+            plane.buffer.rewind()
             padded.copyPixelsFromBuffer(plane.buffer)
-            var bmp = if (rowPadding == 0) padded else Bitmap.createBitmap(padded, 0, 0, image.width, image.height).also { padded.recycle() }
             if (h264Due) {
                 lastVideo = now
-                H264Encoder.feed(bmp, deviceW, deviceH)
+                H264Encoder.feed(padded, deviceW, deviceH, image.width, image.height)
             }
-            if (!jpegDue) {
-                bmp.recycle()
-                return
-            }
+            if (!jpegDue) return
             lastSent = now
+            var bmp = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
+            val shortSide = minOf(bmp.width, bmp.height)
+            if (shortSide > TARGET_WIDTH) {
+                // Pictures stay at the light size even while video viewers get the sharp one.
+                val s = TARGET_WIDTH.toFloat() / shortSide
+                val smaller = Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+                bmp.recycle()
+                bmp = smaller
+            }
             var jpeg = encode(bmp)
             while (jpeg.size > MAX_JPEG_BYTES && bmp.width > 240) {
                 val smaller = Bitmap.createScaledBitmap(bmp, bmp.width * 3 / 4, bmp.height * 3 / 4, true)
@@ -231,6 +256,9 @@ object ScreenShare {
         thread = null
         viewers = 0
         lastJpeg = null
+        frameBitmap?.recycle()
+        frameBitmap = null
+        captureShort = 0
         H264Encoder.stop()
         if (wasActive) Ecosystem.announceStream("screen", "Screen", false)
     }

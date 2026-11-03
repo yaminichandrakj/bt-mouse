@@ -65,7 +65,7 @@ class FileTransfers(
 
     private class Outgoing(
         val id: String, val name: String, val size: Long, val peer: String, val peerName: String,
-        val chunks: Int
+        val chunks: Int, val gallery: Boolean = false
     ) {
         val done = ConcurrentHashMap.newKeySet<Int>()
         @Volatile var accepted = false
@@ -80,7 +80,7 @@ class FileTransfers(
     private class Incoming(
         val id: String, val name: String, val size: Long, val sha256: String, val replyTo: String?,
         val peerName: String, val part: File, val meta: File, val library: Boolean = false,
-        val clipboard: Boolean = false
+        val clipboard: Boolean = false, val gallery: Boolean = false
     ) {
         val chunks = maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt())
         val done = ConcurrentHashMap.newKeySet<Int>()
@@ -126,13 +126,18 @@ class FileTransfers(
 
     // --- sending -------------------------------------------------------
     /** Send one of this device's recordings for the shared library (no notification, filed by type). */
-    fun sendLibraryFile(deviceId: String, file: File) {
-        sendUri(deviceId, "your PC", Uri.fromFile(file), library = true, displayName = file.name)
+    fun sendLibraryFile(deviceId: String, file: File, peerName: String = "your PC") {
+        sendUri(deviceId, peerName, Uri.fromFile(file), library = true, displayName = file.name)
+    }
+
+    /** Send a photo or video from this phone's gallery; the other phone puts it in its own gallery. */
+    fun sendGalleryItem(deviceId: String, peerName: String, uri: Uri, name: String) {
+        sendUri(deviceId, peerName, uri, library = true, displayName = name, gallery = true)
     }
 
     fun sendUri(
         deviceId: String, peerName: String, uri: Uri, library: Boolean = false, displayName: String? = null,
-        clipboard: Boolean = false
+        clipboard: Boolean = false, gallery: Boolean = false
     ) {
         scope.launch(Dispatchers.IO) {
             val id = UUID.randomUUID().toString().replace("-", "").take(16)
@@ -147,7 +152,7 @@ class FileTransfers(
             val direct = runCatching { openDirect(uri) }.getOrNull()
             if (direct != null) {
                 val (size, sha) = direct
-                val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()))
+                val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()), gallery)
                 outgoing[id] = t
                 try {
                     runSend(t, { directChannel(uri) }, sha, library, clipboard)
@@ -175,7 +180,7 @@ class FileTransfers(
                 } ?: throw IllegalStateException("Could not open the file")
                 val sha = digest.digest().joinToString("") { "%02x".format(it) }
                 val size = local.length()
-                val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()))
+                val t = Outgoing(id, name, size, deviceId, peerName, maxOf(1, ((size + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt()), gallery)
                 outgoing[id] = t
                 runSend(t, { RandomAccessFile(local, "r").channel }, sha, library, clipboard)
             } catch (e: Exception) {
@@ -224,6 +229,7 @@ class FileTransfers(
             addProperty("from_name", DeviceIdentity.name(context))
             if (library) addProperty("library", true)
             if (clipboard) addProperty("clipboard", true)
+            if (t.gallery) addProperty("gallery", true)
             if (t.peer == Ecosystem.PC_ID && Ecosystem.pcLanHost() != null) addProperty("http_upload", true)
         }
         publish(TransferInfo(t.id, t.name, t.size, t.peerName, true, "waiting", 0f))
@@ -451,7 +457,8 @@ class FileTransfers(
                 id, safeName(json.get("name")?.asString), size, sha, from,
                 json.get("from_name")?.takeIf { !it.isJsonNull }?.asString ?: "your PC", part, meta,
                 library = json.get("library")?.asBoolean ?: false,
-                clipboard = json.get("clipboard")?.asBoolean ?: false
+                clipboard = json.get("clipboard")?.asBoolean ?: false,
+                gallery = json.get("gallery")?.asBoolean ?: false
             )
             if (part.exists() && part.length() == size) {
                 runCatching { meta.readText().split(',').mapNotNull { it.trim().toIntOrNull() }.forEach { created.done.add(it) } }
@@ -533,6 +540,7 @@ class FileTransfers(
         if (ok) openUri = runCatching {
             when {
                 inc.clipboard -> saveToClipboard(inc)
+                inc.gallery -> saveToGallery(inc)
                 inc.library -> saveToLibrary(inc)
                 else -> saveToDownloads(inc)
             }
@@ -583,7 +591,45 @@ class FileTransfers(
             inc.part.copyTo(dest, overwrite = true)
             inc.part.delete()
         }
+        com.btmouse.app.connection.RecordingTransferClient.localFilesChanged()
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+    }
+
+    /**
+     * A photo or video from another phone's gallery, at full quality: into this phone's
+     * gallery (Pictures/Lanyard or Movies/Lanyard), where the Photos app shows it.
+     */
+    private fun saveToGallery(inc: Incoming): Uri {
+        val mime = mimeFor(inc.name)
+        val video = mime.startsWith("video/")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val collection = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, inc.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, (if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES) + "/Lanyard")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(collection, values) ?: throw IllegalStateException("No gallery")
+            resolver.openOutputStream(uri)?.use { out -> inc.part.inputStream().use { it.copyTo(out, 256 * 1024) } }
+                ?: throw IllegalStateException("Could not write")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            inc.part.delete()
+            PeerLibrary.rememberGallerySave(context, inc.name, inc.size, uri)
+            return uri
+        }
+        // Android 9: the app's own Photos folder.
+        val dest = File(File(context.getExternalFilesDir(null), "Photos").apply { mkdirs() }, inc.name)
+        if (!inc.part.renameTo(dest)) {
+            inc.part.copyTo(dest, overwrite = true)
+            inc.part.delete()
+        }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+        PeerLibrary.rememberGallerySave(context, inc.name, inc.size, uri)
+        return uri
     }
 
     /** Downloads/Lanyard on Android 10+, the app's own Received folder before that. */

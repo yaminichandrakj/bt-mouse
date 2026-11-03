@@ -113,6 +113,7 @@ class SyncHub:
         self.on_clipboard_image = None  # (path) -> None: put a picture on the PC clipboard
         self.on_transfer = None         # (info dict) -> None: progress for the UI
         self.on_file_received = None    # (path, from_name) -> None
+        self.on_library_file = None     # (path) -> None: a device's recording arrived in the library
         self._last_clip_id = None
         self.library_dir = None         # (name) -> folder for library files; set by LibrarySync
         self.http = None                # TransferHttpServer, when the LAN fast path is running
@@ -465,6 +466,11 @@ class SyncHub:
                 except OSError:
                     pass
         self._notify(t)
+        if ok and getattr(t, "library", False) and self.on_library_file:
+            try:
+                self.on_library_file(getattr(t, "path", None))
+            except Exception:
+                pass
         if ok and getattr(t, "clipboard", False):
             if self.on_clipboard_image and self.clipboard_enabled:
                 try:

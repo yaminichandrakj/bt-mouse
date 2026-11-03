@@ -31,6 +31,10 @@ class SettingsRepository(context: Context) {
     private val _hapticFeedback = MutableStateFlow(prefs.getBoolean(KEY_HAPTIC, true))
     val hapticFeedback: StateFlow<Boolean> = _hapticFeedback.asStateFlow()
 
+    // Keyboard tab: send each keystroke as you type (true) or the whole line on Send (false).
+    private val _liveTyping = MutableStateFlow(prefs.getBoolean(KEY_LIVE_TYPING, true))
+    val liveTyping: StateFlow<Boolean> = _liveTyping.asStateFlow()
+
     private val _airMouseSensitivity = MutableStateFlow(prefs.getFloat(KEY_AIR_MOUSE_SENSITIVITY, 18.0f))
     val airMouseSensitivity: StateFlow<Float> = _airMouseSensitivity.asStateFlow()
 
@@ -68,6 +72,45 @@ class SettingsRepository(context: Context) {
     // WAN rendezvous: where to look up the PC's current tunnel URL, and the key to verify it.
     private val _rvWorker = MutableStateFlow(prefs.getString(KEY_RV_WORKER, "") ?: "")
     val rvWorker: StateFlow<String> = _rvWorker.asStateFlow()
+
+    // Worker that runs the family relay. Kept apart from rvWorker so forgetting the PC
+    // doesn't cut phones off from each other; the PC or a PIN-paired phone hands it over.
+    private val _relayUrl = MutableStateFlow(prefs.getString(KEY_RELAY_URL, "") ?: "")
+    val relayUrl: StateFlow<String> = _relayUrl.asStateFlow()
+
+    fun setRelayUrl(url: String) {
+        val clean = url.trim().trimEnd('/')
+        if (clean == _relayUrl.value || (clean.isNotEmpty() && !clean.startsWith("https://"))) return
+        _relayUrl.value = clean
+        prefs.edit().putString(KEY_RELAY_URL, clean).apply()
+    }
+
+    // Reach family phones on other networks through the relay.
+    // Let this phone's other devices browse and copy its photos and videos (off until turned on).
+    private val _shareGallery = MutableStateFlow(prefs.getBoolean(KEY_SHARE_GALLERY, false))
+    val shareGallery: StateFlow<Boolean> = _shareGallery.asStateFlow()
+
+    fun setShareGallery(value: Boolean) {
+        _shareGallery.value = value
+        prefs.edit().putBoolean(KEY_SHARE_GALLERY, value).apply()
+    }
+
+    // Send copies made in other apps by themselves (Lanyard control notices the copy).
+    private val _catchCopies = MutableStateFlow(prefs.getBoolean(KEY_CATCH_COPIES, true))
+    val catchCopies: StateFlow<Boolean> = _catchCopies.asStateFlow()
+
+    fun setCatchCopies(value: Boolean) {
+        _catchCopies.value = value
+        prefs.edit().putBoolean(KEY_CATCH_COPIES, value).apply()
+    }
+
+    private val _internetRelay = MutableStateFlow(prefs.getBoolean(KEY_INTERNET_RELAY, true))
+    val internetRelay: StateFlow<Boolean> = _internetRelay.asStateFlow()
+
+    fun setInternetRelay(value: Boolean) {
+        _internetRelay.value = value
+        prefs.edit().putBoolean(KEY_INTERNET_RELAY, value).apply()
+    }
 
     private val _rvId = MutableStateFlow(prefs.getString(KEY_RV_ID, "") ?: "")
     val rvId: StateFlow<String> = _rvId.asStateFlow()
@@ -121,8 +164,8 @@ class SettingsRepository(context: Context) {
         prefs.edit().putBoolean(KEY_SETUP_DONE, done).apply()
     }
 
-    private val _smoothMirroring = MutableStateFlow(prefs.getBoolean(KEY_SMOOTH_MIRRORING, false))
-    /** Ask for H.264 video when mirroring another phone or tablet (beta). */
+    private val _smoothMirroring = MutableStateFlow(prefs.getBoolean(KEY_SMOOTH_MIRRORING, true))
+    /** Ask for H.264 video when mirroring another phone or tablet; falls back to pictures by itself. */
     val smoothMirroring: StateFlow<Boolean> = _smoothMirroring.asStateFlow()
 
     fun setSmoothMirroring(enabled: Boolean) {
@@ -183,6 +226,11 @@ class SettingsRepository(context: Context) {
     fun setHapticFeedback(value: Boolean) {
         _hapticFeedback.value = value
         prefs.edit().putBoolean(KEY_HAPTIC, value).apply()
+    }
+
+    fun setLiveTyping(value: Boolean) {
+        _liveTyping.value = value
+        prefs.edit().putBoolean(KEY_LIVE_TYPING, value).apply()
     }
 
     fun setAirMouseSensitivity(value: Float) {
@@ -287,6 +335,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_INVERT_SCROLL = "invert_scroll"
         private const val KEY_TAP_TO_CLICK = "tap_to_click"
         private const val KEY_HAPTIC = "haptic_feedback"
+        private const val KEY_LIVE_TYPING = "live_typing"
         private const val KEY_AIR_MOUSE_SENSITIVITY = "air_mouse_sensitivity"
         private const val KEY_WIFI_HOST = "wifi_host"
         private const val KEY_WIFI_PORT = "wifi_port"
@@ -297,6 +346,10 @@ class SettingsRepository(context: Context) {
         private const val KEY_PC_NAME = "pc_name"
         private const val KEY_PC_BT_ADDRESS = "pc_bt_address"
         private const val KEY_RV_WORKER = "rv_worker"
+        private const val KEY_RELAY_URL = "relay_url"
+        private const val KEY_INTERNET_RELAY = "internet_relay"
+        private const val KEY_CATCH_COPIES = "catch_copies"
+        private const val KEY_SHARE_GALLERY = "share_gallery"
         private const val KEY_RV_ID = "rv_id"
         private const val KEY_RV_PUB = "rv_pub"
         private const val KEY_CUSTOM_APPS = "custom_apps"
