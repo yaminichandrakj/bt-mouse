@@ -60,8 +60,8 @@ object Library {
         val name = File(request.get("id")?.asString ?: return).name
         val file = localFiles(context).firstOrNull { it.name == name } ?: return
         val to = request.get("from")?.takeIf { !it.isJsonNull }?.asString ?: Ecosystem.PC_ID
-        val name = Ecosystem.devices.value.firstOrNull { it.id == to }?.name ?: "your PC"
-        Ecosystem.files.sendLibraryFile(to, file, name)
+        val peerName = Ecosystem.devices.value.firstOrNull { it.id == to }?.name ?: "your PC"
+        Ecosystem.files.sendLibraryFile(to, file, peerName)
     }
 
     /** This device's own copy of [name], if it has one (made here or fetched before). */

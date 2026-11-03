@@ -392,7 +392,7 @@ object Ecosystem {
                 sendTo(watcher, payload.deepCopy())
             }
         }
-        val pcWantsJpeg = PC_ID in directWatchers && PC_ID !in h264Watchers
+        val pcWantsJpeg = directWatchers.containsKey(PC_ID) && PC_ID !in h264Watchers
         if (kind != "screen" || pcScreenViewers > 0 || pcWantsJpeg) send(payload)
     }
 
@@ -450,7 +450,7 @@ object Ecosystem {
             addProperty("pcm", android.util.Base64.encodeToString(pcm, android.util.Base64.NO_WRAP))
         }
         directWatchers.keys.filter { it != PC_ID }.forEach { sendTo(it, payload.deepCopy()) }
-        if (pcScreenViewers > 0 || PC_ID in directWatchers) send(payload)
+        if (pcScreenViewers > 0 || directWatchers.containsKey(PC_ID)) send(payload)
     }
 
     private fun onStreamAudio(json: JsonObject) {
