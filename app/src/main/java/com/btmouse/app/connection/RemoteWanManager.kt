@@ -114,7 +114,8 @@ class RemoteWanManager(
 
     fun connect(url: String, token: String) {
         disconnect()
-        if (token.length != 6 || token.any { !it.isDigit() }) {
+        // In a device group the tunnel needs no PIN: everything rides a member session.
+        if (!secure.groupMode && (token.length != 6 || token.any { !it.isDigit() })) {
             _statusMessage.value = "Enter the six-digit pairing PIN shown by the PC companion"
             return
         }
@@ -140,6 +141,7 @@ class RemoteWanManager(
                 val authPacket = JsonObject().apply {
                     addProperty("type", "auth")
                     addProperty("token", token)
+                    if (secure.groupMode) addProperty("group", true)
                 }
                 ws.send(authPacket.toString())
             }
@@ -223,7 +225,7 @@ class RemoteWanManager(
             val parsed = gson.fromJson(text, JsonObject::class.java) ?: return
             val root = secure.unwrap(parsed) ?: return
             if (root.get("type")?.asString == "key_exchange_ack") {
-                secure.onAck(root)
+                if (!secure.onAck(root)) secure.notMemberMessage?.let { _statusMessage.value = it }
                 return
             }
             if (root.get("type")?.asString == "secure_reset") {
@@ -233,6 +235,7 @@ class RemoteWanManager(
                 return
             }
             if (_isConnected.value && com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
+            if (PcUnlock.handleIncoming(root)) return
             val type = root.get("type")?.asString ?: ""
             if (_isConnected.value) recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
 
@@ -521,6 +524,8 @@ class RemoteWanManager(
         }
     }
 
+    override val canSendSecrets: Boolean get() = _isConnected.value && secure.isActive
+
     override fun sendJsonObject(obj: JsonObject) {
         sendJson(obj.deepCopy())
     }
@@ -538,7 +543,8 @@ class RemoteWanManager(
                 }
             }
         }
-        if (!socket.send(secure.wrap(obj.toString()))) {
+        val wrapped = secure.wrap(obj.toString()) ?: return
+        if (!socket.send(wrapped)) {
             Log.w(tag, "WebSocket rejected an outgoing packet")
         }
     }

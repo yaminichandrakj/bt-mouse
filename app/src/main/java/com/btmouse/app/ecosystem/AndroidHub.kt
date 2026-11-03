@@ -153,14 +153,15 @@ object AndroidHub {
     }
 
     /** What another device scans: the same JSON the PC's pairing QR uses. */
-    fun pairingCode(): String? {
+    /** A live join code for this phone's QR (new every 20 s, works once): null without Wi-Fi. */
+    fun joinCode(): String? {
         val ip = localIpv4() ?: return null
-        return JsonObject().apply {
-            addProperty("type", "lanyard_hub")
+        return Group.newOffer().apply {
+            addProperty("type", "lanyard_join")
+            addProperty("v", 3)
             addProperty("name", DeviceIdentity.name(appContext))
             addProperty("ip", ip)
             addProperty("port", PORT)
-            addProperty("pin", pin())
         }.toString()
     }
 
@@ -351,6 +352,14 @@ object AndroidHub {
             onPcCall(json, from)
             return
         }
+        if (type == "group_join") {
+            // Someone scanned this phone's live code (Devices › Add a device).
+            if (isBlocked(ip)) return
+            val (reply, name) = Group.acceptJoin(json)
+            send(HubClient(from), reply)
+            if (name == null) recordFailure(ip) else Ecosystem.onGroupJoined(name)
+            return
+        }
         if (type == "family_challenge") {
             // Step 1 of joining as a family member: a one-time number to prove the key against.
             val nonce = randomHex(16)
@@ -361,7 +370,8 @@ object AndroidHub {
             })
             return
         }
-        val byPin = token == pin()
+        // PIN pairing is off: devices join the group with a live QR, then link with the group key.
+        val byPin = false
         // A family link's session token was visible in the connect answer, so it only counts on sealed packets.
         val bySession = token != null && sealed && clients[key]?.session?.let { it == token } == true
         var byProof = false

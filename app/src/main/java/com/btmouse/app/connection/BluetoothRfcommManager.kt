@@ -190,7 +190,7 @@ class BluetoothRfcommManager(
                 }
                 secure.reset()
                 sendJson(handshake, includeSeq = false)
-                if (pinSupplier().length == 6) secure.begin()?.let { sendJson(it, includeSeq = false) }
+                if (pinSupplier().length == 6 || secure.groupMode) secure.begin()?.let { sendJson(it, includeSeq = false) }
                 queryMedia()
                 startHeartbeat()
 
@@ -277,7 +277,7 @@ class BluetoothRfcommManager(
             val parsed = gson.fromJson(line, JsonObject::class.java) ?: return
             val root = secure.unwrap(parsed) ?: return
             if (root.get("type")?.asString == "key_exchange_ack") {
-                secure.onAck(root)
+                if (!secure.onAck(root)) secure.notMemberMessage?.let { _statusMessage.value = it }
                 return
             }
             if (root.get("type")?.asString == "secure_reset") {
@@ -287,6 +287,7 @@ class BluetoothRfcommManager(
                 return
             }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
+            if (PcUnlock.handleIncoming(root)) return
             recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
             val type = root.get("type")?.asString ?: ""
             when (type) {
@@ -529,6 +530,9 @@ class BluetoothRfcommManager(
         }
     }
 
+    // Paired Bluetooth links are encrypted by the radio.
+    override val canSendSecrets: Boolean get() = _isConnected.value
+
     override fun sendJsonObject(obj: JsonObject) {
         if (_isConnected.value) sendJson(obj.deepCopy())
     }
@@ -544,7 +548,7 @@ class BluetoothRfcommManager(
                 }
             }
         }
-        sendQueue.trySend(secure.wrap(obj.toString()))
+        secure.wrap(obj.toString())?.let { sendQueue.trySend(it) }
     }
 
     override fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int, hScroll: Int) {

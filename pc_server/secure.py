@@ -52,6 +52,37 @@ class SessionStore:
         self._lock = threading.Lock()
         self._sessions = {}
 
+    def handshake_v2(self, data, group):
+        """A group member's key_exchange (v 2): checked against the roster. Returns the reply."""
+        if not HAS_CRYPTO:
+            return None
+        reply, key, device_id = group.accept_hello(data)
+        if key is not None:
+            sid = secrets.token_hex(8)
+            with self._lock:
+                self._prune()
+                self._sessions[sid] = [key, time.monotonic(), device_id]
+            reply["sid"] = sid
+        return reply
+
+    def device_of(self, sid):
+        """The group member a session belongs to, or None (legacy PIN sessions, unknown ids)."""
+        with self._lock:
+            entry = self._sessions.get(str(sid or ""))
+            return entry[2] if entry and len(entry) > 2 else None
+
+    def drop_device(self, device_id):
+        """A device was removed from the group: end its sessions now."""
+        with self._lock:
+            for sid in [s for s, e in self._sessions.items() if len(e) > 2 and e[2] == device_id]:
+                del self._sessions[sid]
+
+    def drop_except(self, device_ids):
+        """End member sessions of devices no longer in the group."""
+        with self._lock:
+            for sid in [s for s, e in self._sessions.items() if len(e) > 2 and e[2] not in device_ids]:
+                del self._sessions[sid]
+
     def handshake(self, data, pin):
         """Answer a phone's key_exchange. Returns the reply dict, or None to ignore it."""
         if not HAS_CRYPTO:
@@ -110,7 +141,7 @@ class SessionStore:
 
     def _prune(self):
         now = time.monotonic()
-        for sid in [s for s, (_, last) in self._sessions.items() if now - last > self.IDLE_LIMIT]:
+        for sid in [s for s, e in self._sessions.items() if now - e[1] > self.IDLE_LIMIT]:
             del self._sessions[sid]
 
 

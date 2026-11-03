@@ -10,6 +10,8 @@
 //   PUT /r/:id   body {data, sig, pub}  -> store if signature valid
 //   GET /r/:id                          -> {data, sig} or 404
 //   GET /relay/:room?d=:device  (WebSocket upgrade) -> join a family relay room
+//   PUT /g/:id   body {blob, version, pub, sig}  -> store a device group's sealed backup
+//   GET /g/:id                                   -> {blob, version} or 404
 //
 // The relay lets one person's phones and tablets reach each other over the internet
 // when they are on different networks and no PC is around. Each family has one room
@@ -62,6 +64,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean); // ["r", ":id"]
+
+    if (parts.length === 2 && parts[0] === "g") {
+      return groupBackup(request, env, parts[1]);
+    }
 
     if (parts.length === 2 && parts[0] === "relay") {
       const room = parts[1];
@@ -138,6 +144,56 @@ export default {
     return json(405, { error: "method_not_allowed" });
   },
 };
+
+// --- Device group backups --------------------------------------------------------
+//
+// The group's roster and current key, sealed to the recovery key that only the 24
+// recovery words can open. Members upload it after every change; the Worker can't read
+// it. Writes are signed with the group's backup key, bound on first use like the
+// rendezvous records, so only a member can replace it, and never with an older version.
+const MAX_BACKUP_BYTES = 64 * 1024;
+
+async function groupBackup(request, env, id) {
+  if (!/^[a-f0-9]{32}$/.test(id)) return json(404, { error: "not_found" });
+  const kv = env.RENDEZVOUS;
+  if (request.method === "GET") {
+    const stored = await kv.get(`grp:${id}`);
+    if (!stored) return json(404, { error: "no_backup" });
+    const { blob, version } = JSON.parse(stored);
+    return json(200, { blob, version });
+  }
+  if (request.method !== "PUT") return json(405, { error: "method_not_allowed" });
+  const raw = await request.text();
+  if (raw.length > MAX_BACKUP_BYTES) return json(413, { error: "too_large" });
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch (_e) {
+    return json(400, { error: "bad_json" });
+  }
+  const { blob, version, pub, sig } = body || {};
+  if (typeof blob !== "string" || !Number.isInteger(version) || typeof pub !== "string" || typeof sig !== "string") {
+    return json(400, { error: "missing_fields" });
+  }
+  let pubBytes, sigBytes;
+  try {
+    pubBytes = b64ToBytes(pub);
+    sigBytes = b64ToBytes(sig);
+  } catch (_e) {
+    return json(400, { error: "bad_base64" });
+  }
+  if (pubBytes.length !== 32) return json(400, { error: "bad_pub" });
+  const signed = new TextEncoder().encode(`${id}|${version}|${blob}`);
+  if (!(await verifyEd25519(pubBytes, sigBytes, signed))) return json(403, { error: "bad_signature" });
+  const boundPub = await kv.get(`grppub:${id}`);
+  if (boundPub && boundPub !== pub) return json(403, { error: "id_bound_to_other_key" });
+  const previous = await kv.get(`grp:${id}`);
+  if (previous && JSON.parse(previous).version > version) return json(409, { error: "older_than_stored" });
+  if (!boundPub) await kv.put(`grppub:${id}`, pub);
+  // Backups don't expire: they're what the recovery words restore from.
+  await kv.put(`grp:${id}`, JSON.stringify({ blob, version }));
+  return json(200, { ok: true });
+}
 
 // --- Family relay room ---------------------------------------------------------
 //

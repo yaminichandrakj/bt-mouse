@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /** Another device in the ecosystem, as the PC last described it. */
 data class PeerDevice(
@@ -167,6 +169,74 @@ object Ecosystem {
         }
     }
 
+    // --- device group ----------------------------------------------------------
+    /** Another member changed the group (someone joined, was removed, or it was restored). */
+    private fun onGroupUpdate(json: JsonObject) {
+        // Packets from the PC carry no "from".
+        val from = json.get("from")?.takeIf { !it.isJsonNull }?.asString ?: PC_ID
+        when (Group.applyUpdate(json)) {
+            // Pass it on so every member hears it; members that already have it ignore it.
+            "applied" -> broadcastGroup(json.deepCopy().apply { remove("from"); remove("to") }, except = from)
+            "removed" -> {
+                _lastClipboard.value = "This device was removed from your devices"
+                coordinator?.disconnectAll()
+            }
+        }
+    }
+
+    /** Send a group update to every member reachable right now: the PC, this hub's clients, peers and the relay. */
+    private fun broadcastGroup(update: JsonObject, except: String? = null) {
+        if (except != PC_ID && coordinator?.isConnected?.value == true) coordinator?.sendJsonObject(update.deepCopy())
+        AndroidHub.broadcast(update, except = except)
+        PeerLinks.peers.value.filter { it.id != except }.forEach { PeerLinks.sendTo(it.id, update.deepCopy()) }
+        RelayLinks.broadcast(update)
+    }
+
+    /** Someone joined through this phone's live code: tell the other members. */
+    fun onGroupJoined(name: String) {
+        _lastClipboard.value = "$name joined your devices"
+        broadcastGroup(Group.rosterUpdate())
+        uploadGroupBackup()
+    }
+
+    /** Remove a device: everyone else gets a new key it never sees. */
+    fun removeFromGroup(deviceId: String): Boolean {
+        val update = Group.remove(deviceId) ?: return false
+        broadcastGroup(update)
+        Group.relink()
+        uploadGroupBackup()
+        return true
+    }
+
+    /** Rejoin with the recovery words. Null on success, otherwise a message. */
+    suspend fun restoreGroup(words: String): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val worker = relayUrl() ?: return@withContext "Set up internet access in Lanyard for PC first: the backup lives on your Worker."
+        val gid = Group.groupIdForWords(words) ?: return@withContext "Those words don't check out. Look for a typo."
+        val blob = runCatching {
+            val body = okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder()
+                .url("$worker/g/${GroupCrypto.backupId(gid)}").build()).execute().use { if (it.isSuccessful) it.body?.string() else null }
+            com.google.gson.JsonParser.parseString(body ?: return@runCatching null).asJsonObject.get("blob").asString
+        }.getOrNull() ?: return@withContext "No backup found for these words on your Worker."
+        val update = Group.restore(words, blob) ?: return@withContext "The backup couldn't be opened with these words."
+        broadcastGroup(update)
+        Group.relink()
+        uploadGroupBackup()
+        null
+    }
+
+    /** Keep the sealed recovery backup on the user's Worker. */
+    fun uploadGroupBackup() {
+        val worker = relayUrl() ?: return
+        Thread {
+            runCatching {
+                val record = Group.backupRecord()
+                val body = record.toString().toRequestBody("application/json".toMediaTypeOrNull())
+                okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder()
+                    .url("$worker/g/${record.get("id").asString}").put(body).build()).execute().close()
+            }
+        }.start()
+    }
+
     /** Lanyard for PC called this phone from [host]: connect to it now. */
     fun onPcCall(host: String, port: Int) {
         main.post { coordinator?.answerPcCall(host, port) }
@@ -251,7 +321,7 @@ object Ecosystem {
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
         "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch", "library_items",
-        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe", "lock_device"
+        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe", "group_update", "lock_device"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -303,6 +373,7 @@ object Ecosystem {
             "library_list" -> Library.answerList(appContext, json) { send(it) }
             "library_fetch" -> Library.answerFetch(appContext, json)
             "library_items" -> PeerLibrary.onItems(json)
+            "group_update" -> onGroupUpdate(json)
             else -> files.handle(type, json)
         }
         return true

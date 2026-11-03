@@ -89,6 +89,7 @@ import com.btmouse.app.ui.theme.TextPrimary
 import com.btmouse.app.ui.theme.TextSecondary
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import kotlinx.coroutines.launch
 
 private const val DEFAULT_UDP_PORT = 53530
 private const val DEFAULT_WS_PORT = 53531
@@ -123,13 +124,15 @@ fun ConnectionScreen(
     val pcBluetoothAddress by settings.pcBluetoothAddress.collectAsState()
 
     val pinValid = savedPin.length == 6 && savedPin.all { it.isDigit() }
-    val hasPairedPc = pinValid && (pcName.isNotBlank() || rvWorker.isNotBlank() || wanUrl.isNotBlank())
+    val inPcGroup by com.btmouse.app.ecosystem.Group.members.collectAsState()
+    val hasPairedPc = (pinValid || inPcGroup.any { it.id == "pc" }) && (pcName.isNotBlank() || rvWorker.isNotBlank() || wanUrl.isNotBlank())
     val pcBluetoothPaired = pairedDevices.any { device ->
         val name = try { device.name } catch (_: SecurityException) { null }
         device.address.equals(pcBluetoothAddress, ignoreCase = true) ||
             (pcName.isNotBlank() && name.equals(pcName, ignoreCase = true))
     }
 
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var showPinDialog by remember { mutableStateOf(false) }
     var showManualDialog by remember { mutableStateOf(false) }
     var manualError by remember { mutableStateOf<String?>(null) }
@@ -144,6 +147,19 @@ fun ConnectionScreen(
                 trimmed.startsWith("{") && trimmed.endsWith("}") -> {
                     val obj = Gson().fromJson(trimmed, JsonObject::class.java)
                     val type = obj.get("type")?.asString.orEmpty()
+                    if (type == "lanyard_join") {
+                        // A live code from the PC (or another phone): join its device group.
+                        scope.launch {
+                            val error = com.btmouse.app.ecosystem.GroupJoin.join(obj, settings)
+                            if (error == null) {
+                                Toast.makeText(context, "Joined. Connecting over every available link…", Toast.LENGTH_SHORT).show()
+                                if (obj.get("pc")?.asBoolean == true) coordinator.connectSavedPc()
+                            } else {
+                                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                        return true
+                    }
                     val ip = obj.get("ip")?.asString.orEmpty()
                     val name = obj.get("name")?.asString.orEmpty()
                     // Older "btmouse_wan" codes put the WebSocket port in "port".
@@ -203,7 +219,9 @@ fun ConnectionScreen(
                     val raw = barcode.rawValue ?: barcode.displayValue ?: ""
                     if (raw.isNotEmpty()) {
                         if (pairFromCode(raw)) {
-                            Toast.makeText(context, "PC paired; connecting over every available link…", Toast.LENGTH_SHORT).show()
+                            if (!raw.contains("lanyard_join")) {
+                                Toast.makeText(context, "PC paired; connecting over every available link…", Toast.LENGTH_SHORT).show()
+                            }
                         } else {
                             Toast.makeText(context, "That QR code isn't from Lanyard for PC", Toast.LENGTH_LONG).show()
                         }

@@ -101,6 +101,8 @@ interface InputConnection {
     fun notifyPathSwitch() {}
     /** Send an ecosystem message (device_hello, clipboard, files, remote control) over this link. */
     fun sendJsonObject(obj: JsonObject) {}
+    /** True when what is sent now cannot be read on the way: an encrypted session or paired Bluetooth. */
+    val canSendSecrets: Boolean get() = false
 
     fun sendMouseMove(dx: Int, dy: Int, buttons: Int, vScroll: Int = 0, hScroll: Int = 0)
     fun sendMouseButton(buttons: Int)

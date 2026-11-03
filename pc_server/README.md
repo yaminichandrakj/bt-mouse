@@ -41,7 +41,7 @@ If the QR details load but the app reports that the PC did not respond, allow in
 - **Microphone**: Recording begins only after Windows successfully opens an input device. The companion reports device and permission errors instead of showing a false success state.
 - **Media**: Play/pause, previous/next, seek, volume, and mute report fresh PC state. Some playback apps do not expose every media command through Windows; the companion falls back to Windows media keys when possible.
 - **Presentation**: Turn on **Use volume buttons for slides** on the media remote. Volume up advances and volume down goes back while that screen is active.
-- **Lock**: Locking the PC is supported. Windows secure-desktop sign-in must be completed at the PC; remote unlock is unavailable.
+- **Lock and unlock**: Locking the PC is supported. To unlock from the phone, open Settings › Unlock with your phone and choose Turn on; Windows asks for administrator permission once to add Lanyard's sign-in option to the lock screen (`unlock_provider/`, installed to `%ProgramFiles%\Lanyard`). Choose Turn off to remove it. Unlocking over the internet is off until you tick it there.
 - **Windows display**: The companion requests per-monitor DPI awareness to keep text and controls sharp on scaled displays.
 - **Pairing**: A six-digit PIN appears in the PC companion/terminal and is saved on that PC so it stays the same after restart. It is not placed in discovery or QR payloads. Re-enter the displayed PIN on the phone if upgrading from an older companion version.
 - **Remote access**: Internet connections require a `wss://` TLS endpoint, such as a securely configured tunnel or reverse proxy. Never expose the built-in plain `ws://` listener directly to the Internet.

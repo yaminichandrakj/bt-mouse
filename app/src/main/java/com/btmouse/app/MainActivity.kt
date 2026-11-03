@@ -6,11 +6,11 @@ import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.HidConstants
 import com.btmouse.app.data.SettingsRepository
@@ -18,7 +18,8 @@ import com.btmouse.app.sensors.AirMouseManager
 import com.btmouse.app.ui.MainScreen
 import com.btmouse.app.ui.theme.BtMouseTheme
 
-class MainActivity : ComponentActivity() {
+// A FragmentActivity so the fingerprint prompt for phone unlock can show.
+class MainActivity : FragmentActivity() {
 
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var connectionCoordinator: ConnectionCoordinator

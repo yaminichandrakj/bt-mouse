@@ -506,6 +506,19 @@ class ConnectionCoordinator(
         currentCompanionConnection.sendJsonObject(obj)
     }
 
+    override val canSendSecrets: Boolean get() = currentCompanionConnection.canSendSecrets
+
+    /** Hands the Windows password to the PC's lock screen. False when the link isn't encrypted yet. */
+    fun unlockPc(password: String): Boolean {
+        val link = currentCompanionConnection
+        if (!link.canSendSecrets) return false
+        link.sendJsonObject(com.google.gson.JsonObject().apply {
+            addProperty("type", "unlock")
+            addProperty("password", password)
+        })
+        return true
+    }
+
     /**
      * Auto-reconnect only runs once every link is down. While at least one is up, bring back
      * any that dropped (e.g. Wi-Fi when you walk back into range) so failover keeps options.
@@ -603,6 +616,8 @@ class ConnectionCoordinator(
     }
 
     private fun isPaired(): Boolean {
+        // Joined the PC's device group (live QR), or an older PIN pairing.
+        if (com.btmouse.app.ecosystem.Group.hasPc()) return true
         val pin = settings.serverPin.value.trim()
         return pin.length == 6 && pin.all { it.isDigit() }
     }

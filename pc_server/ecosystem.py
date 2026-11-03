@@ -912,9 +912,31 @@ def _media_dirs():
     return dirs
 
 
+_GROUP = None
+_GROUP_LOCK = threading.Lock()
+
+
+def device_group():
+    """This PC's device group (group.py): its members and the key they share."""
+    global _GROUP
+    with _GROUP_LOCK:
+        if _GROUP is None:
+            from group import Group
+            import socket
+            _GROUP = Group(_data_dir() / "group.json", device_id="pc", name=socket.gethostname(), kind="pc")
+        return _GROUP
+
+
 def family_key():
-    """One secret shared by every phone and tablet paired with this PC, so they can find
-    and trust each other on the network without scanning codes between them."""
+    """The key shared by every device in this PC's group (it changes when one is removed),
+    in the old family-key shape the rest of the PC uses. Falls back to the pre-group
+    file when PyNaCl is missing."""
+    try:
+        from group import HAS_CRYPTO
+        if HAS_CRYPTO:
+            return device_group().family()
+    except Exception:
+        pass
     import secrets
     path = _data_dir() / "family.json"
     try:
@@ -1129,10 +1151,10 @@ class Ecosystem:
             else:
                 self.layout.resize_for(device_id, dev)
             group = family_key()
+            # The group key is never sent here any more: devices get it when they join.
             respond({"type": "device_hello_ack", "pc_name": self.share.pc_name,
                      "controlling": self.share.target == device_id,
-                     "group_id": group["id"], "group_key": group["key"],
-                     "relay_url": self.relay_url})
+                     "group_id": group["id"], "relay_url": self.relay_url})
         return device_id
 
     def handle_release_request(self, data):
