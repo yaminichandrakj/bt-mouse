@@ -106,8 +106,16 @@ object PeerLibrary {
     val ready: StateFlow<Pair<Uri, String>?> = _ready.asStateFlow()
 
     @Volatile private var waitingFor: String? = null
+    /** Files fetched to keep (Save), not to open. */
+    private val saving = ConcurrentHashMap.newKeySet<String>()
 
-    fun refresh() {
+    private val _saved = MutableStateFlow<Set<String>>(emptySet())
+    /** Names of other devices' files this device already has a copy of. */
+    val saved: StateFlow<Set<String>> = _saved.asStateFlow()
+    @Volatile private var appContext: Context? = null
+
+    fun refresh(context: Context? = null) {
+        context?.let { appContext = it.applicationContext }
         val online = Ecosystem.devices.value.filter { !it.isPc }
         byDevice.keys.retainAll(online.map { it.id }.toSet())
         publish()
@@ -136,8 +144,32 @@ object PeerLibrary {
     }
 
     private fun publish() {
-        _items.value = byDevice.values.flatten().sortedByDescending { it.modified }
+        val all = byDevice.values.flatten().sortedByDescending { it.modified }
+        _items.value = all
+        appContext?.let { ctx -> _saved.value = all.filter { Library.localCopy(ctx, it.name, it.size) != null }.map { it.name }.toSet() }
     }
+
+    /** Keep a copy of [item] on this device without opening it. */
+    fun save(context: Context, item: PeerLibraryItem) {
+        appContext = context.applicationContext
+        if (Library.localCopy(context, item.name, item.size) != null) return publish()
+        saving.add(item.name)
+        Ecosystem.sendTo(item.deviceId, JsonObject().apply {
+            addProperty("type", "library_fetch")
+            addProperty("id", item.id)
+        })
+    }
+
+    /** Copy everything other devices have that this one doesn't (of the given type, or all). */
+    fun saveAll(context: Context, type: String? = null) {
+        _items.value.filter { type == null || it.type == type }
+            .filter { Library.localCopy(context, it.name, it.size) == null && it.name !in saving }
+            .distinctBy { it.name }
+            .forEach { save(context, it) }
+    }
+
+    /** Files being saved right now. */
+    fun savingCount(): Int = saving.size
 
     /** Play [item]: at once if this device already has it, otherwise fetch it first. */
     fun play(context: Context, item: PeerLibraryItem) {
@@ -155,12 +187,21 @@ object PeerLibrary {
 
     /** Called as transfers change: open the file we were waiting for once it has arrived. */
     fun onTransfers(context: Context, transfers: List<TransferInfo>) {
+        appContext = context.applicationContext
+        if (saving.isNotEmpty()) {
+            val finished = transfers.filter { !it.outgoing && it.name in saving && it.state in setOf("done", "failed") }
+            if (finished.isNotEmpty()) {
+                finished.forEach { saving.remove(it.name) }
+                publish()
+            }
+        }
         val want = waitingFor ?: return
         val t = transfers.lastOrNull { !it.outgoing && it.name == want } ?: return
         when (t.state) {
             "done" -> {
                 waitingFor = null
                 _loading.value = null
+                publish()
                 val file = Library.localCopy(context, want) ?: return
                 _ready.value = Library.uriFor(context, file) to mimeFor(byDevice.values.flatten().firstOrNull { it.name == want })
             }

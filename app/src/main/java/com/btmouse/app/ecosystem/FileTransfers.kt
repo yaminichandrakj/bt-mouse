@@ -583,6 +583,7 @@ class FileTransfers(
             inc.part.copyTo(dest, overwrite = true)
             inc.part.delete()
         }
+        com.btmouse.app.connection.RecordingTransferClient.localFilesChanged()
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
     }
 

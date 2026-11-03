@@ -471,11 +471,13 @@ private fun PeerLibrarySection(category: String) {
     val all by PeerLibrary.items.collectAsState()
     val loading by PeerLibrary.loading.collectAsState()
     val ready by PeerLibrary.ready.collectAsState()
+    val saved by PeerLibrary.saved.collectAsState()
+    val transfers by Ecosystem.files.transfers.collectAsState()
     val phones = devices.filter { !it.isPc }
     var expanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(phones.map { it.id }) {
-        if (phones.isNotEmpty()) PeerLibrary.refresh()
+        if (phones.isNotEmpty()) PeerLibrary.refresh(context)
     }
     LaunchedEffect(ready) {
         val (uri, mime) = ready ?: return@LaunchedEffect
@@ -501,7 +503,15 @@ private fun PeerLibrarySection(category: String) {
                 Spacer(Modifier.weight(1f))
                 Text(
                     "Refresh", color = AccentCyan, fontSize = 13.sp,
-                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { PeerLibrary.refresh() }.padding(6.dp)
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { PeerLibrary.refresh(context) }.padding(6.dp)
+                )
+            }
+            val unsaved = items.count { it.name !in saved }
+            if (unsaved > 0) {
+                Text(
+                    "Save all $unsaved to this phone", color = AccentCyan, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                        .clickable { PeerLibrary.saveAll(context, category.takeIf { it != "all" }) }.padding(6.dp)
                 )
             }
             loading?.let { Text("Getting $it…", color = AccentCyan, fontSize = 13.sp) }
@@ -519,7 +529,18 @@ private fun PeerLibrarySection(category: String) {
                     Column(Modifier.weight(1f)) {
                         Text(item.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val size = if (item.size < 1024 * 1024) "${item.size / 1024} KB" else "%.1f MB".format(item.size / (1024.0 * 1024.0))
-                        Text("${item.deviceName}  ·  $size", color = TextMuted, fontSize = 12.sp)
+                        val progress = transfers.lastOrNull { !it.outgoing && it.name == item.name && it.state == "receiving" }
+                        val where = when {
+                            progress != null -> "Saving… ${(progress.progress * 100).toInt()}%"
+                            item.name in saved -> "Saved on this phone"
+                            else -> item.deviceName
+                        }
+                        Text("$where  ·  $size", color = TextMuted, fontSize = 12.sp)
+                    }
+                    if (item.name !in saved) {
+                        androidx.compose.material3.IconButton(onClick = { PeerLibrary.save(context, item) }) {
+                            Icon(Icons.Filled.Download, contentDescription = "Save ${item.name} to this phone", tint = AccentCyan)
+                        }
                     }
                     Button(
                         onClick = { PeerLibrary.play(context, item) },

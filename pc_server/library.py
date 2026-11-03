@@ -39,6 +39,7 @@ class LibrarySync:
         self.remote_items = {}
         self._requested = {}
         self._lock = threading.Lock()
+        self.on_change = None
         sync.library_dir = lambda name: media_folder(self.media_dirs_fn(), name)
         threading.Thread(target=self._loop, name="LibrarySync", daemon=True).start()
 
@@ -49,6 +50,12 @@ class LibrarySync:
         items = [i for i in (data.get("items") or []) if isinstance(i, dict) and i.get("name")]
         with self._lock:
             self.remote_items[sender] = items
+        cb = self.on_change
+        if cb:
+            try:
+                cb()
+            except Exception:
+                pass
         if self.auto_copy:
             self._fetch_missing(sender, items)
         return True
@@ -74,6 +81,27 @@ class LibrarySync:
                     continue
                 self._requested[key] = now
             self.registry.send(device_id, {"type": "library_fetch", "id": item.get("id") or name})
+
+    def missing(self):
+        """Items on connected devices that this PC has no copy of yet (too big to copy by
+        itself, or still on their way): [(device_id, device_name, item)]."""
+        out = []
+        with self._lock:
+            snapshot = {k: list(v) for k, v in self.remote_items.items()}
+        for device_id, items in snapshot.items():
+            if not self.registry.is_online(device_id):
+                continue
+            name = (self.registry.get(device_id) or {}).get("name", "Device")
+            for item in items:
+                if not self.have_locally(Path(str(item["name"])).name, item.get("size")):
+                    out.append((device_id, name, item))
+        return out
+
+    def fetch(self, device_id, item_id):
+        """Copy one item from a device now, whatever its size."""
+        with self._lock:
+            self._requested[(device_id, Path(str(item_id)).name)] = time.monotonic()
+        return self.registry.send(device_id, {"type": "library_fetch", "id": item_id})
 
     def request_all(self):
         for dev in self.registry.online_devices():

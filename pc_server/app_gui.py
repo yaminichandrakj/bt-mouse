@@ -1067,6 +1067,10 @@ class CompanionApp(QMainWindow):
         if self.server.ecosystem and hasattr(self, "bridge"):
             from devices_page import wire_ecosystem
             self._run_on_ui(lambda: wire_ecosystem(self))
+            # The Library lists every device's recordings: refresh when a list or a file arrives.
+            refresh_library = lambda *_a: self._run_on_ui(self._refresh_recordings_soon)  # noqa: E731
+            self.server.ecosystem.library.on_change = refresh_library
+            self.server.ecosystem.sync.on_library_file = refresh_library
         self.server.on_status_callback = self._on_status
         self.server.on_pc_cam_frame_callback = self._on_pc_cam_frame_received
         if hasattr(self.server, "phone_camera_receiver") and self.server.phone_camera_receiver:
@@ -1528,7 +1532,7 @@ class CompanionApp(QMainWindow):
     # Page 3: Media Library (Videos / Audios / Snapshots in Separate Folders)
     # ------------------------------------------------------------------
     def _create_recordings_page(self):
-        page, layout = self._page("Library", "Recordings and snapshots from your webcam and phone.", max_width=1100)
+        page, layout = self._page("Library", "Recordings and snapshots from your webcam, phones and tablets. Files still on a device are listed under its name; Open downloads them.", max_width=1100)
 
         card = QFrame()
         card.setObjectName("Card")
@@ -2208,10 +2212,40 @@ class CompanionApp(QMainWindow):
                 except OSError:
                     continue
 
+        # Recordings still only on a phone or tablet: listed here, downloaded on Open.
+        library = getattr(getattr(self.server, "ecosystem", None), "library", None) if self.server else None
+        if library is not None:
+            type_for = {"audio": ("Audios", "Audio", "mic"), "snapshot": ("Snapshots", "Snapshot", "photo")}
+            for device_id, device_name, item in library.missing():
+                folder_name, type_name, icon = type_for.get(item.get("type"), ("Videos", "Video", "video"))
+                size = int(item.get("size") or 0)
+                mtime = float(item.get("modified") or 0)
+                records.append({
+                    "path": None, "remote": (device_id, item.get("id") or item["name"]),
+                    "name": Path(str(item["name"])).name, "folder": f"On {device_name}",
+                    "size": size,
+                    "size_str": f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB",
+                    "mtime": mtime,
+                    "date_str": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d  %I:%M %p") if mtime else "",
+                    "is_video": folder_name == "Videos", "is_audio": folder_name == "Audios",
+                    "is_snapshot": folder_name == "Snapshots",
+                    "type_name": type_name, "type_icon": icon, "ext": Path(str(item["name"])).suffix.lower(),
+                })
+
         records.sort(key=lambda r: r["mtime"], reverse=True)
         self._all_recordings = records
         self._total_recordings_bytes = total_bytes
         self._filter_and_render_recordings()
+
+    def _refresh_recordings_soon(self):
+        """Many devices answer at once; refresh the Library once for all of them."""
+        timer = getattr(self, "_library_refresh_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.refresh_recordings)
+            self._library_refresh_timer = timer
+        timer.start(600)
 
     def _filter_and_render_recordings(self):
         if not hasattr(self, "tree_recordings"):
@@ -2272,21 +2306,40 @@ class CompanionApp(QMainWindow):
         except Exception:
             pass
 
-    def _get_selected_recording_path(self):
+    def _get_selected_recording(self):
         row = self.tree_recordings.currentRow()
         items = getattr(self, "_displayed_recordings", [])
         if 0 <= row < len(items):
-            return items[row]["path"]
+            return items[row]
         return None
 
+    def _get_selected_recording_path(self):
+        rec = self._get_selected_recording()
+        return rec["path"] if rec else None
+
+    def _download_remote_recording(self, rec):
+        device_id, item_id = rec["remote"]
+        library = self.server.ecosystem.library
+        if library.fetch(device_id, item_id):
+            self.lbl_selected_recording_info.setText(f"Downloading {rec['name']} from {rec['folder'][3:]}… It shows here when it's done.")
+        else:
+            self.lbl_selected_recording_info.setText(f"{rec['folder'][3:]} isn't connected right now.")
+
     def _on_tree_recording_selected(self):
-        path = self._get_selected_recording_path()
-        if path and Path(path).is_file():
+        rec = self._get_selected_recording()
+        path = rec["path"] if rec else None
+        if rec and rec.get("remote"):
+            self.lbl_selected_recording_info.setText(f"On {rec['folder'][3:]}. Open downloads it to this PC.")
+        elif path and Path(path).is_file():
             self.lbl_selected_recording_info.setText(f"Selected: {path}")
         else:
             self.lbl_selected_recording_info.setText("Select an item to play, inspect in Explorer, or delete.")
 
     def open_selected_recording(self):
+        rec = self._get_selected_recording()
+        if rec and rec.get("remote"):
+            self._download_remote_recording(rec)
+            return
         path = self._get_selected_recording_path()
         if not path or not Path(path).is_file():
             QMessageBox.information(self, "Media Library", "Select a recording or snapshot first.")
