@@ -198,6 +198,7 @@ class WifiClientManager(
                 return
             }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(json)) return
+            if (PcUnlock.handleIncoming(json)) return
             recordingTransfer.handleMessage(json) { ack ->
                 sendPacket(mapOf(
                     "type" to ack.get("type").asString,
@@ -728,6 +729,8 @@ class WifiClientManager(
         sendMouseButton(0)
         sendPacket(mapOf("type" to "path_switch"), includeSeq = false)
     }
+
+    override val canSendSecrets: Boolean get() = _isConnected.value && secure.isActive
 
     override fun sendJsonObject(obj: JsonObject) {
         if (!_isConnected.value) return

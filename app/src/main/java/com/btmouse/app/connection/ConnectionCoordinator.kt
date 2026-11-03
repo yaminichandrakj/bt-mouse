@@ -506,6 +506,19 @@ class ConnectionCoordinator(
         currentCompanionConnection.sendJsonObject(obj)
     }
 
+    override val canSendSecrets: Boolean get() = currentCompanionConnection.canSendSecrets
+
+    /** Hands the Windows password to the PC's lock screen. False when the link isn't encrypted yet. */
+    fun unlockPc(password: String): Boolean {
+        val link = currentCompanionConnection
+        if (!link.canSendSecrets) return false
+        link.sendJsonObject(com.google.gson.JsonObject().apply {
+            addProperty("type", "unlock")
+            addProperty("password", password)
+        })
+        return true
+    }
+
     /**
      * Auto-reconnect only runs once every link is down. While at least one is up, bring back
      * any that dropped (e.g. Wi-Fi when you walk back into range) so failover keeps options.

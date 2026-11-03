@@ -13,6 +13,12 @@ _cf = _os.path.join(_os.path.dirname(_os.path.abspath(SPEC)), 'cloudflared.exe')
 if _os.path.isfile(_cf):
     binaries += [(_cf, '.')]
 
+# The phone unlock credential provider (built by CI from unlock_provider/). Shipped as data so
+# PyInstaller leaves it byte-for-byte as built; unlock.py copies it to Program Files on setup.
+_unlock_dll = _os.path.join(_os.path.dirname(_os.path.abspath(SPEC)), 'LanyardUnlock.dll')
+if _os.path.isfile(_unlock_dll):
+    datas += [(_unlock_dll, '.')]
+
 for package in (
     'imageio_ffmpeg', 'nacl', 'av',
     'sounddevice', 'cv2', 'numpy', 'pycaw', 'comtypes',

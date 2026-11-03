@@ -233,6 +233,7 @@ class RemoteWanManager(
                 return
             }
             if (_isConnected.value && com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
+            if (PcUnlock.handleIncoming(root)) return
             val type = root.get("type")?.asString ?: ""
             if (_isConnected.value) recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
 
@@ -520,6 +521,8 @@ class RemoteWanManager(
             }
         }
     }
+
+    override val canSendSecrets: Boolean get() = _isConnected.value && secure.isActive
 
     override fun sendJsonObject(obj: JsonObject) {
         sendJson(obj.deepCopy())

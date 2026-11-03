@@ -1,0 +1,4 @@
+LIBRARY LanyardUnlock
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE

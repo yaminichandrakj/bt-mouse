@@ -143,6 +143,15 @@ jobs:
           path: ui-snapshots/*.png
           retention-days: 14
 
+      - name: Build phone unlock credential provider
+        working-directory: pc_server/unlock_provider
+        run: |
+          cmake -S . -B build -A x64
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+          cmake --build build --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Credential provider build failed" }
+          Copy-Item build/Release/LanyardUnlock.dll ../LanyardUnlock.dll -Force
+
       - name: Compile Standalone Executable
         working-directory: pc_server
         run: |

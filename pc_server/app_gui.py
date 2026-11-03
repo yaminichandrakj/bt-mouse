@@ -1257,6 +1257,44 @@ class CompanionApp(QMainWindow):
         if not allowed:
             self.screen_banner.hide()
 
+    def _set_unlock_over_internet(self, allowed):
+        if self.server:
+            self.server.set_unlock_over_internet(allowed)
+
+    def _refresh_phone_unlock(self, note=None):
+        import unlock as phone_unlock
+        state = phone_unlock.status()
+        text, button = {
+            "ready": ("Ready. Lock this PC, then tap Unlock in Lanyard on your phone.", "Turn off"),
+            "outdated": ("On, from an older Lanyard. Update it so unlock keeps working.", "Update"),
+            "not_installed": ("Off. Turn it on to unlock this PC from your phone.", "Turn on"),
+            "unavailable": ("This copy of Lanyard doesn't include phone unlock.", None),
+            "unsupported": ("Phone unlock works only on Windows.", None),
+        }[state]
+        self._phone_unlock_state = state
+        self.lbl_unlock_status.setText(note or text)
+        self.btn_unlock_setup.setVisible(button is not None)
+        self.btn_unlock_setup.setEnabled(True)
+        if button:
+            self.btn_unlock_setup.setText(button)
+        self.chk_unlock_internet.setEnabled(state in ("ready", "outdated"))
+
+    def _toggle_phone_unlock(self):
+        import unlock as phone_unlock
+        removing = getattr(self, "_phone_unlock_state", "") == "ready"
+        self.btn_unlock_setup.setEnabled(False)
+        self.lbl_unlock_status.setText("Waiting for Windows…")
+
+        def _worker():
+            ok, detail = phone_unlock.uninstall() if removing else phone_unlock.install()
+            if ok:
+                self.log("Turned off phone unlock." if removing else "Turned on phone unlock.")
+            else:
+                self.log(f"Phone unlock setup failed: {detail}")
+            self._run_on_ui(lambda: self._refresh_phone_unlock(None if ok else detail))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _build_statusbar(self, root_layout):
         """Kept for callers that update the footer text; the footer itself is no longer shown."""
         self.lbl_footer_left = QLabel(f"Lanyard for PC v{APP_VERSION}")
@@ -1792,6 +1830,34 @@ class CompanionApp(QMainWindow):
         self.chk_startup.toggled.connect(self._set_startup_enabled)
         pc.addWidget(self.chk_startup)
         layout.addWidget(pref_card)
+
+        layout.addSpacing(8)
+        layout.addWidget(self._section_label("Unlock with your phone"))
+        unlock_card = QFrame()
+        unlock_card.setObjectName("Card")
+        ul = QVBoxLayout(unlock_card)
+        ul.setContentsMargins(20, 16, 20, 16)
+        ul.setSpacing(12)
+        urow = QHBoxLayout()
+        self.lbl_unlock_status = QLabel()
+        self.lbl_unlock_status.setWordWrap(True)
+        urow.addWidget(self.lbl_unlock_status, 1)
+        self.btn_unlock_setup = QPushButton()
+        self.btn_unlock_setup.clicked.connect(self._toggle_phone_unlock)
+        urow.addWidget(self.btn_unlock_setup)
+        ul.addLayout(urow)
+        lbl_un = QLabel("Your Windows password stays on your phone behind its fingerprint and is sent only when "
+                        "you tap Unlock. Windows asks for administrator permission once to add Lanyard to the "
+                        "lock screen. It unlocks a locked PC, not one that has just restarted.")
+        lbl_un.setWordWrap(True)
+        lbl_un.setStyleSheet("color: #8E8E8E; font-size: 13px;")
+        ul.addWidget(lbl_un)
+        self.chk_unlock_internet = QCheckBox("Also allow unlocking over the internet")
+        self.chk_unlock_internet.setChecked(bool(getattr(self.server, "unlock_over_internet", False)))
+        self.chk_unlock_internet.toggled.connect(self._set_unlock_over_internet)
+        ul.addWidget(self.chk_unlock_internet)
+        layout.addWidget(unlock_card)
+        self._refresh_phone_unlock()
 
         layout.addSpacing(8)
         layout.addWidget(self._section_label("Recording"))

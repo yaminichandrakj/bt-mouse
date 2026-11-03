@@ -1154,6 +1154,81 @@ class LockStateTests(unittest.TestCase):
             self.assertNotIn("locked", instance._get_system_stats())
 
 
+class PhoneUnlockTests(unittest.TestCase):
+    def make_server(self, internet=False):
+        instance = object.__new__(server.Server)
+        instance.unlock_over_internet = internet
+        instance._unlock_failures = []
+        instance._unlock_busy = threading.Lock()
+        return instance
+
+    def ask(self, instance, addr, encrypted=True, password="hunter2", result="ok"):
+        replies = []
+        done = threading.Event()
+
+        def respond(payload):
+            replies.append(payload)
+            done.set()
+
+        with patch.object(server, "is_workstation_locked", return_value=True), \
+                patch.object(server.phone_unlock, "unlock", return_value=result) as handed:
+            instance._handle_unlock({"type": "unlock", "password": password}, addr, respond, encrypted)
+            self.assertTrue(done.wait(3))
+            for thread in threading.enumerate():
+                if thread.name == "PhoneUnlock":
+                    thread.join(3)
+        return replies[-1], handed
+
+    def test_plain_wifi_packets_never_reach_the_lock_screen(self):
+        reply, handed = self.ask(self.make_server(), ("192.0.2.10", 40000), encrypted=False)
+        self.assertEqual(reply["code"], "insecure")
+        handed.assert_not_called()
+
+    def test_internet_unlock_needs_the_pc_setting(self):
+        reply, handed = self.ask(self.make_server(), ("WebSocket", 0))
+        self.assertEqual(reply["code"], "internet_off")
+        handed.assert_not_called()
+        reply, handed = self.ask(self.make_server(internet=True), ("WebSocket", 0))
+        self.assertEqual(reply["code"], "ok")
+        handed.assert_called_once_with("hunter2")
+
+    def test_bluetooth_and_sealed_wifi_unlock(self):
+        reply, _ = self.ask(self.make_server(), ("Bluetooth", 0), encrypted=False)
+        self.assertTrue(reply["success"])
+        reply, _ = self.ask(self.make_server(), ("192.0.2.10", 40000))
+        self.assertEqual(reply["type"], "unlock_result")
+        self.assertEqual(reply["code"], "ok")
+
+    def test_repeated_wrong_passwords_pause_unlocking(self):
+        instance = self.make_server()
+        for _ in range(3):
+            reply, _ = self.ask(instance, ("Bluetooth", 0), result="wrong_password")
+            self.assertEqual(reply["code"], "wrong_password")
+        reply, handed = self.ask(instance, ("Bluetooth", 0))
+        self.assertEqual(reply["code"], "cooldown")
+        handed.assert_not_called()
+
+    def test_empty_password_is_refused(self):
+        reply, handed = self.ask(self.make_server(), ("Bluetooth", 0), password="")
+        self.assertEqual(reply["code"], "bad_request")
+        handed.assert_not_called()
+
+    def test_unlock_packet_goes_through_the_dispatcher(self):
+        instance = self.make_server()
+        with patch.object(instance, "_handle_unlock") as handler, \
+                patch.object(instance, "_is_authorized", return_value=True, create=True), \
+                patch.object(instance, "_refresh_camera_stream_lease", create=True), \
+                patch.object(instance, "_note_client_activity", create=True):
+            instance.secure_sessions = None
+            instance.ecosystem = None
+            instance.on_packet_callback = None
+            instance._last_cmd_seq = {}
+            instance.handle_packet({"type": "unlock", "password": "x"}, ("Bluetooth", 0), lambda _p: None)
+        args = handler.call_args[0]
+        self.assertEqual(args[1], ("Bluetooth", 0))
+        self.assertFalse(args[3])
+
+
 class InstalledAppsPartsTests(unittest.TestCase):
     def test_long_app_list_is_split_into_datagram_sized_parts(self):
         apps = [{"name": f"App {i}", "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\"

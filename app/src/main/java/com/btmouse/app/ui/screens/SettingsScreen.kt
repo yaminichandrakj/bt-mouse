@@ -241,6 +241,30 @@ fun SettingsScreen(
             }
         }
 
+        // PC unlock: the Windows passwords this phone keeps behind its fingerprint
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = DarkSurface),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                    Text("Unlock your PC", color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("Windows passwords saved for Unlock stay on this phone, behind your fingerprint.",
+                        color = TextSecondary, fontSize = 13.sp)
+                }
+                androidx.compose.material3.TextButton({
+                    com.btmouse.app.data.PcPasswordVault(context).forgetAll()
+                    android.widget.Toast.makeText(context, "Forgot saved PC passwords", android.widget.Toast.LENGTH_SHORT).show()
+                }) { Text("Forget all", color = TextPrimary) }
+            }
+        }
+
         // Connection & Background Sessions Card
         Card(
             modifier = Modifier.fillMaxWidth(),

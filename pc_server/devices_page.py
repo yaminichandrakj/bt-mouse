@@ -612,6 +612,8 @@ def build_devices_page(app):
     live_row.addWidget(btn_watch)
     btn_mirror = QPushButton("Mirror a phone or tablet…")
     live_row.addWidget(btn_mirror)
+    btn_lock = QPushButton("Lock a phone or tablet…")
+    live_row.addWidget(btn_lock)
     live_note = QLabel("Start Share screen or Camera on a phone or tablet (Devices › Live). "
                        "Phone screens can be used with this mouse right in the window.")
     live_note.setWordWrap(True)
@@ -744,6 +746,28 @@ def build_devices_page(app):
         win.show()
 
     btn_mirror.clicked.connect(mirror)
+
+    def lock_device():
+        devices = [d for d in eco().registry.online_devices() if d.get("caps", {}).get("lock")]
+        if not devices:
+            app.log("No connected phone or tablet can be locked. Turn on Lanyard control "
+                    "(Accessibility) on it, on Android 9 or later.")
+            return
+        dlg = QDialog(app)
+        dlg.setWindowTitle("Lock a device")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Lock which device? It goes to its lock screen right away."))
+        for dev in devices:
+            b = QPushButton(dev.get("name", "Device"))
+            b.clicked.connect(lambda _c=False, d=dev: (dlg.accept(), send_lock(d)))
+            lay.addWidget(b)
+        dlg.exec()
+
+    def send_lock(dev):
+        eco().registry.send(dev["device_id"], {"type": "lock_device", "from_name": eco().share.pc_name})
+        app.log(f"Locked {dev.get('name', 'the device')}.")
+
+    btn_lock.clicked.connect(lock_device)
     app.list_streams.itemDoubleClicked.connect(lambda _i: watch())
     return page
 

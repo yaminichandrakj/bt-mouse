@@ -26,6 +26,7 @@ from pathlib import Path
 
 from ecosystem import Ecosystem
 from secure import SessionStore
+import unlock as phone_unlock
 
 
 def _pairing_pin_config_path():
@@ -86,6 +87,7 @@ def capture_selected_media_preview():
 
 
 SCREEN_PREVIEW_SETTINGS_PATH = PAIRING_PIN_PATH.with_name("screen_preview.json")
+UNLOCK_SETTINGS_PATH = PAIRING_PIN_PATH.with_name("unlock.json")
 INSTALLED_APPS_LIMIT = 1000
 # Keep each app-list message well inside one UDP datagram (60000 bytes).
 APP_LIST_PART_BYTES = 42000
@@ -151,6 +153,21 @@ def save_screen_preview_allowed(allowed):
     temporary = SCREEN_PREVIEW_SETTINGS_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps({"allowed": bool(allowed)}), encoding="utf-8")
     os.replace(temporary, SCREEN_PREVIEW_SETTINGS_PATH)
+
+
+def load_unlock_over_internet():
+    """Whether the phone may unlock this PC over the internet link. Off unless the user turned it on."""
+    try:
+        return bool(json.loads(UNLOCK_SETTINGS_PATH.read_text(encoding="utf-8")).get("internet", False))
+    except Exception:
+        return False
+
+
+def save_unlock_over_internet(allowed):
+    UNLOCK_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = UNLOCK_SETTINGS_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"internet": bool(allowed)}), encoding="utf-8")
+    os.replace(temporary, UNLOCK_SETTINGS_PATH)
 
 
 def _draw_cursor(image, x, y):
@@ -2986,6 +3003,9 @@ class Server:
         self._last_screen_query_at = 0.0
         self._screen_sharing_stopped = False
         self.screen_preview_allowed = load_screen_preview_allowed()
+        self.unlock_over_internet = load_unlock_over_internet()
+        self._unlock_failures = []
+        self._unlock_busy = threading.Lock()
         self.auto_record_audio_with_video = True
         self._camera_auto_audio_recording = False
         self.on_pc_cam_frame_callback = None
@@ -3363,6 +3383,7 @@ class Server:
     def handle_packet(self, data, addr=None, responder=None):
         if not isinstance(data, dict):
             return
+        encrypted = False
         if "enc" in data and self.secure_sessions is not None:
             # Encrypted session: read it, and seal everything sent back on it.
             inner, sealer = self.secure_sessions.open(data)
@@ -3381,6 +3402,7 @@ class Server:
                 plain_responder = lambda payload: self._send_udp_json(payload, addr)  # noqa: E731
             responder = lambda payload: plain_responder(sealer(payload))  # noqa: E731
             data = inner
+            encrypted = True
         cmd_type = data.get("type")
 
         def respond(payload):
@@ -3718,7 +3740,7 @@ class Server:
             self._handle_system_power(action)
 
         elif cmd_type == "unlock":
-            respond({"type": "error", "message": "Workstation unlock is not supported"})
+            self._handle_unlock(data, addr, respond, encrypted)
 
         elif cmd_type in ("query_apps", "query_installed_apps", "list_apps"):
             self._respond_installed_apps_async(addr, responder)
@@ -4967,6 +4989,61 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
 
         print(f"[-] Blocked unrecognized or untrusted app launch: {app_id_clean}")
         return False
+
+    UNLOCK_FAILURE_WINDOW = 300.0
+    UNLOCK_FAILURE_LIMIT = 3
+    UNLOCK_COOLDOWN = 60.0
+
+    def set_unlock_over_internet(self, allowed):
+        self.unlock_over_internet = bool(allowed)
+        save_unlock_over_internet(allowed)
+
+    def _handle_unlock(self, data, addr, respond, encrypted):
+        """Unlock this PC with the Windows password the phone keeps behind its fingerprint."""
+        def answer(code):
+            respond({"type": "unlock_result", "code": code, "success": code == "ok",
+                     "message": phone_unlock.message(code)})
+
+        link = addr[0] if addr else ""
+        # Paired Bluetooth is encrypted by the radio; Wi-Fi and internet links must be sealed.
+        if link != "Bluetooth" and not encrypted:
+            return answer("insecure")
+        if link == "WebSocket" and not getattr(self, "unlock_over_internet", False):
+            return answer("internet_off")
+        password = data.get("password")
+        if not isinstance(password, str) or not password or len(password) > phone_unlock.PASSWORD_MAX:
+            return answer("bad_request")
+        now = time.time()
+        failures = [t for t in self._unlock_failures if now - t < self.UNLOCK_FAILURE_WINDOW]
+        self._unlock_failures = failures
+        if len(failures) >= self.UNLOCK_FAILURE_LIMIT and now - failures[-1] < self.UNLOCK_COOLDOWN:
+            return answer("cooldown")
+        if is_workstation_locked() is False:
+            return answer("not_locked")
+        if not self._unlock_busy.acquire(blocking=False):
+            return answer("busy")
+
+        def run():
+            try:
+                code = phone_unlock.unlock(password)
+                if code == "submitted":
+                    # The lock screen closed before it could answer; see whether it opened.
+                    for _ in range(10):
+                        if is_workstation_locked() is False:
+                            code = "ok"
+                            break
+                        time.sleep(0.4)
+                if code == "wrong_password":
+                    self._unlock_failures.append(time.time())
+                print(f"[+] Phone unlock over {link or 'Wi-Fi'}: {code}")
+                answer(code)
+            except Exception as exc:
+                print(f"[-] Phone unlock failed: {exc}")
+                answer("no_lock_screen")
+            finally:
+                self._unlock_busy.release()
+
+        threading.Thread(target=run, name="PhoneUnlock", daemon=True).start()
 
     def _handle_system_power(self, action):
         import subprocess

@@ -287,6 +287,7 @@ class BluetoothRfcommManager(
                 return
             }
             if (com.btmouse.app.ecosystem.Ecosystem.handleIncoming(root)) return
+            if (PcUnlock.handleIncoming(root)) return
             recordingTransfer.handleMessage(root) { ack -> sendJson(ack, includeSeq = false) }
             val type = root.get("type")?.asString ?: ""
             when (type) {
@@ -528,6 +529,9 @@ class BluetoothRfcommManager(
             Log.e(tag, "Error parsing incoming packet", e)
         }
     }
+
+    // Paired Bluetooth links are encrypted by the radio.
+    override val canSendSecrets: Boolean get() = _isConnected.value
 
     override fun sendJsonObject(obj: JsonObject) {
         if (_isConnected.value) sendJson(obj.deepCopy())

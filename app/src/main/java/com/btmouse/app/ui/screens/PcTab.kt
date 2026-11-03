@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.AlertDialog
@@ -60,6 +61,7 @@ import com.btmouse.app.ui.components.AppOrPlatformIconBadge
 import com.btmouse.app.ui.components.PillButton
 import com.btmouse.app.ui.components.PillStyle
 import com.btmouse.app.ui.components.SectionHeader
+import com.btmouse.app.ui.components.rememberPcUnlock
 import com.btmouse.app.ui.theme.Control
 import com.btmouse.app.ui.theme.Hairline
 import com.btmouse.app.ui.theme.Ink
@@ -95,6 +97,7 @@ fun PcTab(
     val icons by coordinator.appIcons.collectAsState()
     val customJson by settings.customAppsJson.collectAsState()
     var confirm by remember { mutableStateOf<String?>(null) }
+    val pcUnlock = rememberPcUnlock(coordinator, notify)
 
     LaunchedEffect(connected) {
         if (!connected) return@LaunchedEffect
@@ -134,8 +137,13 @@ fun PcTab(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ActionTile(Icons.Default.Lock, "Lock", { coordinator.systemPower("lock"); notify("Locking your PC") },
-                Modifier.weight(1f), style = PillStyle.Selected, height = 76.dp)
+            if (stats?.locked == true) {
+                ActionTile(Icons.Default.LockOpen, "Unlock", { pcUnlock.start() },
+                    Modifier.weight(1f), style = PillStyle.Success, height = 76.dp)
+            } else {
+                ActionTile(Icons.Default.Lock, "Lock", { coordinator.systemPower("lock"); notify("Locking your PC") },
+                    Modifier.weight(1f), style = PillStyle.Selected, height = 76.dp)
+            }
             ActionTile(Icons.Default.Bedtime, "Sleep", { confirm = "sleep" }, Modifier.weight(1f), style = PillStyle.Tonal, height = 76.dp)
             ActionTile(Icons.Default.RestartAlt, "Restart", { confirm = "restart" }, Modifier.weight(1f), style = PillStyle.Tonal, height = 76.dp)
             ActionTile(Icons.Default.PowerSettingsNew, "Shut down", { confirm = "shutdown" }, Modifier.weight(1f),
