@@ -32,6 +32,21 @@ wrangler deploy
 It prints your Worker URL, e.g. `https://btmouse-rv.<your-subdomain>.workers.dev`.
 Paste that URL into the companion's **Remote access** page once. That's the whole setup.
 
+## Family relay (phones on different networks)
+
+The same Worker also runs a tiny relay so your phones and tablets reach each other over
+the internet with the PC off. It's a Durable Object (`RelayRoom`, declared in
+`wrangler.toml`); `wrangler deploy` creates it. Durable Objects with SQLite storage are
+included in the Workers free plan.
+
+- One room per family. Its id is derived from the family key, so only your devices know it.
+- The room only forwards. Every message is sealed end to end (ChaCha20-Poly1305) with a
+  key derived from the family key; Cloudflare sees sizes and timing, never content.
+- Cost: each forwarded message counts as a Worker request. Mirroring a screen over the
+  relay sends many messages; everyday use (clipboard, files, control) is small.
+
+Already deployed before v1.9.2? Run `wrangler deploy` once more to add the relay.
+
 ## Protocol (for reference)
 - `PUT /r/:id` body `{data, sig, pub}` — `data` is the record JSON string, `sig` its
   Ed25519 signature (base64), `pub` the signer's 32-byte public key (base64). The Worker
@@ -40,3 +55,6 @@ Paste that URL into the companion's **Remote access** page once. That's the whol
 - `GET /r/:id` → `{data, sig}` or `404`.
 - `data` = `{"v":1,"url":"wss://…","ts":<unix seconds>,"host":"<pc name>"}`. The phone
   rejects records older than 10 minutes so a stale URL is never used.
+- `GET /relay/:room?d=:device` (WebSocket) joins a family relay room. Send
+  `{"to": "<device id>" | "*", "d": <sealed>}`; receive `{"from", "d"}` and
+  `{"type": "presence", "devices": [...]}`.

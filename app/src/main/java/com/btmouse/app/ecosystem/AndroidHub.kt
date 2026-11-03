@@ -221,9 +221,38 @@ object AndroidHub {
         }
     }
 
+    private val pcCallNonces = ConcurrentHashMap<String, Long>()
+    @Volatile private var lastPcCall = 0L
+
+    /**
+     * Lanyard for PC calling: "I'm here, at this address". Signed with the family key over
+     * the time, a one-off number and this device's id (or "*" for a broadcast), so a
+     * stranger on the network can't steer the phone to another PC or replay an old call.
+     */
+    private fun onPcCall(json: JsonObject, from: InetSocketAddress) {
+        val familyKey = Family.key()
+        if (familyKey.isEmpty() || !Family.fromPc()) return
+        val target = json.get("target")?.asString ?: return
+        if (target != "*" && target != Ecosystem.selfId) return
+        val ts = json.get("ts")?.asLong ?: return
+        val nonce = json.get("nonce")?.asString ?: return
+        val proof = json.get("proof")?.asString ?: return
+        val now = System.currentTimeMillis()
+        if (kotlin.math.abs(now - ts) > 60_000) return
+        if (!constantTimeEquals(proof, hmac(familyKey, "pc_call|$ts|$nonce|$target"))) return
+        pcCallNonces.entries.removeIf { now - it.value > 120_000 }
+        if (pcCallNonces.putIfAbsent(nonce, now) != null) return
+        if (now - lastPcCall < 5_000) return
+        lastPcCall = now
+        val host = from.address?.hostAddress ?: return
+        val port = json.get("port")?.asInt ?: 0
+        Ecosystem.onPcCall(host, port)
+    }
+
     fun onFamilyChanged() {
         if (_enabled.value) PeerLinks.advertise(PORT)
         PeerLinks.onFamilyChanged()
+        RelayLinks.onFamilyChanged()
     }
 
     private fun stop() {
@@ -318,6 +347,10 @@ object AndroidHub {
         }
         val type = json.get("type")?.asString ?: return
         val token = json.get("token")?.asString?.trim()
+        if (type == "pc_call") {
+            onPcCall(json, from)
+            return
+        }
         if (type == "family_challenge") {
             // Step 1 of joining as a family member: a one-time number to prove the key against.
             val nonce = randomHex(16)
@@ -370,7 +403,7 @@ object AndroidHub {
                 addProperty("type", "connect_ack")
                 addProperty("success", true)
                 addProperty("server_name", DeviceIdentity.name(appContext))
-                addProperty("version", "1.9.0")
+                addProperty("version", "1.9.2")
                 if (byProof) {
                     // Later packets carry this session token; the hub's proof shows it really is family.
                     val session = randomHex(32)
@@ -383,6 +416,7 @@ object AndroidHub {
                     // Pairing by PIN brings the other device into this family.
                     addProperty("group_id", Family.id())
                     addProperty("group_key", Family.key())
+                    Ecosystem.relayUrl()?.let { addProperty("relay_url", it) }
                 }
             })
             "ping" -> send(client, JsonObject().apply {

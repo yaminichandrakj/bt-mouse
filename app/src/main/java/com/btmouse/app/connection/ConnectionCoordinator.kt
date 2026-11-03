@@ -489,6 +489,19 @@ class ConnectionCoordinator(
         connectSavedPc()
     }
 
+    /**
+     * The PC called this phone (a signed `pc_call` on the hub port): connect now instead of
+     * waiting for the next retry, and follow it if its address changed. Ignored while
+     * connected, after the user chose Disconnect, or before this phone was ever paired.
+     */
+    fun answerPcCall(host: String, port: Int) {
+        if (isConnected.value || intentionalDisconnect) return
+        if (!isPaired()) return
+        if (host.isNotBlank() && host != settings.wifiHost.value) settings.setWifiHost(host)
+        if (port in 1..65535 && port != settings.wifiPort.value) settings.setWifiPort(port)
+        connectSavedPc()
+    }
+
     override fun sendJsonObject(obj: com.google.gson.JsonObject) {
         currentCompanionConnection.sendJsonObject(obj)
     }

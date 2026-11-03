@@ -14,7 +14,7 @@ if _os.path.isfile(_cf):
     binaries += [(_cf, '.')]
 
 for package in (
-    'imageio_ffmpeg', 'nacl',
+    'imageio_ffmpeg', 'nacl', 'av',
     'sounddevice', 'cv2', 'numpy', 'pycaw', 'comtypes',
     'winrt.windows.media.control', 'winrt.windows.foundation',
     'winrt.windows.devices.bluetooth.rfcomm', 'winrt.windows.networking.sockets',

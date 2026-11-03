@@ -70,6 +70,7 @@ import com.btmouse.app.ecosystem.DeviceIdentity
 import com.btmouse.app.ecosystem.Ecosystem
 import com.btmouse.app.ecosystem.LiveStream
 import com.btmouse.app.ecosystem.PeerDevice
+import com.btmouse.app.ecosystem.RelayLinks
 import com.btmouse.app.ecosystem.ScreenShare
 import com.btmouse.app.service.CompanionSessionService
 import com.btmouse.app.ecosystem.TransferInfo
@@ -126,6 +127,11 @@ fun DevicesScreen(
     val liveStreams by Ecosystem.streams.collectAsState()
     val hubOn by com.btmouse.app.ecosystem.AndroidHub.enabled.collectAsState()
     val nearby by com.btmouse.app.ecosystem.PeerLinks.nearby.collectAsState()
+    val relayOn by settings.internetRelay.collectAsState()
+    val relayOnline by RelayLinks.online.collectAsState()
+    val relayPeers by RelayLinks.peers.collectAsState()
+    val relayUrl by settings.relayUrl.collectAsState()
+    val rvWorker by settings.rvWorker.collectAsState()
     var pairing by remember { mutableStateOf<com.btmouse.app.ecosystem.NearbyDevice?>(null) }
     var pinInput by remember { mutableStateOf("") }
     var pairMessage by remember { mutableStateOf<String?>(null) }
@@ -190,20 +196,30 @@ fun DevicesScreen(
                 detail = "Settings › Accessibility › Lanyard › On. Draws the pointer and taps for you.",
                 action = "Open settings"
             ) { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            Spacer(Modifier.height(10.dp))
-            SetupStep(
-                done = keyboardEnabled,
-                title = "2. Turn on the Lanyard keyboard",
-                detail = "Lets the laptop type anywhere, including arrows, Backspace and shortcuts.",
-                action = "Open settings"
-            ) { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            Spacer(Modifier.height(10.dp))
-            SetupStep(
-                done = keyboardSelected,
-                title = "3. Switch to it while you type from the laptop",
-                detail = "Without it, plain letters still work through step 1.",
-                action = "Choose keyboard"
-            ) { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
+            // Android 13+ lets Lanyard control type every key itself; the keyboard steps are only for older phones.
+            val typesByItself = android.os.Build.VERSION.SDK_INT >= 33
+            if (typesByItself) {
+                Spacer(Modifier.height(10.dp))
+                Caption(
+                    if (accessibilityOn) "Typing from the laptop works in every app, arrows and shortcuts included. No keyboard to switch."
+                    else "Once step 1 is on, typing from the laptop works in every app, arrows and shortcuts included."
+                )
+            } else {
+                Spacer(Modifier.height(10.dp))
+                SetupStep(
+                    done = keyboardEnabled,
+                    title = "2. Turn on the Lanyard keyboard",
+                    detail = "Lets the laptop type anywhere, including arrows, Backspace and shortcuts.",
+                    action = "Open settings"
+                ) { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                Spacer(Modifier.height(10.dp))
+                SetupStep(
+                    done = keyboardSelected,
+                    title = "3. Switch to it while you type from the laptop",
+                    detail = "Without it, plain letters still work through step 1. Android 13 and later don't need this.",
+                    action = "Choose keyboard"
+                ) { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
+            }
             Spacer(Modifier.height(14.dp))
             Caption(
                 "On the laptop, push the mouse off the screen edge where this device sits in Lanyard › Devices, " +
@@ -218,12 +234,23 @@ fun DevicesScreen(
                 Ecosystem.sendHello()
             }
             Spacer(Modifier.height(10.dp))
+            val catchCopies by settings.catchCopies.collectAsState()
+            ToggleRow(
+                "Send copies from other apps",
+                "When you copy in another app, Lanyard opens for a split second to pick it up. Needs Lanyard control.",
+                catchCopies
+            ) { settings.setCatchCopies(it) }
+            Spacer(Modifier.height(10.dp))
             Caption(
-                "From the laptop it arrives instantly. From this device it is sent while Lanyard is open, while the " +
-                    "Lanyard keyboard is active, from Share › Lanyard, or with the Send clipboard tile in Quick Settings."
+                if (catchCopies && accessibilityOn)
+                    "From the laptop it arrives instantly. From this device, copies are sent by themselves. If one is missed, " +
+                        "use Share › Lanyard or the Send clipboard tile in Quick Settings."
+                else
+                    "From the laptop it arrives instantly. From this device it is sent while Lanyard is open, while the " +
+                        "Lanyard keyboard is active, from Share › Lanyard, or with the Send clipboard tile in Quick Settings."
             )
             Spacer(Modifier.height(10.dp))
-            PillButton("Send clipboard now", { Ecosystem.pushClipboardIfNew(force = true) }, enabled = connected)
+            PillButton("Send clipboard now", { Ecosystem.pushClipboardIfNew(force = true) }, enabled = connected || devices.isNotEmpty())
         }
 
         SectionHeader("Live")
@@ -307,9 +334,35 @@ fun DevicesScreen(
             }
         }
 
+        SectionHeader("Away from home")
+        PanelCard {
+            ToggleRow(
+                "Reach my devices over the internet",
+                "When your phones and tablets are on different networks, they still find each other, with or without the laptop.",
+                relayOn
+            ) { settings.setInternetRelay(it) }
+            Spacer(Modifier.height(10.dp))
+            val hasRelay = relayUrl.isNotBlank() || rvWorker.isNotBlank()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(if (relayOn && relayOnline) StatusGreen else AccentAmber, size = 10.dp)
+                Spacer(Modifier.width(10.dp))
+                Caption(
+                    when {
+                        !relayOn -> "Off. Only devices on the same Wi-Fi or connected to your laptop are reachable."
+                        !hasRelay -> "Set up internet access once in Lanyard for PC (Remote access). Every device paired with it learns the address."
+                        !relayOnline -> "Connecting…"
+                        relayPeers.isEmpty() -> "Ready. Your other devices show up here when they're online."
+                        else -> "Ready. ${relayPeers.size} device${if (relayPeers.size == 1) "" else "s"} reachable over the internet."
+                    }
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Caption("Everything sent this way is encrypted with your devices' shared key. The relay can't read it.")
+        }
+
         SectionHeader("Your devices")
         if (devices.isEmpty()) {
-            Caption(if (connected) "Looking for your devices…" else "Connect to your PC, or pair a nearby device above.")
+            Caption(if (connected) "Looking for your devices…" else "Connect to your PC, pair a nearby device above, or turn on internet reach.")
         }
         devices.forEach { device ->
             PanelCard(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
@@ -323,7 +376,10 @@ fun DevicesScreen(
                         contentDescription = null, tint = OnInk, modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(device.name, color = OnInk, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text(device.name, color = OnInk, fontSize = 16.sp)
+                        if (relayPeers.any { it.id == device.id }) Caption("Over the internet")
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

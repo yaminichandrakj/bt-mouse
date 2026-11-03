@@ -3440,7 +3440,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.9.1"
+                    "version": "1.9.2"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -3469,7 +3469,7 @@ class Server:
         if eco:
             eco.registry.note_packet(data, respond)
             if cmd_type == "device_hello":
-                eco.handle_hello(data, respond)
+                eco.handle_hello(data, respond, addr=addr)
                 return
             if cmd_type == "control_release":
                 eco.handle_release_request(data)
@@ -5157,7 +5157,7 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
 
         self.start_discovery_responder()
         try:
-            if self.ecosystem and self.ecosystem.start():
+            if self.ecosystem and self.ecosystem.start(port=self.port):
                 print("[*] Keyboard & mouse sharing: Ctrl+Alt+Right/Left switches device, Ctrl+Alt+Home returns")
         except Exception as e:
             print(f"[!] Keyboard & mouse sharing unavailable: {e}")

@@ -126,8 +126,8 @@ class FileTransfers(
 
     // --- sending -------------------------------------------------------
     /** Send one of this device's recordings for the shared library (no notification, filed by type). */
-    fun sendLibraryFile(deviceId: String, file: File) {
-        sendUri(deviceId, "your PC", Uri.fromFile(file), library = true, displayName = file.name)
+    fun sendLibraryFile(deviceId: String, file: File, peerName: String = "your PC") {
+        sendUri(deviceId, peerName, Uri.fromFile(file), library = true, displayName = file.name)
     }
 
     fun sendUri(

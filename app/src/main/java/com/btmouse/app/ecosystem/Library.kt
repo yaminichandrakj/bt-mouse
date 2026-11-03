@@ -1,9 +1,15 @@
 package com.btmouse.app.ecosystem
 
 import android.content.Context
+import android.net.Uri
+import androidx.core.content.FileProvider
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * This device's recordings and snapshots as part of the shared library. The PC asks
@@ -54,6 +60,124 @@ object Library {
         val name = File(request.get("id")?.asString ?: return).name
         val file = localFiles(context).firstOrNull { it.name == name } ?: return
         val to = request.get("from")?.takeIf { !it.isJsonNull }?.asString ?: Ecosystem.PC_ID
-        Ecosystem.files.sendLibraryFile(to, file)
+        val name = Ecosystem.devices.value.firstOrNull { it.id == to }?.name ?: "your PC"
+        Ecosystem.files.sendLibraryFile(to, file, name)
+    }
+
+    /** This device's own copy of [name], if it has one (made here or fetched before). */
+    fun localCopy(context: Context, name: String, size: Long = 0): File? {
+        val f = File(folderFor(context, File(name).name), File(name).name)
+        return f.takeIf { it.isFile && it.length() > 0 && (size <= 0 || it.length() == size) }
+    }
+
+    fun uriFor(context: Context, file: File): Uri =
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+}
+
+/** A recording or snapshot on another phone or tablet. */
+data class PeerLibraryItem(
+    val deviceId: String,
+    val deviceName: String,
+    val id: String,
+    val name: String,
+    val size: Long,
+    val modified: Long,
+    val type: String
+)
+
+/**
+ * Browsing and playing another phone's recordings straight from it, without the PC.
+ * Asks each linked device for its list (library_list → library_items) and fetches a
+ * file over whatever link reaches that device: the same Wi-Fi, this phone's hub, the PC
+ * passing it along, or the internet relay. Fetched files land in this device's own
+ * Videos / Audios / Snapshots, so the second time they play at once.
+ */
+object PeerLibrary {
+    private val byDevice = ConcurrentHashMap<String, List<PeerLibraryItem>>()
+    private val _items = MutableStateFlow<List<PeerLibraryItem>>(emptyList())
+    val items: StateFlow<List<PeerLibraryItem>> = _items.asStateFlow()
+
+    private val _loading = MutableStateFlow<String?>(null)
+    /** The file being fetched to play, while it is on its way. */
+    val loading: StateFlow<String?> = _loading.asStateFlow()
+
+    private val _ready = MutableStateFlow<Pair<Uri, String>?>(null)
+    /** A fetched file ready to open (uri, mime type); the screen opens it and calls [consumed]. */
+    val ready: StateFlow<Pair<Uri, String>?> = _ready.asStateFlow()
+
+    @Volatile private var waitingFor: String? = null
+
+    fun refresh() {
+        val online = Ecosystem.devices.value.filter { !it.isPc }
+        byDevice.keys.retainAll(online.map { it.id }.toSet())
+        publish()
+        online.forEach { d ->
+            Ecosystem.sendTo(d.id, JsonObject().apply { addProperty("type", "library_list") })
+        }
+    }
+
+    /** A device answered library_list. */
+    fun onItems(json: JsonObject) {
+        val from = json.get("from")?.takeIf { !it.isJsonNull }?.asString ?: return
+        if (from == Ecosystem.PC_ID || from == Ecosystem.selfId) return
+        val name = Ecosystem.devices.value.firstOrNull { it.id == from }?.name ?: "Device"
+        byDevice[from] = json.getAsJsonArray("items")?.mapNotNull { el ->
+            val o = el.asJsonObject
+            val fileName = o.get("name")?.asString ?: return@mapNotNull null
+            PeerLibraryItem(
+                deviceId = from, deviceName = name,
+                id = o.get("id")?.asString ?: fileName, name = File(fileName).name,
+                size = o.get("size")?.asLong ?: 0L,
+                modified = o.get("modified")?.asLong ?: 0L,
+                type = o.get("type")?.asString ?: "video"
+            )
+        } ?: emptyList()
+        publish()
+    }
+
+    private fun publish() {
+        _items.value = byDevice.values.flatten().sortedByDescending { it.modified }
+    }
+
+    /** Play [item]: at once if this device already has it, otherwise fetch it first. */
+    fun play(context: Context, item: PeerLibraryItem) {
+        Library.localCopy(context, item.name, item.size)?.let {
+            _ready.value = Library.uriFor(context, it) to mimeFor(item)
+            return
+        }
+        waitingFor = item.name
+        _loading.value = item.name
+        Ecosystem.sendTo(item.deviceId, JsonObject().apply {
+            addProperty("type", "library_fetch")
+            addProperty("id", item.id)
+        })
+    }
+
+    /** Called as transfers change: open the file we were waiting for once it has arrived. */
+    fun onTransfers(context: Context, transfers: List<TransferInfo>) {
+        val want = waitingFor ?: return
+        val t = transfers.lastOrNull { !it.outgoing && it.name == want } ?: return
+        when (t.state) {
+            "done" -> {
+                waitingFor = null
+                _loading.value = null
+                val file = Library.localCopy(context, want) ?: return
+                _ready.value = Library.uriFor(context, file) to mimeFor(byDevice.values.flatten().firstOrNull { it.name == want })
+            }
+            "failed" -> {
+                waitingFor = null
+                _loading.value = null
+            }
+        }
+    }
+
+    fun consumed() {
+        _ready.value = null
+    }
+
+    private fun mimeFor(item: PeerLibraryItem?): String = when (item?.type) {
+        "audio" -> "audio/*"
+        "snapshot" -> "image/*"
+        else -> "video/*"
     }
 }

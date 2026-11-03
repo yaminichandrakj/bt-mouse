@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.9.2"
 GITHUB_REPOSITORY = "yaminichandrakj/lanyard"
 COMPANION_EXE_NAME = "Lanyard-Companion.exe"
 # Releases up to v1.9.0 shipped the companion under its old name.
@@ -1028,6 +1028,8 @@ class CompanionApp(QMainWindow):
     def _init_server(self):
         self.media_dirs = get_btmouse_media_dirs()
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
+        if self.server.ecosystem:
+            self.server.ecosystem.relay_url = self.remote_identity.worker_url
         self.available_apps = []
         self.quick_apps = []
         self.adapters = self.server.get_all_ips()
@@ -2432,6 +2434,8 @@ class CompanionApp(QMainWindow):
                                 "(for example https://btmouse-rv.<you>.workers.dev).")
             return
         self.remote_identity.set_worker_url(url)
+        if self.server and self.server.ecosystem:
+            self.server.ecosystem.relay_url = url
         self.generate_wan_qr()
         if url:
             QMessageBox.information(self, "Saved",

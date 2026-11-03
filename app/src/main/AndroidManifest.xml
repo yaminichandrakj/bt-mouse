@@ -131,6 +131,16 @@
             </intent-filter>
         </service>
 
+        <!-- Opened for an instant after a copy in another app, to read the clipboard -->
+        <activity
+            android:name=".ecosystem.ClipboardPeekActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.BtMouse.Translucent" />
+
         <activity
             android:name=".ecosystem.ClipboardSendActivity"
             android:exported="false"

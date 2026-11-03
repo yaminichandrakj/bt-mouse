@@ -289,6 +289,7 @@ object PeerLinks {
                 val gid = reply?.get("group_id")?.asString.orEmpty()
                 val gkey = reply?.get("group_key")?.asString.orEmpty()
                 if (!Family.adoptFromPeer(gid, gkey)) Family.rememberPeer(device.id, pinToken)
+                reply?.get("relay_url")?.asString?.let { Ecosystem.adoptRelayUrl(it) }
             }
             links[device.id]?.let { old -> old.job?.cancel(); old.socket.close() }
             links[device.id] = link

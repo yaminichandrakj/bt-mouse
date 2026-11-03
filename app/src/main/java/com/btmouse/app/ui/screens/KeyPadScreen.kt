@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.SpaceBar
 import androidx.compose.material.icons.filled.ContentCopy
@@ -132,6 +133,7 @@ fun KeyboardTab(
     notify: (String) -> Unit = {}
 ) {
     val haptics by settings.hapticFeedback.collectAsState()
+    val live by settings.liveTyping.collectAsState()
     var numpad by rememberSaveable { mutableStateOf(false) }
     var ctrl by remember { mutableStateOf(false) }
     var alt by remember { mutableStateOf(false) }
@@ -169,9 +171,20 @@ fun KeyboardTab(
 
         SendBox(
             text = text,
-            onTextChange = { text = it },
+            live = live,
+            onLiveChange = { settings.setLiveTyping(it); text = "" },
+            onTextChange = { new ->
+                // Live: send only what changed since the last edit. Autocorrect and
+                // suggestions rewrite the end of a word, so erase back to where the old and new
+                // text agree, then type the rest.
+                if (live) typeDifference(coordinator, text, new)
+                text = new
+            },
             onSend = {
-                if (text.isNotEmpty()) {
+                if (live) {
+                    press(HidConstants.KEY_ENTER)
+                    text = ""
+                } else if (text.isNotEmpty()) {
                     coordinator.sendText(text)
                     text = ""
                 }
@@ -233,39 +246,74 @@ fun KeyboardTab(
     }
 }
 
+/** Erase what [old] has beyond the shared start with [new], then type the rest of [new]. */
+private fun typeDifference(coordinator: ConnectionCoordinator, old: String, new: String) {
+    var same = 0
+    val limit = minOf(old.length, new.length)
+    while (same < limit && old[same] == new[same]) same++
+    // Count characters, not UTF-16 units, so an emoji takes one Backspace.
+    repeat(old.codePointCount(same, old.length)) { coordinator.sendKeyStroke(HidConstants.KEY_BACKSPACE, 0) }
+    if (same < new.length) coordinator.sendText(new.substring(same))
+}
+
 @Composable
-private fun SendBox(text: String, onTextChange: (String) -> Unit, onSend: () -> Unit) {
+private fun SendBox(
+    text: String,
+    live: Boolean,
+    onLiveChange: (Boolean) -> Unit,
+    onTextChange: (String) -> Unit,
+    onSend: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
             .clip(CircleShape)
             .background(Control)
-            .padding(start = 20.dp, end = 6.dp),
+            .padding(start = 6.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Live / Batch switch: live sends each key as you type, batch waits for Send.
+        Box(
+            modifier = Modifier
+                .height(40.dp)
+                .clip(CircleShape)
+                .background(if (live) Selected else Raised)
+                .clickable(role = Role.Switch, onClickLabel = if (live) "Switch to send on tap" else "Switch to live typing") { onLiveChange(!live) }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(if (live) "Live" else "Batch", color = if (live) Color.White else OnInkSoft, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.width(10.dp))
         Box(Modifier.weight(1f)) {
-            if (text.isEmpty()) Text("Type or dictate, then send", color = OnInkFaint, fontSize = 16.sp)
+            if (text.isEmpty()) {
+                Text(if (live) "Type here, it appears on the PC" else "Type or dictate, then send", color = OnInkFaint, fontSize = 16.sp, maxLines = 1)
+            }
             BasicTextField(
                 value = text,
                 onValueChange = onTextChange,
                 singleLine = true,
                 textStyle = TextStyle(color = OnInk, fontSize = 16.sp, fontFamily = Inter),
                 cursorBrush = SolidColor(OnInk),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                keyboardOptions = KeyboardOptions(imeAction = if (live) ImeAction.Go else ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { onSend() }, onGo = { onSend() }),
                 modifier = Modifier.fillMaxWidth()
             )
         }
+        val sendLabel = if (live) "Press Enter on PC" else "Send to PC"
         Box(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
                 .background(OnInk)
-                .clickable(role = Role.Button, onClickLabel = "Send to PC", onClick = onSend),
+                .clickable(role = Role.Button, onClickLabel = sendLabel, onClick = onSend),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.ArrowUpward, contentDescription = "Send to PC", tint = Ink, modifier = Modifier.size(20.dp))
+            Icon(
+                if (live) Icons.AutoMirrored.Filled.KeyboardReturn else Icons.Default.ArrowUpward,
+                contentDescription = sendLabel, tint = Ink, modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

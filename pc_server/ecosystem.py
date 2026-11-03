@@ -931,11 +931,147 @@ def family_key():
     return data
 
 
+# ----------------------------------------------------------------------
+# Calling phones: instead of waiting for a phone's next reconnect attempt, the PC
+# tells phones it has seen on this network that it is here (and at which address)
+# ----------------------------------------------------------------------
+PHONE_HUB_PORT = 53540
+
+
+def _is_lan_ip(ip):
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.version == 4 and a.is_private and not a.is_loopback
+
+
+class PhoneCaller:
+    """Remembers where each phone was last seen on the LAN and, while it's offline, sends
+    it a signed ``pc_call`` every few seconds. The proof is an HMAC with the family key,
+    so only this person's PC can make a phone reconnect or follow a new PC address."""
+
+    INTERVAL = 12.0
+    FORGET_AFTER = 30 * 86400
+
+    def __init__(self, registry, path=None):
+        self.registry = registry
+        self.path = Path(path) if path else _data_dir() / "known_phones.json"
+        self.port = 0
+        self.alive = True
+        self.enabled = True
+        self._lock = threading.Lock()
+        self._known = self._load()
+        self._wake = threading.Event()
+        self._thread = None
+
+    def _load(self):
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            return {k: v for k, v in data.items() if isinstance(v, dict) and _is_lan_ip(v.get("ip", ""))}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def _save(self):
+        try:
+            self.path.write_text(json.dumps(self._known), encoding="utf-8")
+        except OSError:
+            pass
+
+    def note(self, device_id, name, addr):
+        """A phone said hello over Wi-Fi from ``addr``: remember where to call it."""
+        if not device_id or not addr or not isinstance(addr, tuple):
+            return
+        ip = str(addr[0])
+        if not _is_lan_ip(ip):
+            return
+        with self._lock:
+            old = self._known.get(device_id, {})
+            changed = old.get("ip") != ip or old.get("name") != name
+            self._known[device_id] = {"ip": ip, "name": name, "seen": time.time()}
+            if changed or time.time() - old.get("seen", 0) > 3600:
+                self._save()
+
+    def known(self):
+        with self._lock:
+            return dict(self._known)
+
+    def start(self, port):
+        self.port = int(port or 0)
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._loop, name="PhoneCaller", daemon=True)
+            self._thread.start()
+
+    def call_now(self):
+        self._wake.set()
+
+    @staticmethod
+    def packet(key, target, port, ts=None, nonce=None):
+        import hashlib
+        import hmac
+        import secrets
+        ts = int(ts if ts is not None else time.time() * 1000)
+        nonce = nonce or secrets.token_hex(8)
+        proof = hmac.new(key.encode(), f"pc_call|{ts}|{nonce}|{target}".encode(), hashlib.sha256).hexdigest()
+        return {"type": "pc_call", "target": target, "ts": ts, "nonce": nonce, "port": port, "proof": proof}
+
+    def call_round(self, sock=None):
+        """Call every remembered phone that isn't connected, plus a broadcast for phones
+        whose address changed. Returns how many unicast calls went out."""
+        import socket as _socket
+        key = family_key()["key"]
+        now = time.time()
+        offline = []
+        with self._lock:
+            for device_id, info in list(self._known.items()):
+                if now - info.get("seen", 0) > self.FORGET_AFTER:
+                    del self._known[device_id]
+                    continue
+                if not self.registry.is_online(device_id):
+                    offline.append((device_id, info["ip"]))
+        if not offline:
+            return 0
+        own = sock is None
+        if own:
+            sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
+        try:
+            for device_id, ip in offline:
+                data = json.dumps(self.packet(key, device_id, self.port)).encode()
+                try:
+                    sock.sendto(data, (ip, PHONE_HUB_PORT))
+                except OSError:
+                    pass
+            try:
+                sock.sendto(json.dumps(self.packet(key, "*", self.port)).encode(), ("255.255.255.255", PHONE_HUB_PORT))
+            except OSError:
+                pass
+        finally:
+            if own:
+                sock.close()
+        return len(offline)
+
+    def _loop(self):
+        while self.alive:
+            if self.enabled and self.port:
+                try:
+                    self.call_round()
+                except Exception:
+                    pass
+            self._wake.wait(self.INTERVAL)
+            self._wake.clear()
+
+
+
 class Ecosystem:
     """Glue owned by ``Server``: registry, layout, and input sharing."""
 
     def __init__(self, pc_name="Laptop"):
         self.registry = DeviceRegistry()
+        # Cloudflare Worker that also runs the family relay; phones use it to reach each
+        # other over the internet when the PC is off.
+        self.relay_url = ""
         self.layout = Layout()
         self.layout.set_monitors(windows_monitors())
         self.share = InputShare(self.registry, self.layout, set_cursor=windows_set_cursor,
@@ -948,12 +1084,15 @@ class Ecosystem:
         self.sync.extra_handlers.append(self.library.handle)
         self.registry.on_change = self._on_devices_changed
         self.on_devices_changed = None
+        self.caller = PhoneCaller(self.registry)
 
     def _park_point(self):
         m = self.layout.monitors[0] if self.layout.monitors else Rect(0, 0, 1920, 1080)
         return int(m.x + m.w / 2), int(m.y + m.h / 2)
 
-    def start(self):
+    def start(self, port=None):
+        if port:
+            self.caller.start(port)
         if self.sync.http is None:
             self.sync.http = TransferHttpServer(self.sync)
             if not self.sync.http.start():
@@ -964,6 +1103,8 @@ class Ecosystem:
         """For good (the window replaces the server): end every background thread too."""
         self.stop()
         self.share.alive = False
+        self.caller.alive = False
+        self.caller.call_now()
         self.streams.alive = False
         self.library.alive = False
 
@@ -977,9 +1118,10 @@ class Ecosystem:
     def refresh_monitors(self, rects=None):
         self.layout.set_monitors(rects if rects is not None else windows_monitors())
 
-    def handle_hello(self, data, respond):
+    def handle_hello(self, data, respond, addr=None):
         device_id = self.registry.hello(data, respond)
         if device_id:
+            self.caller.note(device_id, str(data.get("name") or ""), addr)
             dev = self.registry.get(device_id)
             if device_id not in self.layout.placements and dev.get("caps", {}).get("control"):
                 self.layout.placements[device_id] = self.layout.default_placement(dev)
@@ -989,7 +1131,8 @@ class Ecosystem:
             group = family_key()
             respond({"type": "device_hello_ack", "pc_name": self.share.pc_name,
                      "controlling": self.share.target == device_id,
-                     "group_id": group["id"], "group_key": group["key"]})
+                     "group_id": group["id"], "group_key": group["key"],
+                     "relay_url": self.relay_url})
         return device_id
 
     def handle_release_request(self, data):

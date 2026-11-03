@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -76,6 +77,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.connection.RecordingEntry
+import com.btmouse.app.ecosystem.Ecosystem
+import com.btmouse.app.ecosystem.PeerLibrary
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.ChipIcon
 import com.btmouse.app.ui.components.IconLabel
@@ -407,6 +410,8 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             }
         }
 
+        PeerLibrarySection(selectedCategory)
+
         if (status.isNotBlank()) Text(status, color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Medium)
 
         if (filteredRecordings.isEmpty()) {
@@ -450,6 +455,87 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
                         } catch (_: Exception) {}
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Recordings on the user's other phones and tablets, played straight from them: no PC
+ * needed. Fetched once into this phone's own folders, then opened in the player.
+ */
+@Composable
+private fun PeerLibrarySection(category: String) {
+    val context = LocalContext.current
+    val devices by Ecosystem.devices.collectAsState()
+    val all by PeerLibrary.items.collectAsState()
+    val loading by PeerLibrary.loading.collectAsState()
+    val ready by PeerLibrary.ready.collectAsState()
+    val phones = devices.filter { !it.isPc }
+    var expanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(phones.map { it.id }) {
+        if (phones.isNotEmpty()) PeerLibrary.refresh()
+    }
+    LaunchedEffect(ready) {
+        val (uri, mime) = ready ?: return@LaunchedEffect
+        PeerLibrary.consumed()
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        }
+    }
+    if (phones.isEmpty()) return
+
+    val items = if (category == "all") all else all.filter { it.type == category }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(24.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconLabel(Icons.Filled.PhoneAndroid, "On your other devices", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium, iconSize = 18.dp)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "Refresh", color = AccentCyan, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { PeerLibrary.refresh() }.padding(6.dp)
+                )
+            }
+            loading?.let { Text("Getting $it…", color = AccentCyan, fontSize = 13.sp) }
+            if (items.isEmpty()) {
+                Text("Nothing here yet. Recordings made on ${phones.joinToString { it.name }} show up here.", color = TextMuted, fontSize = 13.sp)
+            }
+            val shown = if (expanded) items else items.take(5)
+            shown.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        when (item.type) { "audio" -> Icons.Filled.Mic; "snapshot" -> Icons.Filled.PhotoCamera; else -> Icons.Filled.Videocam },
+                        contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val size = if (item.size < 1024 * 1024) "${item.size / 1024} KB" else "%.1f MB".format(item.size / (1024.0 * 1024.0))
+                        Text("${item.deviceName}  ·  $size", color = TextMuted, fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = { PeerLibrary.play(context, item) },
+                        enabled = loading == null,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
+                    ) {
+                        IconLabel(Icons.Filled.PlayArrow, if (item.type == "snapshot") "Open" else "Play", fontWeight = FontWeight.Medium, iconSize = 16.dp)
+                    }
+                }
+            }
+            if (items.size > 5) {
+                Text(
+                    if (expanded) "Show fewer" else "Show all ${items.size}", color = AccentCyan, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { expanded = !expanded }.padding(6.dp)
+                )
             }
         }
     }

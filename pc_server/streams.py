@@ -11,6 +11,13 @@ Messages:
   stream_demand   {stream_id, viewers}               PC -> publisher
   stream_frame    {stream_id, frame (base64 JPEG), width, height}
                                                      publisher -> PC -> viewers
+  stream_h264     {stream_id, seq, part, parts, key, config, w, h, dw, dh, data}
+                                                     publisher -> this PC's window
+  stream_keyframe {stream_id, from}                  this PC's window -> publisher
+
+The PC's own Mirror window asks the phone for H.264 video directly (stream_watch with
+codec "h264" and from "pc"); while that video plays, the window stops counting as a
+JPEG viewer so the phone doesn't encode the same screen twice.
 """
 
 import threading
@@ -25,6 +32,8 @@ class StreamHub:
         self._lock = threading.Lock()
         self._streams = {}
         self._local_viewers = {}
+        # Local viewers that get video another way and don't need JPEG pictures.
+        self._local_quiet = set()
         self.on_streams_changed = None
         self.alive = True
         self._pruner = threading.Thread(target=self._prune_loop, name="StreamPrune", daemon=True)
@@ -36,6 +45,7 @@ class StreamHub:
             "stream_watch": self._on_watch,
             "stream_frame": self._on_frame,
             "stream_audio": self._on_frame,
+            "stream_h264": self._on_h264,
             "streams_query": self._on_query,
         }.get(cmd_type)
         if handler is None:
@@ -88,6 +98,18 @@ class StreamHub:
             except Exception:
                 pass
 
+    def _on_h264(self, data, sender_id):
+        stream_id = str(data.get("stream_id") or "")
+        if not stream_id.startswith(sender_id + ":"):
+            return
+        with self._lock:
+            locals_ = list(self._local_viewers.get(stream_id, {}).values())
+        for cb in locals_:
+            try:
+                cb(data)
+            except Exception:
+                pass
+
     # --- viewers -------------------------------------------------------
     def _on_watch(self, data, sender_id):
         stream_id = str(data.get("stream_id") or "")
@@ -112,14 +134,38 @@ class StreamHub:
     def unwatch_local(self, stream_id, key):
         with self._lock:
             self._local_viewers.get(stream_id, {}).pop(key, None)
+            self._local_quiet.discard((stream_id, key))
         self._send_demand(stream_id)
+
+    def set_local_jpeg(self, stream_id, key, wanted):
+        """A local window that plays H.264 stops asking for JPEG pictures (and asks again
+        if the video stops)."""
+        with self._lock:
+            if wanted:
+                self._local_quiet.discard((stream_id, key))
+            else:
+                self._local_quiet.add((stream_id, key))
+        self._send_demand(stream_id)
+
+    def request_h264(self, stream_id, on=True):
+        """Ask the publisher for H.264 video straight to this PC (repeat every few seconds)."""
+        owner = stream_id.split(":", 1)[0]
+        return self.registry.send(owner, {"type": "stream_watch", "stream_id": stream_id, "on": bool(on),
+                                          "codec": "h264", "from": LOCAL})
+
+    def request_keyframe(self, stream_id):
+        owner = stream_id.split(":", 1)[0]
+        return self.registry.send(owner, {"type": "stream_keyframe", "stream_id": stream_id, "from": LOCAL})
 
     def viewer_count(self, stream_id):
         with self._lock:
             s = self._streams.get(stream_id)
             if not s:
                 return 0
-            return len(s["viewers"]) + len(self._local_viewers.get(stream_id, {}))
+            return len(s["viewers"]) + self._jpeg_locals(stream_id)
+
+    def _jpeg_locals(self, stream_id):
+        return sum(1 for key in self._local_viewers.get(stream_id, {}) if (stream_id, key) not in self._local_quiet)
 
     def _send_demand(self, stream_id):
         with self._lock:

@@ -276,3 +276,29 @@ v1.9.0 checklist additions:
 - (35) Smooth mirroring on: phone → tablet plays smoothly; turning it off falls back to pictures.
 - (36) The setup guide appears on a fresh install and each step turns green.
 - (37) Type on a non-US layout (and with AltGr) from the laptop into the phone.
+
+## Build status (v1.9.2)
+
+| Item | Status |
+|---|---|
+| Internet relay | Built: `RelayRoom` Durable Object in the rendezvous Worker (`/relay/:room`). Each family has one room (id = HMAC(family key, "lanyard-relay-room\|v1")); the room forwards only. `RelayLinks.kt` seals every message with HMAC(family key, "lanyard-relay-seal\|v1") and checks sender, time (±2 min) and a one-off id inside the seal. Used last, after hub and peer links. The PC hands the Worker URL out in `device_hello_ack.relay_url`; PIN pairing passes it on. |
+| PC dialling out | Built: `PhoneCaller` (ecosystem.py) remembers each phone's LAN address (`known_phones.json`) and, while it's offline, sends a signed `pc_call` to its hub port 53540 every 12 s plus a broadcast. Proof = HMAC(family key, "pc_call\|ts\|nonce\|target"); the phone (`AndroidHub.onPcCall`) checks it, the age and the nonce, then `answerPcCall` connects, following a changed PC address. Ignored after the user chose Disconnect. |
+| H.264 in the PC Mirror window | Built: `video.py` (PyAV). The window asks the phone for `codec: h264` with `from: "pc"`; while video plays it stops counting as a JPEG viewer. Falls back to JPEG when PyAV is missing, the phone is older, or video stalls for 3 s. |
+| Phone ↔ phone library | Built: `PeerLibrary` asks other devices for `library_list`, fetches with `library_fetch` over whichever link reaches them, files it in the local folders and opens it. |
+| Keyboard without switching | Built for Android 13+: `RemoteControlService` declares `flagInputMethodEditor` and types through `AccessibilityService.getInputMethod()` (text, key events with modifiers). Android 9–12 still need the Lanyard keyboard for arrows and shortcuts. |
+| Phone → PC clipboard | Mostly automatic: Lanyard control watches for a Copy tap, "Copied" toasts and the Android 13 clipboard overlay, then opens `ClipboardPeekActivity` for an instant to read the clipboard (Android allows reading only when focused). Setting: Devices › Clipboard › Send copies from other apps. |
+| Live typing | Restored: the Keyboard tab's Live/Batch switch; live mode sends only the difference after each edit (autocorrect-safe). |
+
+Limits that remain (Android rules):
+- Copies are caught only while Lanyard control is on, and copies that show no Copy button or message (some apps copy silently) are still missed: use Share › Lanyard or the Quick Settings tile.
+- On Android 9–12, arrows and shortcuts still need the Lanyard keyboard selected.
+
+v1.9.2 checklist additions:
+- (38) Two phones on different networks (one on mobile data), PC off: both list each other as "Over the internet"; send a file, copy text, mirror.
+- (39) Phone on Wi-Fi with Lanyard closed in the background, then start Lanyard for PC: it connects within ~15 s without touching the phone.
+- (40) Change the laptop's IP (other Wi-Fi), start the PC app: the phone follows it.
+- (41) PC Mirror window plays smoothly; uninstalling PyAV (running from source) falls back to pictures.
+- (42) Tap Play on another phone's recording with the PC off.
+- (43) Android 13+: from the laptop, type arrows, Backspace and Ctrl+A/C/V into a phone app with Gboard still selected.
+- (44) Copy text in Chrome on the phone: it arrives on the laptop by itself.
+- (45) Keyboard tab: Live types each letter on the PC as you type; autocorrect fixes replace the word; Batch waits for Send.

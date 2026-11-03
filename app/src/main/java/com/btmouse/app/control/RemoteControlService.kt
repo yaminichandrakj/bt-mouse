@@ -20,6 +20,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.btmouse.app.ecosystem.ClipboardCatcher
 import com.btmouse.app.ecosystem.Ecosystem
 import com.google.gson.JsonObject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,7 +32,13 @@ import kotlin.math.hypot
 /**
  * Lets another device drive this phone: draws a pointer, turns clicks, drags and wheel
  * notches into touch gestures, and types into the focused field when the Lanyard
- * keyboard is not the active keyboard.
+ * keyboard is not the active keyboard. On Android 13 and later it types through
+ * Android's accessibility input connection, so arrows, Backspace, Enter and shortcuts
+ * work in any app without switching keyboards.
+ *
+ * It also notices when something is copied in another app (the Copy button, a
+ * "Copied" message) and briefly opens an invisible Lanyard window, the one moment
+ * Android lets an app read the clipboard, so copies reach the other devices by themselves.
  *
  * Positions arrive in this display's pixels (the size sent in device_hello).
  */
@@ -66,7 +73,32 @@ class RemoteControlService : AccessibilityService() {
         Ecosystem.onControlCapabilityChanged()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val e = event ?: return
+        if (e.packageName?.toString() == packageName) return
+        if (looksLikeCopy(e)) ClipboardCatcher.copied(this)
+    }
+
+    private val copyWords by lazy {
+        // The system's own word for Copy in this language, plus the English fallbacks.
+        setOfNotNull(
+            runCatching { getString(android.R.string.copy) }.getOrNull()?.lowercase(),
+            "copy", "copy text", "copy link"
+        )
+    }
+
+    private fun looksLikeCopy(e: AccessibilityEvent): Boolean {
+        val texts = (e.text.mapNotNull { it?.toString() } + listOfNotNull(e.contentDescription?.toString()))
+            .map { it.trim().lowercase() }
+        return when (e.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> texts.any { it in copyWords }
+            // "Copied to clipboard" toasts and Android 13's clipboard overlay.
+            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ->
+                texts.any { "copied" in it } ||
+                    (e.packageName?.toString() == "com.android.systemui" && e.className?.toString()?.contains("Clipboard", true) == true)
+            else -> false
+        }
+    }
 
     override fun onInterrupt() {}
 
@@ -307,6 +339,8 @@ class RemoteControlService : AccessibilityService() {
             }
             return
         }
+        // Android 13+: the same real key events, without switching keyboards.
+        if (Build.VERSION.SDK_INT >= 33 && A11yTyping.key(this, code, down, meta, char)) return
         if (!down) return
         when {
             char != null && char.isNotEmpty() -> typeText(char)
@@ -322,6 +356,7 @@ class RemoteControlService : AccessibilityService() {
             keyboard.commitText(text)
             return
         }
+        if (Build.VERSION.SDK_INT >= 33 && A11yTyping.text(this, text)) return
         val node = focusedEditable() ?: return
         val current = currentText(node)
         val start = node.textSelectionStart.takeIf { it in 0..current.length } ?: current.length
@@ -503,5 +538,37 @@ class RemoteControlService : AccessibilityService() {
         private val _enabled = MutableStateFlow(false)
         /** True while Android has this service turned on. */
         val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+    }
+}
+
+/**
+ * Android 13+ lets an accessibility service type like a keyboard (flagInputMethodEditor):
+ * text, key events with Ctrl/Shift/Alt, and editor actions, into whatever field has focus.
+ */
+@androidx.annotation.RequiresApi(33)
+internal object A11yTyping {
+    private fun connection(service: AccessibilityService) =
+        service.inputMethod?.takeIf { it.currentInputStarted }?.currentInputConnection
+
+    /** True when a text field is focused and can be typed into this way. */
+    fun available(service: AccessibilityService?): Boolean = service != null && connection(service) != null
+
+    fun text(service: AccessibilityService, text: String): Boolean {
+        val ic = connection(service) ?: return false
+        ic.commitText(text, 1, null)
+        return true
+    }
+
+    fun key(service: AccessibilityService, code: Int, down: Boolean, meta: Int, char: String?): Boolean {
+        val ic = connection(service) ?: return false
+        if (!char.isNullOrEmpty() && meta and (KeyEvent.META_CTRL_ON or KeyEvent.META_ALT_ON or KeyEvent.META_META_ON) == 0) {
+            if (down) ic.commitText(char, 1, null)
+            return true
+        }
+        val now = android.os.SystemClock.uptimeMillis()
+        val action = if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP
+        ic.sendKeyEvent(KeyEvent(now, now, action, code, 0, meta, android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+            KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE))
+        return true
     }
 }
