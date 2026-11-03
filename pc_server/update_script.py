@@ -6,9 +6,27 @@ as its child. The launcher keeps the EXE open for a few seconds after the child 
 while it deletes its unpacked files, so the swap must wait for *both* and retry while
 the file is still locked. Every step is appended to a log so a failed update leaves
 evidence behind.
+
+The new EXE must start as a fresh app. Anything it inherits from the old one's
+PyInstaller launcher (the _PYI_* / _MEIPASS2 variables) makes it reuse the old one's
+unpacked folder, which is gone by then: "Failed to load Python DLL". The script clears
+those and sets PYINSTALLER_RESET_ENVIRONMENT, and fresh_environment() does the same
+for the PowerShell process itself.
 """
 
+import os
+
 LAUNCH_ACK_SECONDS = 90
+
+
+def fresh_environment(base=None):
+    """The environment to start a new copy of the app with: no trace of this one's launcher."""
+    env = dict(os.environ if base is None else base)
+    for key in list(env):
+        if key.upper().startswith("_PYI_") or key.upper() == "_MEIPASS2":
+            del env[key]
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def _ps_quote(value) -> str:
@@ -43,6 +61,9 @@ def build_update_script(wait_pids, target, staged, replacement, backup,
         "    }\n"
         "  }\n"
         "}\n"
+        "Get-ChildItem Env: | Where-Object { $_.Name -like '_PYI_*' -or $_.Name -eq '_MEIPASS2' } |"
+        " ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) -ErrorAction SilentlyContinue }\n"
+        "$env:PYINSTALLER_RESET_ENVIRONMENT = '1'\n"
         "Log ('Updating to ' + $expectedVersion + '; waiting for the companion to close')\n"
         "try {\n"
         "  $deadline = (Get-Date).AddSeconds(120)\n"

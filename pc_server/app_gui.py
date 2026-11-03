@@ -49,7 +49,7 @@ except ImportError:
     HAS_QR = False
 
 try:
-    from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QSize, QRect, QPoint, QPointF
+    from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QSize, QRect, QPoint, QPointF, QSettings
     from PySide6.QtGui import QIcon, QPixmap, QImage, QFont, QColor, QAction, QPainter, QPen, QBrush, QCursor
     from PySide6.QtWidgets import (
         QApplication,
@@ -90,7 +90,7 @@ except ImportError:
     QLabel = object
 
 from remote_tunnel import RemoteIdentity, TunnelPublisher
-from update_script import build_update_script
+from update_script import build_update_script, fresh_environment
 from server import (
     Server,
     ensure_interactive_desktop,
@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.9.2"
+APP_VERSION = "1.9.3"
 GITHUB_REPOSITORY = "yaminichandrakj/lanyard"
 COMPANION_EXE_NAME = "Lanyard-Companion.exe"
 # Releases up to v1.9.0 shipped the companion under its old name.
@@ -855,6 +855,7 @@ class CompanionApp(QMainWindow):
         self.packet_count = 0
         self.last_client = "None"
         self.pc_webcam_preview_active = False
+        self._update_check_running = False
 
         self.bridge = _UiBridge()
         self.bridge.log_signal.connect(self._append_log)
@@ -916,6 +917,10 @@ class CompanionApp(QMainWindow):
 
         QTimer.singleShot(400, self._show_update_recovery_notice)
         QTimer.singleShot(250, self.refresh_quick_apps)
+        QTimer.singleShot(8000, lambda: self.check_for_companion_updates(automatic=True))
+        self.update_check_timer = QTimer(self)
+        self.update_check_timer.timeout.connect(lambda: self.check_for_companion_updates(automatic=True))
+        self.update_check_timer.start(24 * 60 * 60 * 1000)
 
         self.start_server()
         QTimer.singleShot(1500, self._restore_tunnel)
@@ -3025,15 +3030,20 @@ class CompanionApp(QMainWindow):
         except OSError as exc:
             self.log(f"Could not read update recovery details: {exc}")
 
-    def check_for_companion_updates(self):
+    def check_for_companion_updates(self, automatic=False):
         if not getattr(sys, "frozen", False):
-            QMessageBox.information(self, "Companion Updates", "In-app updates are available when running the packaged Windows EXE.")
+            if not automatic:
+                QMessageBox.information(self, "Companion Updates", "In-app updates are available when running the packaged Windows EXE.")
             return
-        self.btn_update.setEnabled(False)
-        self.btn_update.setText("Checking…")
-        threading.Thread(target=self._check_companion_updates_worker, daemon=True).start()
+        if self._update_check_running:
+            return
+        self._update_check_running = True
+        if not automatic:
+            self.btn_update.setEnabled(False)
+            self.btn_update.setText("Checking…")
+        threading.Thread(target=self._check_companion_updates_worker, args=(automatic,), daemon=True).start()
 
-    def _check_companion_updates_worker(self):
+    def _check_companion_updates_worker(self, automatic=False):
         try:
             api_url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
             request = urllib.request.Request(
@@ -3047,13 +3057,13 @@ class CompanionApp(QMainWindow):
             if release.get("draft") or release.get("prerelease"):
                 raise ValueError("GitHub did not return a stable release.")
             if self._version_tuple(tag_name) <= self._version_tuple(APP_VERSION):
-                self._run_on_ui(
-                    lambda: (
-                        QMessageBox.information(self, "Companion Updates", f"You are using the latest version (v{APP_VERSION})."),
-                        self.btn_update.setEnabled(True),
-                        self.btn_update.setText("Check for updates"),
-                    ),
-                )
+                def _up_to_date():
+                    self._update_check_running = False
+                    if not automatic:
+                        QMessageBox.information(self, "Companion Updates", f"You are using the latest version (v{APP_VERSION}).")
+                        self.btn_update.setEnabled(True)
+                        self.btn_update.setText("Check for updates")
+                self._run_on_ui(_up_to_date)
                 return
 
             assets = {item.get("name"): item for item in release.get("assets", [])}
@@ -3061,7 +3071,13 @@ class CompanionApp(QMainWindow):
             if not asset or not asset.get("browser_download_url"):
                 raise ValueError("The latest release does not include the Windows companion executable.")
 
+            preferences = QSettings("Lanyard", "Lanyard for PC")
+            if automatic and preferences.value("updates/dismissed_version", "") == tag_name:
+                self._run_on_ui(lambda: setattr(self, "_update_check_running", False))
+                return
+
             def _ask():
+                self._update_check_running = False
                 ans = QMessageBox.question(
                     self,
                     "Update Available",
@@ -3071,18 +3087,21 @@ class CompanionApp(QMainWindow):
                 if ans == QMessageBox.StandardButton.Yes:
                     self._start_update_download(tag_name, asset)
                 else:
+                    preferences.setValue("updates/dismissed_version", tag_name)
                     self.btn_update.setEnabled(True)
                     self.btn_update.setText("Check for updates")
 
             self._run_on_ui(_ask)
         except Exception as exc:
-            self._run_on_ui(
-                lambda error=str(exc): (
-                    QMessageBox.critical(self, "Update Failed", f"Could not check for updates.\n\n{error}"),
-                    self.btn_update.setEnabled(True),
-                    self.btn_update.setText("Check for updates"),
-                ),
-            )
+            def _check_failed(error=str(exc)):
+                self._update_check_running = False
+                if automatic:
+                    self.log(f"Automatic update check failed: {error}")
+                else:
+                    QMessageBox.critical(self, "Update Failed", f"Could not check for updates.\n\n{error}")
+                self.btn_update.setEnabled(True)
+                self.btn_update.setText("Check for updates")
+            self._run_on_ui(_check_failed)
 
     def _start_update_download(self, tag_name, asset):
         self.btn_update.setText("Downloading…")
@@ -3188,7 +3207,9 @@ class CompanionApp(QMainWindow):
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                        "-WindowStyle", "Hidden", "-File", str(script_path)]
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+            # A fresh environment, so the new version doesn't try to reuse this one's unpacked files.
+            quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                         env=fresh_environment())
             try:
                 # Leave any job object the companion runs in, so closing it does not end the swap.
                 subprocess.Popen(command, creationflags=flags | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000), **quiet)

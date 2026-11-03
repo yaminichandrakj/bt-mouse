@@ -2,6 +2,7 @@ package com.btmouse.app
 
 import android.app.Application
 import com.btmouse.app.connection.ConnectionCoordinator
+import com.btmouse.app.data.InAppUpdateManager
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.sensors.AirMouseManager
 import kotlinx.coroutines.CoroutineScope
@@ -21,9 +22,13 @@ class BtMouseApplication : Application() {
     lateinit var airMouseManager: AirMouseManager
         private set
 
+    lateinit var updateManager: InAppUpdateManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
         settingsRepository = SettingsRepository(applicationContext)
+        updateManager = InAppUpdateManager(applicationContext)
         // The device group decides how every link authenticates, so load it before any link starts.
         com.btmouse.app.ecosystem.Group.init(applicationContext)
         connectionCoordinator = ConnectionCoordinator(

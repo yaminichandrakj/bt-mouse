@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.HidConstants
+import com.btmouse.app.data.InAppUpdateManager
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.sensors.AirMouseManager
 import com.btmouse.app.ui.MainScreen
@@ -24,6 +25,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var connectionCoordinator: ConnectionCoordinator
     private lateinit var airMouseManager: AirMouseManager
+    private lateinit var updateManager: InAppUpdateManager
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val volumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
@@ -59,6 +61,7 @@ class MainActivity : FragmentActivity() {
         settingsRepository = app.settingsRepository
         connectionCoordinator = app.connectionCoordinator
         airMouseManager = app.airMouseManager
+        updateManager = app.updateManager
 
         // Ensure coordinator is initialized unconditionally
         connectionCoordinator.initialize()
@@ -69,10 +72,16 @@ class MainActivity : FragmentActivity() {
                 MainScreen(
                     coordinator = connectionCoordinator,
                     airMouseManager = airMouseManager,
-                    settings = settingsRepository
+                    settings = settingsRepository,
+                    updateManager = updateManager
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::updateManager.isInitialized) updateManager.onHostResumed()
     }
 
     private fun checkAndRequestPermissions() {
