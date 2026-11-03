@@ -1064,6 +1064,18 @@ class CompanionUpdateScriptTests(unittest.TestCase):
         self.assertIn("Move-Item -LiteralPath $replacement -Destination $target -Force", script)
         self.assertIn("Move-Item -LiteralPath $backup -Destination $current", script)
 
+    def test_new_version_starts_fresh_not_in_the_old_ones_unpacked_folder(self):
+        # Inheriting the old launcher's _PYI_* variables made v1.9.2 fail with "Failed to load Python DLL".
+        script = self.build()
+        clear = script.index("$env:PYINSTALLER_RESET_ENVIRONMENT = '1'")
+        self.assertLess(clear, script.index("Start-Process -FilePath $target"))
+        self.assertIn("$_.Name -like '_PYI_*'", script)
+        env = update_script.fresh_environment({"PATH": "x", "_PYI_APPLICATION_HOME_DIR": "C:/t/_MEI1",
+                                               "_PYI_ARCHIVE_FILE": "a", "_MEIPASS2": "C:/t/_MEI1"})
+        self.assertEqual(env, {"PATH": "x", "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+        gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
+        self.assertIn("env=fresh_environment()", gui)
+
     def test_update_script_is_not_launched_detached(self):
         gui = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
         launch = gui[gui.index("No DETACHED_PROCESS"):gui.index("_show_update_installing(tag_name))")]

@@ -90,7 +90,7 @@ except ImportError:
     QLabel = object
 
 from remote_tunnel import RemoteIdentity, TunnelPublisher
-from update_script import build_update_script
+from update_script import build_update_script, fresh_environment
 from server import (
     Server,
     ensure_interactive_desktop,
@@ -3188,7 +3188,9 @@ class CompanionApp(QMainWindow):
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                        "-WindowStyle", "Hidden", "-File", str(script_path)]
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+            # A fresh environment, so the new version doesn't try to reuse this one's unpacked files.
+            quiet = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                         env=fresh_environment())
             try:
                 # Leave any job object the companion runs in, so closing it does not end the swap.
                 subprocess.Popen(command, creationflags=flags | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000), **quiet)
