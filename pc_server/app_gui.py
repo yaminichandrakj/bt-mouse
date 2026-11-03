@@ -1030,6 +1030,7 @@ class CompanionApp(QMainWindow):
         self.server = Server(port=self.current_port, ws_port=self.ws_port, auth_token=self.auth_token)
         if self.server.ecosystem:
             self.server.ecosystem.relay_url = self.remote_identity.worker_url
+        self.server.on_group_changed = lambda: self._run_on_ui(self._refresh_group_ui)
         self.available_apps = []
         self.quick_apps = []
         self.adapters = self.server.get_all_ips()
@@ -1361,13 +1362,44 @@ class CompanionApp(QMainWindow):
         pc.setContentsMargins(24, 24, 24, 24)
         pc.setSpacing(28)
 
+        qr_col = QVBoxLayout()
+        qr_col.setSpacing(6)
         self.qr_label = QLabel()
         self.qr_label.setFixedSize(196, 196)
         self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr_label.setStyleSheet("background-color: #FFFFFF; border-radius: 14px; padding: 12px;")
-        pc.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignTop)
+        qr_col.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.lbl_qr_live = QLabel("")
+        self.lbl_qr_live.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_qr_live.setStyleSheet("color: #8E8E8E; font-size: 12px;")
+        qr_col.addWidget(self.lbl_qr_live)
+        qr_col.addStretch()
+        pc.addLayout(qr_col)
 
-        pin_col = QVBoxLayout()
+        # Device group: who's in, remove, recovery words (replaces the PIN when available).
+        self.group_box = QWidget()
+        gb = QVBoxLayout(self.group_box)
+        gb.setContentsMargins(0, 0, 0, 0)
+        gb.setSpacing(6)
+        gb.addWidget(self._section_label("Your devices"))
+        lbl_group_d = QLabel("Scan the code with Lanyard on a phone or tablet to add it. The code changes every "
+                             "20 seconds and works once, so a photo of it is useless. Remove a device here and "
+                             "it's locked out straight away.")
+        lbl_group_d.setWordWrap(True)
+        lbl_group_d.setStyleSheet("color: #8E8E8E; font-size: 13px;")
+        gb.addWidget(lbl_group_d)
+        self.group_members_box = QVBoxLayout()
+        self.group_members_box.setSpacing(4)
+        gb.addLayout(self.group_members_box)
+        self.btn_group_words = make_button("Write down recovery words", "key")
+        self.btn_group_words.clicked.connect(self._show_recovery_words)
+        gb.addWidget(self.btn_group_words, 0, Qt.AlignmentFlag.AlignLeft)
+        gb.addStretch()
+        pc.addWidget(self.group_box, 1)
+
+        self.pin_box = QWidget()
+        pin_col = QVBoxLayout(self.pin_box)
+        pin_col.setContentsMargins(0, 0, 0, 0)
         pin_col.setSpacing(6)
         pin_col.addWidget(self._section_label("Pairing PIN"))
         self.lbl_wifi_pin = QLabel(self.auth_token)
@@ -1399,8 +1431,13 @@ class CompanionApp(QMainWindow):
         pin_row.addStretch()
         pin_col.addLayout(pin_row)
         pin_col.addStretch()
-        pc.addLayout(pin_col, 1)
+        pc.addWidget(self.pin_box, 1)
         layout.addWidget(pair_card)
+        # The live code changes every 20 s.
+        self.qr_timer = QTimer(self)
+        self.qr_timer.timeout.connect(self.generate_qr)
+        self.qr_timer.start(int(1000 * 20))
+        self._refresh_group_ui()
 
         layout.addSpacing(12)
         layout.addWidget(self._section_label("Ways to connect"))
@@ -2485,6 +2522,13 @@ class CompanionApp(QMainWindow):
             "pin": self.auth_token,
             "token": self.auth_token,
         }
+        offer = self.server.group_offer() if self.server and getattr(self.server, "group", None) else None
+        if offer:
+            # Device group: a one-time join code replaces the PIN, which no longer lets anything in.
+            payload.update({"type": "lanyard_join", "v": 3, "pc": True})
+            payload.update(offer)
+            payload.pop("pin", None)
+            payload.pop("token", None)
         if self.remote_identity.worker_url and self.remote_identity.public_b64:
             payload["rv"] = {
                 "worker": self.remote_identity.worker_url,
@@ -2496,6 +2540,78 @@ class CompanionApp(QMainWindow):
     def generate_qr(self):
         if hasattr(self, "qr_label"):
             self._set_qr_pixmap(self.qr_label, self.pairing_payload(), 172)
+            if hasattr(self, "lbl_qr_live"):
+                live = bool(self.server and getattr(self.server, "group", None))
+                self.lbl_qr_live.setText("New code every 20 s · works once" if live else "")
+
+    # ------------------------------------------------------------------
+    # Device group
+    # ------------------------------------------------------------------
+    def _refresh_group_ui(self):
+        group = getattr(self.server, "group", None) if self.server else None
+        if not hasattr(self, "group_box"):
+            return
+        self.group_box.setVisible(group is not None)
+        self.pin_box.setVisible(group is None)
+        if group is None:
+            return
+        while self.group_members_box.count():
+            item = self.group_members_box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        for m in sorted(group.members(), key=lambda m: (m["id"] != "pc", m["name"].lower())):
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            kind = {"pc": "This PC", "tablet": "Tablet"}.get(m.get("kind"), "Phone")
+            lbl = QLabel(f"{m['name']}  ·  {kind}")
+            rl.addWidget(lbl, 1)
+            if m["id"] != "pc":
+                btn = QPushButton("Remove")
+                btn.setObjectName("DangerBtn")
+                btn.clicked.connect(lambda _c=False, mid=m["id"], name=m["name"]: self._remove_group_member(mid, name))
+                rl.addWidget(btn)
+            self.group_members_box.addWidget(row)
+        self.btn_group_words.setVisible(bool(group.pending_words))
+        if hasattr(self, "lbl_sidebar_ip"):
+            n = len(group.members())
+            self.lbl_sidebar_ip.setText(f"{self.current_ip}  ·  {n} device{'s' if n != 1 else ''}")
+        self.generate_qr()
+        # Offer the words once, when someone is actually looking (not minimised, not a test run).
+        if (group.pending_words and not getattr(self, "_words_offered", False) and self.isVisible()
+                and not self.isMinimized() and QApplication.platformName() != "offscreen"):
+            self._words_offered = True
+            QTimer.singleShot(800, self._show_recovery_words)
+
+    def _remove_group_member(self, device_id, name):
+        ans = QMessageBox.question(
+            self, "Remove device",
+            f"Remove {name}? It's locked out straight away and needs a new code to join again.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ans == QMessageBox.StandardButton.Yes and self.server and self.server.remove_group_member(device_id):
+            self.log(f"Removed {name} from your devices.")
+            self._refresh_group_ui()
+
+    def _show_recovery_words(self):
+        group = getattr(self.server, "group", None) if self.server else None
+        if group is None or not group.pending_words:
+            return
+        words = group.pending_words.split()
+        grid = "\n".join("    ".join(f"{i + j + 1:>2}. {words[i + j]:<10}" for j in range(4)) for i in range(0, 24, 4))
+        box = QMessageBox(self)
+        box.setWindowTitle("Your recovery words")
+        box.setText("Write these 24 words down and keep them somewhere safe. They bring your devices back "
+                    "together if you ever lose all of them. They're shown only once and never leave this PC.")
+        box.setInformativeText(grid)
+        box.setStyleSheet("QLabel { font-family: Consolas, monospace; }")
+        done = box.addButton("I've written them down", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        group.words_seen()
+        self._refresh_group_ui()
+        if box.clickedButton() is not done:
+            self.log("Recovery words skipped. Without them, losing every device means starting a new group.")
         if hasattr(self, "lbl_wan_url"):
             self.lbl_wan_url.setText(f"ws://{self.current_ip}:{self.ws_port}")
 

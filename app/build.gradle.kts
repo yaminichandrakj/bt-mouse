@@ -103,6 +103,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation("com.google.crypto.tink:tink-android:1.13.0")
     implementation("com.google.zxing:core:3.5.3")
+    testImplementation("junit:junit:4.13.2")
 
     debugImplementation(libs.androidx.ui.tooling)
 }

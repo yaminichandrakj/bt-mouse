@@ -3,56 +3,37 @@ package com.btmouse.app.ecosystem
 import android.content.Context
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import java.security.SecureRandom
 
 /**
- * The secret shared by all of one person's devices. The PC hands its key to every phone
- * and tablet it pairs with; devices that never met a PC make their own, and a one-time
- * PIN pairing passes it on. Devices with the same key find and trust each other on the
- * network by themselves.
+ * The key shared by this person's devices, now provided by their device group (Group.kt):
+ * [id] is the group id and [key] the current epoch key, which changes when a device is
+ * removed. Devices join a group by scanning a member's live QR; there's no PIN pairing.
  */
 object Family {
     private const val PREFS = "bt_mouse_prefs"
-    private const val KEY_ID = "family_id"
-    private const val KEY_KEY = "family_key"
-    private const val KEY_FROM_PC = "family_from_pc"
     private const val KEY_PEER_TOKENS = "family_peer_tokens"
 
     private lateinit var appContext: Context
 
     fun init(context: Context) {
         appContext = context.applicationContext
-        if (key().isEmpty()) {
-            val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
-            val idBytes = ByteArray(6).also { SecureRandom().nextBytes(it) }
-            prefs().edit()
-                .putString(KEY_KEY, bytes.joinToString("") { "%02x".format(it) })
-                .putString(KEY_ID, idBytes.joinToString("") { "%02x".format(it) })
-                .putBoolean(KEY_FROM_PC, false)
-                .apply()
-        }
+        Group.init(appContext)
     }
 
     private fun prefs() = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun id(): String = prefs().getString(KEY_ID, "") ?: ""
-    fun key(): String = prefs().getString(KEY_KEY, "") ?: ""
-    fun fromPc(): Boolean = prefs().getBoolean(KEY_FROM_PC, false)
+    fun id(): String = if (Group.ready) Group.groupId else ""
+    fun key(): String = if (Group.ready) Group.epochKeyHex() else ""
+    /** True when this device's group includes a PC. */
+    fun fromPc(): Boolean = Group.hasPc()
 
-    /** The PC's key always wins, so every device paired with the PC ends up in one family. */
-    fun adoptFromPc(id: String, key: String) {
-        if (id.isBlank() || key.length != 64 || (id == id() && key == key())) return
-        prefs().edit().putString(KEY_ID, id).putString(KEY_KEY, key).putBoolean(KEY_FROM_PC, true).apply()
-        AndroidHub.onFamilyChanged()
-    }
+    /** Old PC builds sent their family key in the hello answer; groups only change by joining. */
+    @Suppress("UNUSED_PARAMETER")
+    fun adoptFromPc(id: String, key: String) = Unit
 
-    /** Joining another device by its PIN: take its family unless we already belong to a PC's. */
-    fun adoptFromPeer(id: String, key: String): Boolean {
-        if (fromPc() || id.isBlank() || key.length != 64) return false
-        prefs().edit().putString(KEY_ID, id).putString(KEY_KEY, key).apply()
-        AndroidHub.onFamilyChanged()
-        return true
-    }
+    /** PIN pairing no longer hands out the group key. */
+    @Suppress("UNUSED_PARAMETER")
+    fun adoptFromPeer(id: String, key: String): Boolean = false
 
     /** Peers in another family that were paired by PIN keep using that PIN. */
     fun peerToken(deviceId: String): String? = tokens().get(deviceId)?.asString

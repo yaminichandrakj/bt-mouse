@@ -24,6 +24,8 @@ class BtMouseApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         settingsRepository = SettingsRepository(applicationContext)
+        // The device group decides how every link authenticates, so load it before any link starts.
+        com.btmouse.app.ecosystem.Group.init(applicationContext)
         connectionCoordinator = ConnectionCoordinator(
             context = applicationContext,
             settings = settingsRepository,

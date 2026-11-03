@@ -90,6 +90,7 @@ import com.btmouse.app.ui.theme.OnInkMuted
 import com.btmouse.app.ui.theme.Panel
 import com.btmouse.app.ui.theme.StatusGreen
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -132,10 +133,48 @@ fun DevicesScreen(
     val relayPeers by RelayLinks.peers.collectAsState()
     val relayUrl by settings.relayUrl.collectAsState()
     val rvWorker by settings.rvWorker.collectAsState()
-    var pairing by remember { mutableStateOf<com.btmouse.app.ecosystem.NearbyDevice?>(null) }
-    var pinInput by remember { mutableStateOf("") }
-    var pairMessage by remember { mutableStateOf<String?>(null) }
+    val groupMembers by com.btmouse.app.ecosystem.Group.members.collectAsState()
+    val wordsPending by com.btmouse.app.ecosystem.Group.wordsPending.collectAsState()
+    val selfId = remember { DeviceIdentity.id(context) }
     var showQr by remember { mutableStateOf(false) }
+    var joinCode by remember { mutableStateOf<String?>(null) }
+    var joinMessage by remember { mutableStateOf<String?>(null) }
+    var removing by remember { mutableStateOf<com.btmouse.app.ecosystem.GroupMember?>(null) }
+    var showWords by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(false) }
+    var restoreWords by remember { mutableStateOf("") }
+    var restoreMessage by remember { mutableStateOf<String?>(null) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    // The live code: a new one-time code every 20 s while it's on screen.
+    LaunchedEffect(showQr, hubOn) {
+        while (showQr) {
+            joinCode = com.btmouse.app.ecosystem.AndroidHub.joinCode()
+            delay(com.btmouse.app.ecosystem.Group.OFFER_REFRESH_MS)
+        }
+        joinCode = null
+    }
+
+    fun scanJoinCode() {
+        val options = com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder()
+            .setBarcodeFormats(com.google.mlkit.vision.barcode.common.Barcode.FORMAT_QR_CODE)
+            .build()
+        com.google.mlkit.vision.codescanner.GmsBarcodeScanning.getClient(context, options).startScan()
+            .addOnSuccessListener { barcode ->
+                val raw = barcode.rawValue.orEmpty()
+                val obj = runCatching { com.google.gson.JsonParser.parseString(raw).asJsonObject }.getOrNull()
+                if (obj?.get("type")?.asString != "lanyard_join") {
+                    joinMessage = "That isn't a Lanyard code."
+                    return@addOnSuccessListener
+                }
+                joinMessage = "Joining…"
+                scope.launch {
+                    val error = com.btmouse.app.ecosystem.GroupJoin.join(obj, settings)
+                    joinMessage = error ?: "Joined ${obj.get("name")?.asString ?: "the group"}."
+                    if (error == null && obj.get("pc")?.asBoolean == true) coordinator.connectSavedPc()
+                }
+            }
+    }
     val sharingScreen by ScreenShare.active.collectAsState()
     val captureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data
@@ -289,49 +328,66 @@ fun DevicesScreen(
             }
         }
 
-        SectionHeader("Nearby")
+        SectionHeader("Your devices group")
         PanelCard {
             ToggleRow(
                 "Find my devices on this Wi-Fi",
-                "Phones and tablets paired with the same PC link to each other by themselves. No codes to scan.",
+                "Devices in your group link to each other by themselves on the same network.",
                 hubOn
             ) { com.btmouse.app.ecosystem.AndroidHub.setEnabled(it) }
-            if (hubOn) {
-                Spacer(Modifier.height(12.dp))
-                Text("This device's PIN: ${com.btmouse.app.ecosystem.AndroidHub.pin()}", color = OnInk, fontSize = 16.sp)
-                Caption("Without a PC, pair once: pick this device on the other one and type this PIN. It is remembered.")
-                if (nearby.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    nearby.forEach { n ->
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                            Column(Modifier.weight(1f)) {
-                                Text(n.name, color = OnInk, fontSize = 15.sp)
-                                Caption("Not paired yet")
-                            }
-                            PillButton("Pair", { pairing = n; pinInput = "" }, height = 38.dp)
-                        }
+            Spacer(Modifier.height(12.dp))
+            groupMembers.forEach { m ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(m.name, color = OnInk, fontSize = 15.sp)
+                        Caption(when {
+                            m.id == selfId -> "This device"
+                            m.kind == "pc" -> "PC"
+                            m.kind == "tablet" -> "Tablet"
+                            else -> "Phone"
+                        })
                     }
-                }
-                pairMessage?.let { Spacer(Modifier.height(8.dp)); Caption(it, color = AccentAmber) }
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    if (showQr) "Hide QR code" else "Show a QR code instead",
-                    color = OnInk, fontSize = 14.sp,
-                    modifier = Modifier.clickable { showQr = !showQr }.padding(vertical = 6.dp)
-                )
-                if (showQr) {
-                    val code = remember(hubOn) { com.btmouse.app.ecosystem.AndroidHub.pairingCode() }
-                    if (code == null) {
-                        Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the tablet).", color = AccentAmber)
-                    } else {
-                        val qr = remember(code) { qrBitmap(code, 600) }
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            androidx.compose.foundation.Image(qr, "Pairing code for this device", Modifier.size(200.dp).clip(RoundedCornerShape(12.dp)))
-                        }
-                        Caption("For a tablet with no PC: Connect › Scan PC QR code. It then uses this device as its PC.")
-                    }
+                    if (m.id != selfId) PillButton("Remove", { removing = m }, height = 38.dp, style = PillStyle.Danger)
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton(if (showQr) "Hide code" else "Add a device", { showQr = !showQr }, style = PillStyle.Primary)
+                PillButton("Scan a code", { scanJoinCode() })
+            }
+            if (showQr) {
+                Spacer(Modifier.height(12.dp))
+                val code = joinCode
+                if (code == null) {
+                    Caption("Join a Wi-Fi network (or turn on this phone's hotspot and join it from the other device).", color = AccentAmber)
+                } else {
+                    val qr = remember(code) { qrBitmap(code, 600) }
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        androidx.compose.foundation.Image(qr, "Code to add a device", Modifier.size(220.dp).clip(RoundedCornerShape(12.dp)))
+                    }
+                    Caption("On the other phone or tablet: Devices › Scan a code. The code changes every 20 seconds and works once.")
+                }
+            }
+            joinMessage?.let { Spacer(Modifier.height(8.dp)); Caption(it, color = AccentAmber) }
+            if (nearby.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Caption("Not in your group yet: ${nearby.joinToString { it.name }}. Add them with a code.")
+            }
+            Spacer(Modifier.height(14.dp))
+            if (wordsPending) {
+                Text("Write down your recovery words", color = OnInk, fontSize = 15.sp)
+                Caption("They bring your devices back together if you ever lose all of them. Shown once, kept only on this device until you're done.")
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PillButton("Show words", { showWords = true })
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            Text(
+                "Restore with recovery words",
+                color = OnInk, fontSize = 14.sp,
+                modifier = Modifier.clickable { restoring = true }.padding(vertical = 6.dp)
+            )
         }
 
         SectionHeader("Away from home")
@@ -406,31 +462,82 @@ fun DevicesScreen(
         Spacer(Modifier.height(24.dp))
     }
 
-    pairing?.let { target ->
+    removing?.let { m ->
         androidx.compose.material3.AlertDialog(
-            onDismissRequest = { pairing = null },
-            title = { Text("Pair with ${target.name}") },
+            onDismissRequest = { removing = null },
+            title = { Text("Remove ${m.name}?") },
+            text = { Text("It's locked out straight away: your other devices switch to a new key it never gets. To add it again, scan a fresh code.") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    removing = null
+                    joinMessage = if (com.btmouse.app.ecosystem.Ecosystem.removeFromGroup(m.id)) "Removed ${m.name}." else "Couldn't remove ${m.name}."
+                }) { Text("Remove") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { removing = null }) { Text("Cancel") } }
+        )
+    }
+
+    if (showWords) {
+        val words = remember { com.btmouse.app.ecosystem.Group.pendingWords.orEmpty().split(" ") }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showWords = false },
+            title = { Text("Your recovery words") },
             text = {
                 Column {
-                    Text("Type the PIN shown on ${target.name} under Devices › Nearby.")
+                    Text("Write these 24 words down, in order, and keep them somewhere safe.")
                     Spacer(Modifier.height(10.dp))
-                    androidx.compose.material3.OutlinedTextField(
-                        value = pinInput,
-                        onValueChange = { pinInput = it.filter(Char::isDigit).take(6) },
-                        singleLine = true,
-                        label = { Text("PIN") }
-                    )
+                    words.chunked(3).forEachIndexed { row, three ->
+                        Text(
+                            three.mapIndexed { i, w -> "${row * 3 + i + 1}. $w" }.joinToString("    "),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, fontSize = 14.sp
+                        )
+                    }
                 }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = {
-                    val pin = pinInput
-                    pairing = null
-                    pairMessage = "Pairing with ${target.name}…"
-                    com.btmouse.app.ecosystem.PeerLinks.pairWithPin(target, pin) { _, message -> pairMessage = message }
-                }, enabled = pinInput.length == 6) { Text("Pair") }
+                    showWords = false
+                    com.btmouse.app.ecosystem.Group.wordsSeen()
+                }) { Text("I've written them down") }
             },
-            dismissButton = { androidx.compose.material3.TextButton(onClick = { pairing = null }) { Text("Cancel") } }
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { showWords = false }) { Text("Later") } }
+        )
+    }
+
+    if (restoring) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { restoring = false },
+            title = { Text("Restore your devices") },
+            text = {
+                Column {
+                    Text("Type your 24 recovery words. This device rejoins your group and the others get a new key.")
+                    Spacer(Modifier.height(10.dp))
+                    androidx.compose.material3.OutlinedTextField(
+                        value = restoreWords,
+                        onValueChange = { restoreWords = it },
+                        label = { Text("Recovery words") },
+                        minLines = 3
+                    )
+                    restoreMessage?.let { Spacer(Modifier.height(8.dp)); Text(it, color = AccentAmber) }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    restoreMessage = "Restoring…"
+                    scope.launch {
+                        val error = com.btmouse.app.ecosystem.Ecosystem.restoreGroup(restoreWords)
+                        if (error == null) {
+                            restoring = false
+                            restoreWords = ""
+                            restoreMessage = null
+                            joinMessage = "Restored. Your devices are back together."
+                        } else {
+                            restoreMessage = error
+                        }
+                    }
+                }, enabled = restoreWords.trim().split(Regex("\\s+")).size == 24) { Text("Restore") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { restoring = false }) { Text("Cancel") } }
         )
     }
 }

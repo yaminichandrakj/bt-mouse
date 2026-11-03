@@ -616,6 +616,8 @@ class ConnectionCoordinator(
     }
 
     private fun isPaired(): Boolean {
+        // Joined the PC's device group (live QR), or an older PIN pairing.
+        if (com.btmouse.app.ecosystem.Group.hasPc()) return true
         val pin = settings.serverPin.value.trim()
         return pin.length == 6 && pin.all { it.isDigit() }
     }

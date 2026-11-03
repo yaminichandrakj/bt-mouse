@@ -188,7 +188,7 @@ class WifiClientManager(
             val parsed = gson.fromJson(jsonStr, JsonObject::class.java) ?: return
             val json = secure.unwrap(parsed) ?: return
             if (json.get("type")?.asString == "key_exchange_ack") {
-                secure.onAck(json)
+                if (!secure.onAck(json)) secure.notMemberMessage?.let { _statusMessage.value = it }
                 return
             }
             if (json.get("type")?.asString == "secure_reset") {
@@ -631,11 +631,12 @@ class WifiClientManager(
             _statusMessage.value = "Enter a valid PC address and port"
             return
         }
-        if (pin.isBlank()) {
-            _statusMessage.value = "Enter the pairing PIN shown by the PC companion"
+        // In a device group the PIN plays no part: the member handshake proves who we are.
+        if (pin.isBlank() && !secure.groupMode) {
+            _statusMessage.value = "Scan the QR on the PC's Connect page"
             return
         }
-        if (pin.length != 6 || pin.any { !it.isDigit() }) {
+        if (!secure.groupMode && (pin.length != 6 || pin.any { !it.isDigit() })) {
             _statusMessage.value = "The PC companion pairing PIN must be six digits"
             return
         }
@@ -742,7 +743,7 @@ class WifiClientManager(
             out.addProperty("token", settings.serverPin.value.trim())
             if (clientSessionId.isNotEmpty()) out.addProperty("client_session", clientSessionId)
             nextSeqSupplier?.invoke()?.let { seq -> if (seq > 0) out.addProperty("seq", seq) }
-            val bytes = secure.wrap(out.toString()).toByteArray()
+            val bytes = (secure.wrap(out.toString()) ?: return).toByteArray()
             if (bytes.size > 65000) {
                 Log.w(tag, "Skipping oversized UDP datagram (${bytes.size} bytes)")
                 return
@@ -777,7 +778,7 @@ class WifiClientManager(
                 }
             }
             val authenticatedData = data + extra
-            val json = secure.wrap(gson.toJson(authenticatedData))
+            val json = secure.wrap(gson.toJson(authenticatedData)) ?: return
             val bytes = json.toByteArray()
             if (bytes.size > 65000) {
                 Log.w(tag, "Skipping oversized UDP datagram (${bytes.size} bytes)")

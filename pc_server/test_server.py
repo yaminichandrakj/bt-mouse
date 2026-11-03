@@ -6,6 +6,9 @@ import sys
 import tempfile
 import threading
 import unittest
+
+# These tests cover the PIN-era protocol; test_group.py covers device groups.
+os.environ.setdefault("LANYARD_NO_GROUP", "1")
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, patch

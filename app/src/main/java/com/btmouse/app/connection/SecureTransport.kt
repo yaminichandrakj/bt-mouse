@@ -12,7 +12,14 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * The phone's side of pc_server/secure.py. After a link connects, [begin] produces a
+ * The phone's side of pc_server/secure.py.
+ *
+ * When this phone is in a device group with the PC, [begin] sends the group handshake
+ * instead (key_exchange v2: this device's signed ephemeral key, answered by the PC's
+ * signature, both checked against the group's member list), and nothing but the handshake
+ * goes out unencrypted: [wrap] returns null for anything else until the session is up. The
+ * PIN then plays no part.
+ * After a link connects, [begin] produces a
  * key_exchange (fresh X25519 key, MACed with the pairing PIN); [onAck] checks the PC's
  * answer and derives the session key. From then on [wrap] seals every outgoing packet
  * with ChaCha20-Poly1305 and [unwrap] opens incoming ones. Before the exchange completes
@@ -24,17 +31,34 @@ class SecureTransport(private val pin: () -> String) {
     @Volatile private var session: Session? = null
     @Volatile private var pendingPrivate: ByteArray? = null
     @Volatile private var pendingPublic: ByteArray? = null
+    @Volatile private var pendingHello: com.btmouse.app.ecosystem.Group.Hello? = null
+    /** Set when the PC said this device isn't in its group. */
+    @Volatile var notMemberMessage: String? = null
+        private set
 
     val isActive: Boolean get() = session != null
+
+    /** In a device group with the PC: only member sessions are accepted, so no plain packets. */
+    val groupMode: Boolean get() = com.btmouse.app.ecosystem.Group.hasPc()
+
+    /** Plain packets allowed before the session is up. */
+    private val handshakeTypes = setOf("connect", "client_connect", "key_exchange", "disconnect", "auth")
 
     fun reset() {
         session = null
         pendingPrivate = null
         pendingPublic = null
+        pendingHello = null
     }
 
     /** The key_exchange message to send right after connecting, or null when crypto is unavailable. */
     fun begin(): JsonObject? = runCatching {
+        if (groupMode) {
+            val hello = com.btmouse.app.ecosystem.Group.hello() ?: return null
+            pendingHello = hello
+            session = null
+            return hello.message
+        }
         val private = X25519.generatePrivateKey()
         val public = X25519.publicFromPrivate(private)
         pendingPrivate = private
@@ -49,6 +73,18 @@ class SecureTransport(private val pin: () -> String) {
 
     /** The PC's key_exchange_ack. Returns true when the session is up. */
     fun onAck(ack: JsonObject): Boolean {
+        if (ack.get("v")?.asInt == 2) {
+            val hello = pendingHello ?: return false
+            if (ack.get("ok")?.asBoolean != true) {
+                notMemberMessage = ack.get("message")?.asString ?: "This device isn't in this PC's group. Scan the QR on the PC's Connect page."
+                return false
+            }
+            val key = com.btmouse.app.ecosystem.Group.finishHello(hello, ack) ?: return false
+            session = Session(ack.get("sid")?.asString ?: return false, key)
+            pendingHello = null
+            notMemberMessage = null
+            return true
+        }
         val private = pendingPrivate ?: return false
         val public = pendingPublic ?: return false
         return runCatching {
@@ -66,9 +102,17 @@ class SecureTransport(private val pin: () -> String) {
         }.getOrDefault(false)
     }
 
-    /** Seal a packet's JSON text if a session is up; otherwise return it unchanged. */
-    fun wrap(jsonText: String): String {
-        val s = session ?: return jsonText
+    /**
+     * Seal a packet's JSON text if a session is up; otherwise return it unchanged, or null
+     * (don't send) when the PC only accepts member sessions and this isn't a handshake.
+     */
+    fun wrap(jsonText: String): String? {
+        val s = session
+        if (s == null) {
+            if (!groupMode) return jsonText
+            val type = runCatching { JsonParser.parseString(jsonText).asJsonObject.get("type")?.asString }.getOrNull()
+            return if (type in handshakeTypes) jsonText else null
+        }
         return runCatching {
             val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
             val cipher = Cipher.getInstance("ChaCha20/Poly1305/NoPadding")
