@@ -877,7 +877,7 @@ class V1317ArchitectureAndFailoverTests(unittest.TestCase):
     def test_qt_native_companion_architecture_present(self):
         import app_gui
         gui_source = (Path(__file__).parent / "app_gui.py").read_text(encoding="utf-8")
-        self.assertEqual(app_gui.APP_VERSION, "1.9.2")
+        self.assertEqual(app_gui.APP_VERSION, "1.9.3")
         self.assertIn("from PySide6.QtWidgets import", gui_source)
         self.assertNotIn("QTimer.singleShot(0,", gui_source)
         self.assertIn("FullscreenVideoWindow", gui_source)
@@ -1058,7 +1058,7 @@ class CompanionUpdateScriptTests(unittest.TestCase):
             wait_pids=(1,), target=r"C:\d\Lanyard-Companion.exe", current=r"C:\d\BT-Mouse-Companion.exe",
             staged=r"C:\t\new.exe", replacement=r"C:\d\.new.exe", backup=r"C:\d\.backup.exe",
             ready_marker=r"C:\t\ready.txt", error_log=r"C:\t\err.log", step_log=r"C:\t\steps.log",
-            expected_version="1.9.2",
+            expected_version="1.9.3",
         )
         self.assertIn(r"$current = 'C:\d\BT-Mouse-Companion.exe'", script)
         self.assertIn("Move-Item -LiteralPath $replacement -Destination $target -Force", script)

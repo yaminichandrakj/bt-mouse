@@ -78,11 +78,11 @@ import java.util.Locale
 fun SettingsScreen(
     settings: SettingsRepository,
     airMouseManager: AirMouseManager,
+    updateManager: InAppUpdateManager,
     onClose: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val updateManager = remember { InAppUpdateManager(context) }
     val updateState by updateManager.updateState.collectAsState()
     val lifecycleOwner = remember(context) {
         var current: android.content.Context? = context

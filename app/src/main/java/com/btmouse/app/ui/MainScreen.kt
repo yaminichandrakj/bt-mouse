@@ -36,8 +36,13 @@ import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -47,6 +52,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,7 +68,10 @@ import androidx.compose.ui.unit.sp
 import com.btmouse.app.connection.ActiveTransport
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.data.HidConstants
+import com.btmouse.app.data.InAppUpdateManager
 import com.btmouse.app.data.SettingsRepository
+import com.btmouse.app.data.ReleaseInfo
+import com.btmouse.app.data.UpdateState
 import com.btmouse.app.sensors.AirMouseManager
 import com.btmouse.app.ui.components.FullscreenViewer
 import com.btmouse.app.ui.components.PillStyle
@@ -94,6 +104,7 @@ import com.btmouse.app.ui.theme.Raised
 import com.btmouse.app.ui.theme.Selected
 import com.btmouse.app.ui.theme.StatusGreen
 import com.btmouse.app.ui.theme.StatusRed
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
 private enum class Tab(val label: String, val icon: ImageVector) {
@@ -111,8 +122,11 @@ private enum class Sheet { Tasks, Recordings, Apps }
 fun MainScreen(
     coordinator: ConnectionCoordinator,
     airMouseManager: AirMouseManager,
-    settings: SettingsRepository
+    settings: SettingsRepository,
+    updateManager: InAppUpdateManager
 ) {
+    val context = LocalContext.current
+    val appScope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var overlay by remember { mutableStateOf<Overlay?>(null) }
     var padTarget by remember { mutableStateOf<PeerDevice?>(null) }
@@ -122,6 +136,10 @@ fun MainScreen(
     var slides by rememberSaveable { mutableStateOf(false) }
     var screenFullscreen by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
+    var updatePrompt by remember { mutableStateOf<ReleaseInfo?>(null) }
+    var automaticInstall by remember { mutableStateOf(false) }
+    var automaticInstallError by remember { mutableStateOf<String?>(null) }
+    val updateState by updateManager.updateState.collectAsState()
     val screenZoom = rememberZoomState()
     val fullZoom = rememberZoomState()
 
@@ -132,6 +150,18 @@ fun MainScreen(
     val deviceName by coordinator.connectedDeviceName.collectAsState()
     val savedPcName by settings.pcName.collectAsState()
     val current = Tab.entries[tab]
+
+    LaunchedEffect(updateManager) {
+        delay(5_000)
+        while (true) {
+            val state = updateManager.checkForUpdates()
+            val release = (state as? UpdateState.UpdateAvailable)?.release
+            val dismissed = context.getSharedPreferences("app_updates", 0)
+                .getString("dismissed_version", null)
+            if (release != null && release.tagName != dismissed) updatePrompt = release
+            delay(24L * 60 * 60 * 1000)
+        }
+    }
 
     val notify: (String) -> Unit = { toast = it }
     LaunchedEffect(toast) {
@@ -249,7 +279,7 @@ fun MainScreen(
                 Box(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
                     when (shown) {
                         Overlay.Connect -> ConnectionScreen(coordinator, settings)
-                        Overlay.Settings -> SettingsScreen(settings, airMouseManager, onClose = { overlay = null })
+                        Overlay.Settings -> SettingsScreen(settings, airMouseManager, updateManager, onClose = { overlay = null })
                         Overlay.Devices -> DevicesScreen(coordinator, settings, onControl = { padTarget = it }, onWatch = { watching = it })
                     }
                 }
@@ -289,6 +319,71 @@ fun MainScreen(
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.clip(CircleShape).background(OnInk).padding(horizontal = 18.dp, vertical = 10.dp)
+            )
+        }
+
+        updatePrompt?.let { release ->
+            AlertDialog(
+                onDismissRequest = {
+                    context.getSharedPreferences("app_updates", 0).edit()
+                        .putString("dismissed_version", release.tagName).apply()
+                    updatePrompt = null
+                },
+                title = { Text("Lanyard ${release.tagName} is ready") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Download and install the latest version now?")
+                        if (release.releaseNotes.isNotBlank()) Text(release.releaseNotes.take(500))
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        updatePrompt = null
+                        automaticInstallError = null
+                        automaticInstall = true
+                        appScope.launch {
+                            updateManager.downloadAndInstall(release)
+                            automaticInstallError = (updateManager.updateState.value as? UpdateState.Error)?.message
+                            automaticInstall = false
+                        }
+                    }) { Text("Download and install") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        context.getSharedPreferences("app_updates", 0).edit()
+                            .putString("dismissed_version", release.tagName).apply()
+                        updatePrompt = null
+                    }) { Text("Later") }
+                }
+            )
+        }
+
+        if (automaticInstall) {
+            val downloading = updateState as? UpdateState.Downloading
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Updating Lanyard") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (downloading != null) {
+                            Text("Downloading ${downloading.downloadedMb} of ${downloading.totalMb} MB")
+                            LinearProgressIndicator(progress = { downloading.progress }, modifier = Modifier.fillMaxWidth())
+                        } else {
+                            CircularProgressIndicator()
+                            Text("Preparing the update…")
+                        }
+                    }
+                },
+                confirmButton = {}
+            )
+        }
+
+        automaticInstallError?.let { message ->
+            AlertDialog(
+                onDismissRequest = { automaticInstallError = null },
+                title = { Text("Update failed") },
+                text = { Text(message) },
+                confirmButton = { TextButton(onClick = { automaticInstallError = null }) { Text("OK") } }
             )
         }
     }

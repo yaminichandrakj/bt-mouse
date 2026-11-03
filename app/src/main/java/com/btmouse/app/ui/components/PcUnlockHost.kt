@@ -88,7 +88,10 @@ fun rememberPcUnlock(coordinator: ConnectionCoordinator, notify: (String) -> Uni
     LaunchedEffect(busy) {
         if (busy) {
             delay(35_000)
-            busy = false
+            if (busy) {
+                busy = false
+                notify("Your PC didn't reply. Check that Lanyard for PC is running and phone unlock is turned on.")
+            }
         }
     }
 
