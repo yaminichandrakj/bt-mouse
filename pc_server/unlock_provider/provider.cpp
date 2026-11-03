@@ -48,9 +48,14 @@ constexpr auto kResultWait = std::chrono::seconds(20);
 
 enum Field : DWORD { FieldTile, FieldLabel, FieldStatus, FieldCount };
 
+// CPFG_CREDENTIAL_PROVIDER_LOGO / _LABEL from credentialprovider.h (Windows 8+), spelled out
+// because the SDK on the build machine hides them behind its version macros.
+const GUID kProviderLogoField = {0x2d837775, 0xf6cd, 0x464e, {0xa7, 0x45, 0x48, 0x2f, 0xd0, 0xb4, 0x74, 0x93}};
+const GUID kProviderLabelField = {0x286bbff3, 0xbad4, 0x438f, {0xb0, 0x07, 0x79, 0xb7, 0x26, 0x7c, 0x3d, 0x48}};
+
 const CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR kFields[FieldCount] = {
-    {FieldTile, CPFT_TILE_IMAGE, const_cast<LPWSTR>(L"Lanyard"), CPFG_CREDENTIAL_PROVIDER_LOGO},
-    {FieldLabel, CPFT_LARGE_TEXT, const_cast<LPWSTR>(L"Lanyard"), CPFG_CREDENTIAL_PROVIDER_LABEL},
+    {FieldTile, CPFT_TILE_IMAGE, const_cast<LPWSTR>(L"Lanyard"), kProviderLogoField},
+    {FieldLabel, CPFT_LARGE_TEXT, const_cast<LPWSTR>(L"Lanyard"), kProviderLabelField},
     {FieldStatus, CPFT_SMALL_TEXT, const_cast<LPWSTR>(L"Status"), {0}},
 };
 
