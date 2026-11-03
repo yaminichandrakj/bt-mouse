@@ -232,6 +232,7 @@ object Ecosystem {
             addProperty("rotation", DeviceIdentity.rotationDegrees(appContext))
             add("caps", JsonObject().apply {
                 addProperty("control", allowControl && RemoteControlService.instance != null)
+                addProperty("lock", allowControl && RemoteControlService.instance != null)
                 // Android 13+ types every key through Lanyard control, no keyboard switch needed.
                 addProperty("keyboard", RemoteKeyboardService.instance != null ||
                     (android.os.Build.VERSION.SDK_INT >= 33 && RemoteControlService.instance != null))
@@ -250,7 +251,7 @@ object Ecosystem {
         "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
         "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch", "library_items",
-        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe"
+        "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe", "lock_device"
     )
 
     /** Called by every transport for every packet; returns true when the packet was ours. */
@@ -280,6 +281,9 @@ object Ecosystem {
             }
             "remote_input" -> if (settings?.allowRemoteControl?.value != false) {
                 RemoteControlService.instance?.handle(json)
+            }
+            "lock_device" -> if (settings?.allowRemoteControl?.value != false) {
+                RemoteControlService.instance?.lockScreen()
             }
             "clipboard_push" -> applyRemoteClipboard(json)
             "devices_update" -> parseDevices(json.getAsJsonArray("devices"))
@@ -407,9 +411,17 @@ object Ecosystem {
     fun watch(streamId: String) {
         val previous = watching
         if (previous != null && previous != streamId) unwatch()
-        if (previous != streamId) H264Viewer.reset(streamId)
+        if (previous != streamId) {
+            H264Viewer.reset(streamId)
+            watchStartedAt = System.currentTimeMillis()
+        }
         watching = streamId
-        val smooth = settings?.smoothMirroring?.value == true && !h264Broken
+        // No video a few seconds after asking (older app, no encoder): settle for pictures.
+        if (smoothFallbackFor != streamId && previous == streamId && H264Viewer.lastPartAt == 0L &&
+            System.currentTimeMillis() - watchStartedAt > 6_000 && _watchedFrame.value != null) {
+            smoothFallbackFor = streamId
+        }
+        val smooth = settings?.smoothMirroring?.value == true && !h264Broken && smoothFallbackFor != streamId
         sendTo(streamId.substringBefore(':'), JsonObject().apply {
             addProperty("type", "stream_watch")
             addProperty("stream_id", streamId)
@@ -473,7 +485,7 @@ object Ecosystem {
         if (streamId != "$selfId:screen" || from == selfId) return
         if (json.get("on")?.asBoolean != false) {
             directWatchers[from] = System.currentTimeMillis()
-            if (json.get("codec")?.asString == "h264") {
+            if (json.get("codec")?.asString == "h264" && !H264Encoder.unavailable) {
                 if (h264Watchers.add(from)) H264Encoder.requestKeyframe()
             } else {
                 h264Watchers.remove(from)
@@ -487,6 +499,9 @@ object Ecosystem {
 
     private val h264Watchers = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var h264Broken = false
+    @Volatile private var watchStartedAt = 0L
+    /** A stream that sent no video when asked; watched as pictures from then on. */
+    @Volatile private var smoothFallbackFor: String? = null
 
     private fun updateScreenViewers() {
         h264Watchers.retainAll(directWatchers.keys)
@@ -494,8 +509,13 @@ object Ecosystem {
         ScreenShare.viewers = pcScreenViewers + directWatchers.size
     }
 
-    /** Someone watches this screen as H.264 video. */
-    fun wantsH264(): Boolean = h264Watchers.isNotEmpty()
+    /** Someone watches this screen as H.264 video (and this phone can encode it). */
+    fun wantsH264(): Boolean = h264Watchers.isNotEmpty() && !H264Encoder.unavailable
+
+    /** No encoder here: the video watchers get pictures instead. */
+    fun onH264EncoderUnavailable() {
+        h264Watchers.clear()
+    }
 
     /** Viewers that still want JPEG pictures (the PC, older apps, smooth mirroring off). */
     fun jpegViewers(): Int = pcScreenViewers + directWatchers.keys.count { it !in h264Watchers }
@@ -577,6 +597,9 @@ object Ecosystem {
             }
         }
     }
+
+    /** Whether this phone lets its other devices browse its photo gallery. */
+    fun sharesGallery(): Boolean = settings?.shareGallery?.value == true
 
     /** Whether a copy seen in another app should be read and sent (see ClipboardCatcher). */
     fun wantsCopiesCaught(): Boolean {

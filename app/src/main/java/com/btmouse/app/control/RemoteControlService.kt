@@ -61,6 +61,8 @@ class RemoteControlService : AccessibilityService() {
     private var liveBusy = false
     private var liveReleasing = false
     private var liveBroken = false
+    /** When the last live segment was sent, so each one lasts as long as the hand took. */
+    private var liveSegmentAt = 0L
     private var pendingWheelY = 0f
     private var pendingWheelX = 0f
     private var wheelScheduled = false
@@ -126,6 +128,11 @@ class RemoteControlService : AccessibilityService() {
 
     fun handle(json: JsonObject) {
         main.post { runCatching { handleOnMain(json) } }
+    }
+
+    /** The PC's "Lock a phone or tablet" button: straight to the lock screen, no cursor shown. */
+    fun lockScreen() {
+        main.post { runCatching { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) } }
     }
 
     private fun handleOnMain(json: JsonObject) {
@@ -234,9 +241,14 @@ class RemoteControlService : AccessibilityService() {
             if (from == target) lineTo(target.first + 0.5f, target.second + 0.5f) else lineTo(target.first, target.second)
         }
         val keepGoing = !liveReleasing
+        // Replay each segment at the speed it was made: a quick flick at the end stays quick,
+        // so lists fling on release as they do under a real finger.
+        val now = SystemClock.uptimeMillis()
+        val segment = if (prev == null) 40L else (now - liveSegmentAt).coerceIn(8L, 40L)
+        liveSegmentAt = now
         val stroke = runCatching {
-            if (prev == null) GestureDescription.StrokeDescription(path, 0L, 40L, keepGoing)
-            else prev.continueStroke(path, 0L, 40L, keepGoing)
+            if (prev == null) GestureDescription.StrokeDescription(path, 0L, segment, keepGoing)
+            else prev.continueStroke(path, 0L, segment, keepGoing)
         }.getOrNull()
         if (stroke == null) {
             breakLive()

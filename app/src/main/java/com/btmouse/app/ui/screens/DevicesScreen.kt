@@ -263,7 +263,7 @@ fun DevicesScreen(
             )
             Spacer(Modifier.height(10.dp))
             val smooth by settings.smoothMirroring.collectAsState()
-            ToggleRow("Smooth mirroring (beta)", "Real video when watching another phone or tablet. Turn off if the picture stays black.", smooth) {
+            ToggleRow("Smooth mirroring", "Real video when watching another phone or tablet. Switches to pictures by itself if video can't play.", smooth) {
                 settings.setSmoothMirroring(it)
             }
             Spacer(Modifier.height(10.dp))

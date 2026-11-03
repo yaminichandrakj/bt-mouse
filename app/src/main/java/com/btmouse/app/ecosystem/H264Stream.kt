@@ -35,16 +35,30 @@ object H264Encoder {
     @Volatile private var seq = 0L
     @Volatile var deviceW = 0
     @Volatile var deviceH = 0
+    /** This phone has no working H.264 encoder: everyone gets pictures instead. */
+    @Volatile var unavailable = false
+        private set
+
+    // Adaptive quality: viewers ask for a key frame when parts go missing, so many
+    // requests mean the network can't keep up and the bitrate comes down; quiet periods
+    // let it climb back towards the best for this picture size.
+    private var bitrate = 0
+    private var maxBitrate = 0
+    private val keyRequests = ArrayDeque<Long>()
+    private var lastRaise = 0L
 
     val running: Boolean get() = codec != null
 
+    /** Draw the first [srcW] x [srcH] pixels of [bmp] (the rest is row padding) into the encoder. */
     @Synchronized
-    fun feed(bmp: Bitmap, devW: Int, devH: Int) {
+    fun feed(bmp: Bitmap, devW: Int, devH: Int, srcW: Int = bmp.width, srcH: Int = bmp.height) {
+        if (unavailable) return
         deviceW = devW
         deviceH = devH
+        adapt()
         // Encoders want even sizes; restart when the picture changes shape (rotation).
-        val w = bmp.width and 1.inv()
-        val h = bmp.height and 1.inv()
+        val w = srcW and 1.inv()
+        val h = srcH and 1.inv()
         if (codec == null || w != width || h != height) {
             stop()
             if (!start(w, h)) return
@@ -53,7 +67,7 @@ object H264Encoder {
         runCatching {
             val canvas = surface.lockHardwareCanvas()
             try {
-                canvas.drawBitmap(bmp, null, Rect(0, 0, width, height), null)
+                canvas.drawBitmap(bmp, Rect(0, 0, w, h), Rect(0, 0, width, height), null)
             } finally {
                 surface.unlockCanvasAndPost(canvas)
             }
@@ -63,8 +77,12 @@ object H264Encoder {
     private fun start(w: Int, h: Int): Boolean = runCatching {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
-            setInteger(MediaFormat.KEY_FRAME_RATE, 24)
+            // About 0.1 bit per pixel per frame: ~6 Mbit/s for a 1080p phone screen at 30 fps.
+            maxBitrate = (w.toLong() * h * 30 / 10).toInt().coerceIn(1_500_000, 8_000_000)
+            if (bitrate == 0 || bitrate > maxBitrate) bitrate = maxBitrate
+            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+            setInteger(MediaFormat.KEY_FRAME_RATE, 30)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             // Repeat the last frame when the screen is still, so viewers don't stall.
             setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 200_000L)
@@ -82,6 +100,8 @@ object H264Encoder {
     }.getOrElse {
         Log.w(TAG, "No H.264 encoder", it)
         codec = null
+        unavailable = true
+        Ecosystem.onH264EncoderUnavailable()
         false
     }
 
@@ -132,8 +152,31 @@ object H264Encoder {
     }
 
     fun requestKeyframe() {
+        synchronized(keyRequests) { keyRequests.addLast(System.currentTimeMillis()) }
         runCatching {
             codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
+        }
+    }
+
+    private fun setBitrate(value: Int) {
+        if (value == bitrate) return
+        bitrate = value
+        runCatching { codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, value) }) }
+    }
+
+    private fun adapt() {
+        val now = System.currentTimeMillis()
+        val recent = synchronized(keyRequests) {
+            while (keyRequests.isNotEmpty() && now - keyRequests.first() > 10_000) keyRequests.removeFirst()
+            keyRequests.size
+        }
+        if (recent >= 3) {
+            setBitrate(maxOf(600_000, bitrate / 2))
+            synchronized(keyRequests) { keyRequests.clear() }
+            lastRaise = now
+        } else if (recent == 0 && bitrate < maxBitrate && now - lastRaise > 15_000) {
+            setBitrate(minOf(maxBitrate, bitrate * 5 / 4))
+            lastRaise = now
         }
     }
 
@@ -183,6 +226,7 @@ object H264Viewer {
     @Synchronized
     fun reset(id: String?) {
         streamId = id
+        lastPartAt = 0L
         pending.clear()
         lastDelivered = 0
         needKey = true
@@ -190,9 +234,14 @@ object H264Viewer {
         _videoSize.value = null
     }
 
+    /** When the last video part arrived; 0 when none has since the last reset. */
+    @Volatile var lastPartAt = 0L
+        private set
+
     @Synchronized
     fun accept(json: JsonObject) {
         if (json.get("stream_id")?.asString != streamId) return
+        lastPartAt = System.currentTimeMillis()
         val seq = json.get("seq")?.asLong ?: return
         if (seq <= lastDelivered) return
         val parts = json.get("parts")?.asInt ?: return

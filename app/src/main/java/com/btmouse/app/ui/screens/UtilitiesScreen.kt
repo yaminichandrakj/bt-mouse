@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.OpenInNew
@@ -78,6 +79,7 @@ import androidx.core.content.FileProvider
 import com.btmouse.app.connection.ConnectionCoordinator
 import com.btmouse.app.connection.RecordingEntry
 import com.btmouse.app.ecosystem.Ecosystem
+import com.btmouse.app.ecosystem.Gallery
 import com.btmouse.app.ecosystem.PeerLibrary
 import com.btmouse.app.data.SettingsRepository
 import com.btmouse.app.ui.components.ChipIcon
@@ -410,7 +412,7 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
             }
         }
 
-        PeerLibrarySection(selectedCategory)
+        PeerLibrarySection(selectedCategory, coordinator.settings)
 
         if (status.isNotBlank()) Text(status, color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.Medium)
 
@@ -465,8 +467,15 @@ internal fun RecordingLibrarySection(coordinator: ConnectionCoordinator) {
  * needed. Fetched once into this phone's own folders, then opened in the player.
  */
 @Composable
-private fun PeerLibrarySection(category: String) {
+private fun PeerLibrarySection(category: String, settings: SettingsRepository) {
     val context = LocalContext.current
+    val shareGallery by settings.shareGallery.collectAsState()
+    val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { it }) {
+            settings.setShareGallery(true)
+            Ecosystem.sendHello()
+        }
+    }
     val devices by Ecosystem.devices.collectAsState()
     val all by PeerLibrary.items.collectAsState()
     val loading by PeerLibrary.loading.collectAsState()
@@ -490,7 +499,7 @@ private fun PeerLibrarySection(category: String) {
     }
     if (phones.isEmpty()) return
 
-    val items = if (category == "all") all else all.filter { it.type == category }
+    val items = if (category == "all") all else all.filter { it.category == category }
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -506,10 +515,11 @@ private fun PeerLibrarySection(category: String) {
                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { PeerLibrary.refresh(context) }.padding(6.dp)
                 )
             }
-            val unsaved = items.count { it.name !in saved }
+            // Save all is for recordings; a whole photo gallery is copied one by one, on purpose.
+            val unsaved = items.count { it.name !in saved && !it.gallery }
             if (unsaved > 0) {
                 Text(
-                    "Save all $unsaved to this phone", color = AccentCyan, fontSize = 13.sp,
+                    "Save all $unsaved recordings to this phone", color = AccentCyan, fontSize = 13.sp,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp))
                         .clickable { PeerLibrary.saveAll(context, category.takeIf { it != "all" }) }.padding(6.dp)
                 )
@@ -522,7 +532,7 @@ private fun PeerLibrarySection(category: String) {
             shown.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        when (item.type) { "audio" -> Icons.Filled.Mic; "snapshot" -> Icons.Filled.PhotoCamera; else -> Icons.Filled.Videocam },
+                        when (item.type) { "audio" -> Icons.Filled.Mic; "snapshot" -> Icons.Filled.PhotoCamera; "photo" -> Icons.Filled.Image; else -> Icons.Filled.Videocam },
                         contentDescription = null, tint = AccentCyan, modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(8.dp))
@@ -548,9 +558,27 @@ private fun PeerLibrarySection(category: String) {
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                     ) {
-                        IconLabel(Icons.Filled.PlayArrow, if (item.type == "snapshot") "Open" else "Play", fontWeight = FontWeight.Medium, iconSize = 16.dp)
+                        IconLabel(Icons.Filled.PlayArrow, if (item.category == "snapshot") "Open" else "Play", fontWeight = FontWeight.Medium, iconSize = 16.dp)
                     }
                 }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Share this phone's photos and videos", color = TextPrimary, fontSize = 13.sp)
+                    Text("Your other phones and tablets can browse and save them at full quality.", color = TextMuted, fontSize = 12.sp)
+                }
+                androidx.compose.material3.Switch(
+                    checked = shareGallery && Gallery.hasPermission(context),
+                    onCheckedChange = { on ->
+                        if (!on) {
+                            settings.setShareGallery(false)
+                        } else if (Gallery.hasPermission(context)) {
+                            settings.setShareGallery(true)
+                        } else {
+                            galleryPermission.launch(Gallery.permissions())
+                        }
+                    }
+                )
             }
             if (items.size > 5) {
                 Text(

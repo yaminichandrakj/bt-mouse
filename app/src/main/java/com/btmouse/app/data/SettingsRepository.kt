@@ -86,6 +86,15 @@ class SettingsRepository(context: Context) {
     }
 
     // Reach family phones on other networks through the relay.
+    // Let this phone's other devices browse and copy its photos and videos (off until turned on).
+    private val _shareGallery = MutableStateFlow(prefs.getBoolean(KEY_SHARE_GALLERY, false))
+    val shareGallery: StateFlow<Boolean> = _shareGallery.asStateFlow()
+
+    fun setShareGallery(value: Boolean) {
+        _shareGallery.value = value
+        prefs.edit().putBoolean(KEY_SHARE_GALLERY, value).apply()
+    }
+
     // Send copies made in other apps by themselves (Lanyard control notices the copy).
     private val _catchCopies = MutableStateFlow(prefs.getBoolean(KEY_CATCH_COPIES, true))
     val catchCopies: StateFlow<Boolean> = _catchCopies.asStateFlow()
@@ -155,8 +164,8 @@ class SettingsRepository(context: Context) {
         prefs.edit().putBoolean(KEY_SETUP_DONE, done).apply()
     }
 
-    private val _smoothMirroring = MutableStateFlow(prefs.getBoolean(KEY_SMOOTH_MIRRORING, false))
-    /** Ask for H.264 video when mirroring another phone or tablet (beta). */
+    private val _smoothMirroring = MutableStateFlow(prefs.getBoolean(KEY_SMOOTH_MIRRORING, true))
+    /** Ask for H.264 video when mirroring another phone or tablet; falls back to pictures by itself. */
     val smoothMirroring: StateFlow<Boolean> = _smoothMirroring.asStateFlow()
 
     fun setSmoothMirroring(enabled: Boolean) {
@@ -340,6 +349,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_RELAY_URL = "relay_url"
         private const val KEY_INTERNET_RELAY = "internet_relay"
         private const val KEY_CATCH_COPIES = "catch_copies"
+        private const val KEY_SHARE_GALLERY = "share_gallery"
         private const val KEY_RV_ID = "rv_id"
         private const val KEY_RV_PUB = "rv_pub"
         private const val KEY_CUSTOM_APPS = "custom_apps"
