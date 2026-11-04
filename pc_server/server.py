@@ -3594,7 +3594,7 @@ class Server:
                     "type": "connect_ack",
                     "success": True,
                     "server_name": socket.gethostname(),
-                    "version": "1.9.4"
+                    "version": "1.9.5"
                 }
             else:
                 self._record_auth_failure(addr)
@@ -5162,21 +5162,15 @@ try { $adapters = @(Get-CimInstance -ClassName Win32_VideoController | ForEach-O
         self._unlock_failures = failures
         if len(failures) >= self.UNLOCK_FAILURE_LIMIT and now - failures[-1] < self.UNLOCK_COOLDOWN:
             return answer("cooldown")
-        if is_workstation_locked() is False:
-            return answer("not_locked")
         if not self._unlock_busy.acquire(blocking=False):
             return answer("busy")
 
         def run():
             try:
                 code = phone_unlock.unlock(password)
-                if code == "submitted":
-                    # The lock screen closed before it could answer; see whether it opened.
-                    for _ in range(10):
-                        if is_workstation_locked() is False:
-                            code = "ok"
-                            break
-                        time.sleep(0.4)
+                # Let the credential provider and Windows decide whether the unlock worked.
+                # The input desktop name can report "Default" while the visible lock screen
+                # is still waiting for credentials on some Windows builds.
                 if code == "wrong_password":
                     self._unlock_failures.append(time.time())
                 print(f"[+] Phone unlock over {link or 'Wi-Fi'}: {code}")
