@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 GITHUB_REPOSITORY = "yaminichandrakj/lanyard"
 COMPANION_EXE_NAME = "Lanyard-Companion.exe"
 # Releases up to v1.9.0 shipped the companion under its old name.

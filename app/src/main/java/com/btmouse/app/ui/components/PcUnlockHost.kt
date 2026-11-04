@@ -165,6 +165,7 @@ fun rememberPcUnlock(coordinator: ConnectionCoordinator, notify: (String) -> Uni
     }
     val begin = rememberUpdatedState<() -> Unit>(::startUnlock)
 
+    val pc = pcName?.takeIf { it.isNotBlank() }
     asking?.let { note ->
         PasswordDialog(pc ?: "your PC", note, onDismiss = { asking = null }) { password ->
             asking = null
