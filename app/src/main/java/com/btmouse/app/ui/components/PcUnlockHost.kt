@@ -85,6 +85,15 @@ fun rememberPcUnlock(coordinator: ConnectionCoordinator, notify: (String) -> Uni
         PcUnlock.results.collect { result ->
             busy = false
             notify(result.message)
+            if (result.code == "ok" || result.code == "submitted") {
+                scope.launch {
+                    repeat(6) {
+                        coordinator.querySystemStats()
+                        delay(500)
+                        if (coordinator.systemStats.value?.locked == false) return@launch
+                    }
+                }
+            }
             if (result.code == "wrong_password") {
                 pcName?.let { vault.forget(it) }
                 asking = "Windows didn't accept the saved password. Enter it again."
