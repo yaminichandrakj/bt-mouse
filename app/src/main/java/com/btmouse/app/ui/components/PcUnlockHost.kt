@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -45,6 +46,9 @@ import com.btmouse.app.ui.theme.OnInkFaint
 import com.btmouse.app.ui.theme.OnInkMuted
 import com.btmouse.app.ui.theme.StatusRedText
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.crypto.Cipher
 
 /** Starts a phone unlock of the connected PC; see [rememberPcUnlock]. */
@@ -65,6 +69,8 @@ fun rememberPcUnlock(coordinator: ConnectionCoordinator, notify: (String) -> Uni
     val pcName by coordinator.connectedDeviceName.collectAsState()
     var asking by remember { mutableStateOf<String?>(null) } // the dialog's note; null hides it
     var busy by remember { mutableStateOf(false) }
+    var connecting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     fun send(password: String) {
         if (coordinator.unlockPc(password)) {
@@ -95,12 +101,11 @@ fun rememberPcUnlock(coordinator: ConnectionCoordinator, notify: (String) -> Uni
         }
     }
 
-    val pc = pcName?.takeIf { it.isNotBlank() }
-    fun startUnlock() {
+    fun unlockFor(pc: String) {
         val host = activity
         when {
-            pc == null -> notify("Connect to your PC first")
             busy -> notify("Already unlocking")
+            connecting -> notify("Connecting to your PC…")
             !coordinator.canSendSecrets -> notify("Unlock needs an encrypted connection. Reconnect and try again.")
             host == null -> notify("Phone unlock isn't available here")
             BiometricManager.from(host).canAuthenticate(PcPasswordVault.authenticators) != BiometricManager.BIOMETRIC_SUCCESS ->
@@ -121,6 +126,40 @@ fun rememberPcUnlock(coordinator: ConnectionCoordinator, notify: (String) -> Uni
                         send(password)
                     }
                 }
+            }
+        }
+    }
+    fun startUnlock() {
+        if (busy) {
+            notify("Already unlocking")
+            return
+        }
+        if (connecting) {
+            notify("Connecting to your PC…")
+            return
+        }
+        val pc = pcName?.takeIf { it.isNotBlank() }
+        if (pc != null && coordinator.canSendSecrets) {
+            unlockFor(pc)
+            return
+        }
+        if (!coordinator.hasPairedPc()) {
+            notify("Connect to your PC first: scan the QR code on its Connect page")
+            return
+        }
+
+        connecting = true
+        notify("Connecting to your PC…")
+        coordinator.connectSavedPc()
+        scope.launch {
+            val reconnectedPc = withTimeoutOrNull(20_000) {
+                coordinator.connectedDeviceName.first { !it.isNullOrBlank() && coordinator.canSendSecrets }
+            }
+            connecting = false
+            if (reconnectedPc.isNullOrBlank()) {
+                notify("Couldn't connect to your PC. Open Lanyard for PC and try again.")
+            } else {
+                unlockFor(reconnectedPc)
             }
         }
     }

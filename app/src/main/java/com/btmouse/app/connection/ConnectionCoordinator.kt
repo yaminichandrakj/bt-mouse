@@ -622,6 +622,9 @@ class ConnectionCoordinator(
         return pin.length == 6 && pin.all { it.isDigit() }
     }
 
+    /** Whether this phone has pairing details that can be used to reconnect to its PC. */
+    fun hasPairedPc(): Boolean = isPaired()
+
     // Bluetooth: only the PC we paired with, never just the first bonded device (earbuds, watch...).
     private fun bringUpBluetooth(): Boolean {
         val device = findPcBluetoothDevice(settings.pcName.value.trim()) ?: return false
