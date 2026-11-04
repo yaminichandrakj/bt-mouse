@@ -70,6 +70,9 @@ class LibrarySync:
     def _fetch_missing(self, device_id, items):
         now = time.monotonic()
         for item in items:
+            if item.get("gallery"):
+                continue  # User browses camera roll photos on demand
+
             name = Path(str(item["name"])).name
             size = int(item.get("size") or 0)
             if size > self.MAX_AUTO_BYTES or self.have_locally(name, size):
@@ -93,6 +96,7 @@ class LibrarySync:
                 continue
             name = (self.registry.get(device_id) or {}).get("name", "Device")
             for item in items:
+
                 if not self.have_locally(Path(str(item["name"])).name, item.get("size")):
                     out.append((device_id, name, item))
         return out
@@ -106,7 +110,7 @@ class LibrarySync:
     def request_all(self):
         for dev in self.registry.online_devices():
             if dev.get("caps", {}).get("library"):
-                self.registry.send(dev["device_id"], {"type": "library_list"})
+                self.registry.send(dev["device_id"], {"type": "library_list", "gallery": True})
 
     def _loop(self):
         time.sleep(15)

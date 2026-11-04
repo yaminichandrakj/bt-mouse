@@ -142,8 +142,8 @@ object Gallery {
     fun send(context: Context, request: JsonObject, id: String) {
         if (!shared(context)) return
         val to = request.get("from")?.takeIf { !it.isJsonNull }?.asString ?: return
-        // The PC isn't offered the gallery; only the user's phones and tablets ask for it.
-        if (to == Ecosystem.PC_ID) return
+        // Shared camera roll: PC companion and other devices can browse and fetch photos/videos.
+        // Allow both PC and other devices to fetch gallery items
         val parts = id.removePrefix(PREFIX).split(':')
         if (parts.size != 2) return
         val collection = when (parts[0]) {

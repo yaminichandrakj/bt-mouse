@@ -104,7 +104,7 @@ from server import (
     get_btmouse_media_dirs,
 )
 
-APP_VERSION = "1.9.5"
+APP_VERSION = "1.9.6"
 GITHUB_REPOSITORY = "yaminichandrakj/lanyard"
 COMPANION_EXE_NAME = "Lanyard-Companion.exe"
 # Releases up to v1.9.0 shipped the companion under its old name.
@@ -436,6 +436,13 @@ FLUENT_GLYPHS = {
     "stop": 0xE71A,
     "video": 0xE714,
     "wifi": 0xE701,
+    "send": 0xE724,
+    "download": 0xE896,
+    "share": 0xE72D,
+    "devices": 0xE7F4,
+    "grid": 0xF0E2,
+    "list": 0xEA37,
+    "preview": 0xE890,
 }
 ICON_COLOR = "#C8C8C8"
 ICON_COLOR_MUTED = "#ABABAB"
@@ -1652,78 +1659,18 @@ class CompanionApp(QMainWindow):
         s_row.addWidget(self.lbl_mgr_folder_path)
         c_layout.addWidget(stats_bar)
 
-        # Filter & Search Bar
-        filter_row = QHBoxLayout()
-        self.ent_recording_search = QLineEdit()
-        self.ent_recording_search.setPlaceholderText("Search by name, folder or date")
-        self.ent_recording_search.textChanged.connect(self._filter_and_render_recordings)
-        filter_row.addWidget(self.ent_recording_search, 1)
+        # Cross-Device Gallery Hub (Lenovo Smart Connect-style visual grid, lightbox, and list)
+        from gallery_view import CrossDeviceGalleryHub
+        self.gallery_hub = CrossDeviceGalleryHub(self)
+        c_layout.addWidget(self.gallery_hub, 1)
 
-        self.recording_filter_mode = "all"
-        self.btn_filter_all = QPushButton("All")
-        self.btn_filter_video = make_button("Videos", "video")
-        self.btn_filter_audio = make_button("Audios", "mic")
-        self.btn_filter_snapshot = make_button("Snapshots", "photo")
+        # Compatibility references
+        self.tree_recordings = self.gallery_hub.table_list
+        self.ent_recording_search = self.gallery_hub.ent_search
+        self.combo_recording_sort = self.gallery_hub.combo_sort
+        self.lbl_selected_recording_info = QLabel("")
 
-        for mode, b in (
-            ("all", self.btn_filter_all),
-            ("video", self.btn_filter_video),
-            ("audio", self.btn_filter_audio),
-            ("snapshot", self.btn_filter_snapshot),
-        ):
-            b.clicked.connect(lambda _c=False, m=mode: self._set_recording_filter(m))
-            filter_row.addWidget(b)
-
-        self.combo_recording_sort = QComboBox()
-        self.combo_recording_sort.addItems(["Newest First", "Oldest First", "Name (A-Z)", "Size (Largest)", "Size (Smallest)"])
-        self.combo_recording_sort.currentIndexChanged.connect(self._filter_and_render_recordings)
-        filter_row.addWidget(self.combo_recording_sort)
-        c_layout.addLayout(filter_row)
-
-        # Table
-        self.tree_recordings = QTableWidget(0, 5)
-        self.tree_recordings.setHorizontalHeaderLabels(["File Name", "Folder", "Type", "Created", "Size"])
-        header = self.tree_recordings.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree_recordings.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.tree_recordings.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.tree_recordings.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.tree_recordings.verticalHeader().setVisible(False)
-        self.tree_recordings.itemSelectionChanged.connect(self._on_tree_recording_selected)
-        self.tree_recordings.itemDoubleClicked.connect(lambda _item: self.open_selected_recording())
-        c_layout.addWidget(self.tree_recordings, 1)
-
-        # Bottom Action Row
-        act_row = QHBoxLayout()
-        self.lbl_selected_recording_info = QLabel("Select an item to play, inspect in Explorer, or delete.")
-        self.lbl_selected_recording_info.setStyleSheet("color: #8E8E8E;")
-        act_row.addWidget(self.lbl_selected_recording_info, 1)
-
-        btn_play = make_button("Open", "play")
-        btn_play.clicked.connect(self.open_selected_recording)
-        act_row.addWidget(btn_play)
-
-        btn_rev = make_button("Show in Explorer", "folder")
-        btn_rev.clicked.connect(self.show_selected_in_explorer)
-        act_row.addWidget(btn_rev)
-
-        btn_cp_path = make_button("Copy path", "copy")
-        btn_cp_path.clicked.connect(self.copy_selected_recording_path)
-        act_row.addWidget(btn_cp_path)
-
-        btn_del = make_button("Delete", "delete")
-        btn_del.setObjectName("DangerBtn")
-        btn_del.clicked.connect(self.delete_selected_recording)
-        act_row.addWidget(btn_del)
-
-        c_layout.addLayout(act_row)
         layout.addWidget(card, 1)
-        self.tree_recordings.setMinimumHeight(380)
-        self._set_recording_filter("all")
         return page
 
     # ------------------------------------------------------------------
@@ -2303,6 +2250,9 @@ class CompanionApp(QMainWindow):
                     records.append(
                         {
                             "path": path,
+                            "remote": None,
+                            "device_id": "pc",
+                            "device_name": "This PC",
                             "name": path.name,
                             "folder": folder_name,
                             "size": stat.st_size,
@@ -2312,6 +2262,7 @@ class CompanionApp(QMainWindow):
                             "is_video": folder_name == "Videos",
                             "is_audio": folder_name == "Audios",
                             "is_snapshot": folder_name == "Snapshots",
+                            "is_gallery": False,
                             "type_name": type_name,
                             "type_icon": icon,
                             "ext": path.suffix.lower(),
@@ -2323,27 +2274,45 @@ class CompanionApp(QMainWindow):
         # Recordings still only on a phone or tablet: listed here, downloaded on Open.
         library = getattr(getattr(self.server, "ecosystem", None), "library", None) if self.server else None
         if library is not None:
-            type_for = {"audio": ("Audios", "Audio", "mic"), "snapshot": ("Snapshots", "Snapshot", "photo")}
+            type_for = {
+                "audio": ("Audios", "Audio", "mic"),
+                "snapshot": ("Snapshots", "Snapshot", "photo"),
+                "photo": ("Snapshots", "Photo", "photo"),
+                "gallery_video": ("Videos", "Video", "video"),
+                "video": ("Videos", "Video", "video"),
+            }
             for device_id, device_name, item in library.missing():
                 folder_name, type_name, icon = type_for.get(item.get("type"), ("Videos", "Video", "video"))
                 size = int(item.get("size") or 0)
                 mtime = float(item.get("modified") or 0)
                 records.append({
-                    "path": None, "remote": (device_id, item.get("id") or item["name"]),
-                    "name": Path(str(item["name"])).name, "folder": f"On {device_name}",
+                    "path": None,
+                    "remote": (device_id, item.get("id") or item["name"]),
+                    "device_id": device_id,
+                    "device_name": device_name,
+                    "name": Path(str(item["name"])).name,
+                    "folder": f"On {device_name}",
                     "size": size,
                     "size_str": f"{size / 1024:.1f} KB" if size < 1024 * 1024 else f"{size / (1024 * 1024):.1f} MB",
                     "mtime": mtime,
                     "date_str": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d  %I:%M %p") if mtime else "",
-                    "is_video": folder_name == "Videos", "is_audio": folder_name == "Audios",
+                    "is_video": folder_name == "Videos",
+                    "is_audio": folder_name == "Audios",
                     "is_snapshot": folder_name == "Snapshots",
-                    "type_name": type_name, "type_icon": icon, "ext": Path(str(item["name"])).suffix.lower(),
+                    "is_gallery": bool(item.get("gallery")),
+                    "type_name": type_name,
+                    "type_icon": icon,
+                    "ext": Path(str(item["name"])).suffix.lower(),
                 })
 
         records.sort(key=lambda r: r["mtime"], reverse=True)
         self._all_recordings = records
         self._total_recordings_bytes = total_bytes
         self._filter_and_render_recordings()
+        if hasattr(self, "gallery_hub"):
+            self.gallery_hub.update_records(records)
+            if self.server and hasattr(self.server, "ecosystem"):
+                self.gallery_hub.sync_devices(self.server.ecosystem.registry.online_devices())
 
     def _refresh_recordings_soon(self):
         """Many devices answer at once; refresh the Library once for all of them."""

@@ -25,7 +25,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -416,40 +419,66 @@ fun DevicesScreen(
             Caption("Everything sent this way is encrypted with your devices' shared key. The relay can't read it.")
         }
 
-        SectionHeader("Your devices")
+        SectionHeader("Share Hub · Connected devices")
         if (devices.isEmpty()) {
             Caption(if (connected) "Looking for your devices…" else "Connect to your PC, pair a nearby device above, or turn on internet reach.")
         }
         devices.forEach { device ->
             PanelCard(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        when (device.kind) {
-                            "pc" -> Icons.Default.Computer
-                            "tablet" -> Icons.Default.Tablet
-                            else -> Icons.Default.PhoneAndroid
-                        },
-                        contentDescription = null, tint = OnInk, modifier = Modifier.size(24.dp)
-                    )
+                    Box(
+                        Modifier.size(42.dp).clip(CircleShape).background(Control),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            when (device.kind) {
+                                "pc" -> Icons.Default.Computer
+                                "tablet" -> Icons.Default.Tablet
+                                else -> Icons.Default.PhoneAndroid
+                            },
+                            contentDescription = null,
+                            tint = when (device.kind) {
+                                "pc" -> com.btmouse.app.ui.theme.PrimaryIndigo
+                                "tablet" -> com.btmouse.app.ui.theme.AccentCyan
+                                else -> com.btmouse.app.ui.theme.StatusGreen
+                            },
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(device.name, color = OnInk, fontSize = 16.sp)
-                        if (relayPeers.any { it.id == device.id }) Caption("Over the internet")
+                        Text(device.name, color = OnInk, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        val reach = when {
+                            relayPeers.any { it.id == device.id } -> "Over internet relay"
+                            device.isPc -> "PC Companion · Connected"
+                            else -> "Local Wi-Fi link · Connected"
+                        }
+                        Caption(reach)
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     if (device.acceptsFiles) {
                         PillButton("Send files", {
                             sendTarget = device
                             picker.launch(arrayOf("*/*"))
+                        }, style = PillStyle.Primary)
+                        PillButton("Send photos", {
+                            sendTarget = device
+                            picker.launch(arrayOf("image/*", "video/*"))
+                        })
+                        PillButton("Send clipboard", {
+                            Ecosystem.pushClipboardIfNew(force = true)
                         })
                     }
                     if (!device.isPc) {
-                        PillButton("Mirror & control", { onWatch(Ecosystem.requestMirror(device)) }, style = PillStyle.Primary)
+                        PillButton("Mirror screen", { onWatch(Ecosystem.requestMirror(device)) })
                     }
                     if (!device.isPc && device.canBeControlled) {
-                        PillButton("Trackpad", { onControl(device) })
+                        PillButton("Remote trackpad", { onControl(device) })
                     }
                 }
             }
@@ -572,17 +601,29 @@ private fun SetupStep(done: Boolean, title: String, detail: String, action: Stri
 
 @Composable
 private fun TransferRow(info: TransferInfo, context: Context) {
-    PanelCard(padding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
+    PanelCard(padding = androidx.compose.foundation.layout.PaddingValues(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).background(if (info.outgoing) Control else Panel),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (info.outgoing) Icons.AutoMirrored.Filled.Send else Icons.Default.Download,
+                    contentDescription = null,
+                    tint = if (info.state == "done") StatusGreen else (if (info.state == "failed") com.btmouse.app.ui.theme.StatusRed else OnInk),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(info.name, color = OnInk, fontSize = 15.sp, maxLines = 1)
+                Text(info.name, color = OnInk, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                 val direction = if (info.outgoing) "To ${info.peerName}" else "From ${info.peerName}"
                 val state = when (info.state) {
-                    "done" -> "Done"
+                    "done" -> "Completed"
                     "failed" -> info.error ?: "Failed"
-                    "waiting" -> "Waiting for the other device"
-                    "preparing" -> "Preparing"
-                    "verifying" -> "Checking"
+                    "waiting" -> "Waiting for device…"
+                    "preparing" -> "Preparing…"
+                    "verifying" -> "Verifying…"
                     else -> "${(info.progress * 100).toInt()}%"
                 }
                 Caption("$direction · $state")
@@ -595,13 +636,13 @@ private fun TransferRow(info: TransferInfo, context: Context) {
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                         })
                     }
-                }, height = 38.dp)
+                }, height = 36.dp, style = PillStyle.Primary)
                 info.state in setOf("sending", "receiving", "waiting", "preparing") ->
-                    PillButton("Cancel", { Ecosystem.files.cancel(info.id) }, height = 38.dp, style = PillStyle.Outline)
+                    PillButton("Cancel", { Ecosystem.files.cancel(info.id) }, height = 36.dp, style = PillStyle.Outline)
             }
         }
         if (info.state in setOf("sending", "receiving", "verifying")) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             LinearProgressIndicator(
                 progress = { info.progress },
                 modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
@@ -732,7 +773,11 @@ fun RemotePadScreen(target: PeerDevice, onClose: () -> Unit) {
                 },
             contentAlignment = Alignment.Center
         ) {
-            Text("${x.toInt()}, ${y.toInt()}", color = OnInkMuted, fontSize = 12.sp)
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Cross Control Trackpad", color = OnInkMuted, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Caption("Tap: Click · 2-Finger Tap: Back · 2-Finger Drag: Scroll")
+                Text("${x.toInt()}, ${y.toInt()}", color = OnInkMuted.copy(alpha = 0.6f), fontSize = 11.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             PillButton(if (holding) "Release" else "Hold", {
