@@ -105,7 +105,7 @@ class Transfer:
 class SyncHub:
     """Clipboard, files, and relay for the PC. ``registry`` is ``ecosystem.DeviceRegistry``."""
 
-    def __init__(self, registry, receive_dir=None):
+    def __init__(self, registry, receive_dir=None, clipboard_history_path=None):
         self.registry = registry
         self.receive_dir = Path(receive_dir) if receive_dir else None
         self.clipboard_enabled = True
@@ -115,6 +115,9 @@ class SyncHub:
         self.on_file_received = None    # (path, from_name) -> None
         self.on_library_file = None     # (path) -> None: a device's recording arrived in the library
         self._last_clip_id = None
+        self._history_path = Path(clipboard_history_path) if clipboard_history_path else None
+        self._history_lock = threading.Lock()
+        self._clipboard_history = self._load_clipboard_history()
         self.library_dir = None         # (name) -> folder for library files; set by LibrarySync
         self.http = None                # TransferHttpServer, when the LAN fast path is running
         self.extra_handlers = []        # (cmd_type, data, respond) -> bool, for streams and library
@@ -184,6 +187,7 @@ class SyncHub:
         if clip_id == self._last_clip_id:
             return 0
         self._last_clip_id = clip_id
+        self._remember_clipboard(text, clip_id, PC_ID, self.pc_name())
         return self.registry.broadcast({"type": "clipboard_push", "text": text, "id": clip_id,
                                         "from": PC_ID, "from_name": self.pc_name()})
 
@@ -200,14 +204,49 @@ class SyncHub:
         self._last_clip_id = clip_id
         sender = self._sender_id(data)
         dev = self.registry.get(sender)
+        from_name = data.get("from_name") or (dev.get("name") if dev else "Device")
+        self._remember_clipboard(text, clip_id, sender, from_name)
         self.registry.broadcast({"type": "clipboard_push", "text": text, "id": clip_id, "from": sender,
-                                 "from_name": dev.get("name") if dev else "Device"}, exclude=sender)
+                                 "from_name": from_name}, exclude=sender)
         cb = self.on_clipboard
         if cb:
             try:
                 cb(text)
             except Exception:
                 pass
+
+    def _load_clipboard_history(self):
+        if not self._history_path:
+            return []
+        try:
+            entries = json.loads(self._history_path.read_text(encoding="utf-8"))
+            return [e for e in entries if isinstance(e, dict) and isinstance(e.get("text"), str)][-200:]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def _remember_clipboard(self, text, clip_id, sender, from_name):
+        entry = {"id": clip_id, "text": text, "from": sender, "from_name": from_name,
+                 "timestamp": int(time.time() * 1000)}
+        with self._history_lock:
+            self._clipboard_history = [e for e in self._clipboard_history if e.get("id") != clip_id]
+            self._clipboard_history.append(entry)
+            self._clipboard_history = self._clipboard_history[-200:]
+            if self._history_path:
+                try:
+                    self._history_path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = self._history_path.with_suffix(".tmp")
+                    temporary.write_text(json.dumps(self._clipboard_history, ensure_ascii=False), encoding="utf-8")
+                    temporary.replace(self._history_path)
+                except OSError:
+                    pass
+
+    def send_clipboard_history(self, device_id, known_ids=None):
+        known_ids = set(known_ids or [])
+        with self._history_lock:
+            entries = [entry for entry in self._clipboard_history if entry.get("id") not in known_ids]
+        if not entries:
+            return False
+        return self.registry.send(device_id, {"type": "clipboard_history", "entries": entries})
 
     def publish_clipboard_image(self, png_path):
         """A copied picture goes to every device as a small file it puts on its clipboard."""

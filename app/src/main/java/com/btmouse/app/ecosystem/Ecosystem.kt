@@ -13,6 +13,7 @@ import com.btmouse.app.control.RemoteKeyboardService
 import com.btmouse.app.data.SettingsRepository
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,6 +47,8 @@ data class LiveStream(
     val ownerName: String,
     val viewers: Int
 )
+
+data class ClipboardHistoryEntry(val id: String, val text: String, val fromName: String, val timestamp: Long)
 
 class StreamFrame(val streamId: String, val jpeg: ByteArray, val width: Int, val height: Int)
 
@@ -88,6 +91,8 @@ object Ecosystem {
 
     private val _lastClipboard = MutableStateFlow<String?>(null)
     val lastClipboardNotice: StateFlow<String?> = _lastClipboard.asStateFlow()
+    private val _clipboardHistory = MutableStateFlow<List<ClipboardHistoryEntry>>(emptyList())
+    val clipboardHistory: StateFlow<List<ClipboardHistoryEntry>> = _clipboardHistory.asStateFlow()
 
     private var lastClipId: String? = null
     private var lastClipImage: String? = null
@@ -101,6 +106,7 @@ object Ecosystem {
         if (initialized) return
         initialized = true
         appContext = context.applicationContext
+        loadClipboardHistory()
         files = FileTransfers(appContext, scope) { send(it) }
         Family.init(appContext)
         PeerLinks.init(appContext, scope)
@@ -300,6 +306,9 @@ object Ecosystem {
             addProperty("screen_h", h)
             addProperty("density", appContext.resources.displayMetrics.density)
             addProperty("rotation", DeviceIdentity.rotationDegrees(appContext))
+            add("clipboard_history_ids", JsonArray().apply {
+                _clipboardHistory.value.forEach { add(it.id) }
+            })
             add("caps", JsonObject().apply {
                 addProperty("control", allowControl && RemoteControlService.instance != null)
                 addProperty("lock", allowControl && RemoteControlService.instance != null)
@@ -318,7 +327,7 @@ object Ecosystem {
 
     // --- incoming ------------------------------------------------------
     private val handledTypes = setOf(
-        "device_hello_ack", "control_state", "remote_input", "clipboard_push", "devices_update",
+        "device_hello_ack", "control_state", "remote_input", "clipboard_push", "clipboard_history", "devices_update",
         "file_offer", "file_accept", "file_chunk", "file_chunk_ack", "file_done", "file_result", "file_cancel",
         "streams_update", "stream_frame", "stream_demand", "library_list", "library_fetch", "library_items",
         "stream_watch", "screen_request", "stream_audio", "stream_h264", "stream_keyframe", "group_update", "lock_device"
@@ -356,6 +365,7 @@ object Ecosystem {
                 RemoteControlService.instance?.lockScreen()
             }
             "clipboard_push" -> applyRemoteClipboard(json)
+            "clipboard_history" -> mergeClipboardHistory(json.getAsJsonArray("entries"))
             "devices_update" -> parseDevices(json.getAsJsonArray("devices"))
             "streams_update" -> parseStreams(json.getAsJsonArray("streams"))
             "stream_frame" -> onStreamFrame(json)
@@ -659,6 +669,7 @@ object Ecosystem {
         val id = clipId(text)
         if (id == lastClipId) return
         lastClipId = id
+        rememberClipboard(id, text, json.get("from_name")?.asString ?: "your PC", System.currentTimeMillis())
         main.post {
             runCatching {
                 val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -711,6 +722,7 @@ object Ecosystem {
         val id = clipId(clipped)
         if (id == lastClipId && !force) return false
         lastClipId = id
+        rememberClipboard(id, clipped, DeviceIdentity.name(appContext), System.currentTimeMillis())
         val push = JsonObject().apply {
             addProperty("type", "clipboard_push")
             addProperty("text", clipped)
@@ -722,6 +734,60 @@ object Ecosystem {
         RelayLinks.broadcast(named)
         send(push)
         return true
+    }
+
+    fun restoreClipboard(entry: ClipboardHistoryEntry) {
+        if (!initialized) return
+        main.post {
+            runCatching {
+                val clipboard = appContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                suppressNextLocalClip = true
+                clipboard.setPrimaryClip(ClipData.newPlainText("Clipboard history", entry.text))
+                pushText(entry.text)
+            }
+        }
+    }
+
+    private fun loadClipboardHistory() {
+        val prefs = appContext.getSharedPreferences("clipboard_history", Context.MODE_PRIVATE)
+        val entries = runCatching {
+            JsonParser.parseString(prefs.getString("entries", "[]")).asJsonArray
+                .mapNotNull { item -> item.takeIf { it.isJsonObject }?.asJsonObject }
+                .mapNotNull { item ->
+                    val text = item.get("text")?.takeIf { !it.isJsonNull }?.asString ?: return@mapNotNull null
+                    ClipboardHistoryEntry(item.get("id")?.asString ?: clipId(text), text,
+                        item.get("from_name")?.asString ?: "Device", item.get("timestamp")?.asLong ?: 0L)
+                }
+        }.getOrDefault(emptyList())
+        _clipboardHistory.value = entries.takeLast(200).asReversed()
+    }
+
+    private fun mergeClipboardHistory(entries: JsonArray?) {
+        if (entries == null) return
+        entries.forEach { value ->
+            if (!value.isJsonObject) return@forEach
+            val item = value.asJsonObject
+            val text = item.get("text")?.takeIf { !it.isJsonNull }?.asString ?: return@forEach
+            rememberClipboard(item.get("id")?.asString ?: clipId(text), text,
+                item.get("from_name")?.asString ?: "Device", item.get("timestamp")?.asLong ?: System.currentTimeMillis())
+        }
+    }
+
+    private fun rememberClipboard(id: String, text: String, fromName: String, timestamp: Long) {
+        val merged = (listOf(ClipboardHistoryEntry(id, text, fromName, timestamp)) + _clipboardHistory.value)
+            .distinctBy { it.id }.take(200)
+        _clipboardHistory.value = merged
+        val json = JsonArray()
+        merged.asReversed().forEach { entry ->
+            json.add(JsonObject().apply {
+                addProperty("id", entry.id)
+                addProperty("text", entry.text)
+                addProperty("from_name", entry.fromName)
+                addProperty("timestamp", entry.timestamp)
+            })
+        }
+        appContext.getSharedPreferences("clipboard_history", Context.MODE_PRIVATE).edit()
+            .putString("entries", json.toString()).apply()
     }
 
     // --- controlling another Android device ----------------------------
