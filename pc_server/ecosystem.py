@@ -1099,7 +1099,7 @@ class Ecosystem:
         self.share = InputShare(self.registry, self.layout, set_cursor=windows_set_cursor,
                                 get_park=self._park_point, pc_name=pc_name)
         self.hooks = WindowsInputHooks(self.share)
-        self.sync = SyncHub(self.registry)
+        self.sync = SyncHub(self.registry, clipboard_history_path=_data_dir() / "clipboard_history.json")
         self.streams = StreamHub(self.registry)
         self.sync.extra_handlers.append(self._handle_streams)
         self.library = LibrarySync(self.registry, self.sync, _media_dirs)
@@ -1155,6 +1155,7 @@ class Ecosystem:
             respond({"type": "device_hello_ack", "pc_name": self.share.pc_name,
                      "controlling": self.share.target == device_id,
                      "group_id": group["id"], "relay_url": self.relay_url})
+            self.sync.send_clipboard_history(device_id, data.get("clipboard_history_ids") or [])
         return device_id
 
     def handle_release_request(self, data):

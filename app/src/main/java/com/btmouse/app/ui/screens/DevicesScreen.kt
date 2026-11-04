@@ -113,6 +113,7 @@ fun DevicesScreen(
     val stay by settings.stayConnected.collectAsState()
     val allowControl by settings.allowRemoteControl.collectAsState()
     val clipboardSync by settings.clipboardSync.collectAsState()
+    val clipboardHistory by Ecosystem.clipboardHistory.collectAsState()
     val accessibilityOn by RemoteControlService.enabled.collectAsState()
     var keyboardEnabled by remember { mutableStateOf(false) }
     var keyboardSelected by remember { mutableStateOf(false) }
@@ -293,6 +294,23 @@ fun DevicesScreen(
             )
             Spacer(Modifier.height(10.dp))
             PillButton("Send clipboard now", { Ecosystem.pushClipboardIfNew(force = true) }, enabled = connected || devices.isNotEmpty())
+            if (clipboardHistory.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text("Recent clipboard", color = OnInk, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                clipboardHistory.take(8).forEach { entry ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .clickable { Ecosystem.restoreClipboard(entry) }
+                            .padding(vertical = 9.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.text.replace('\n', ' ').take(100), color = OnInk, fontSize = 13.sp, maxLines = 2)
+                            Caption("${entry.fromName} · tap to copy and sync")
+                        }
+                    }
+                }
+            }
         }
 
         SectionHeader("Live")
